@@ -3,8 +3,8 @@
 // The standalone host owns one game slot, so it does not need Studio's
 // multi-game/session transport. It still implements the interface game
 // service contract so File → New Game can exercise the same UI path and the
-// backend can materialize a selected engine template into that slot.
-import type { StudioDomainClients } from '@forgeax/interface/store';
+// backend can materialize a selected engine template into that slot. The
+// composition root validates this structural adapter at its injection point.
 
 async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
@@ -13,7 +13,7 @@ async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
-export function createStandaloneGameClient(onActiveGameChanged?: (slug: string) => void): StudioDomainClients {
+export function createStandaloneGameClient(onActiveGameChanged?: (slug: string) => void) {
   return {
     agents: {
       async listAgents() {

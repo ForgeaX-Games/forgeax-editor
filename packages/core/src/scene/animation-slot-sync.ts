@@ -50,7 +50,7 @@ function arrayValues(raw: unknown): unknown[] {
  */
 export function normalizeAnimationPlayerSceneAsset(scene: SceneAsset): SceneAsset {
   const normalized = structuredClone(scene);
-  for (const entity of normalized.entities ?? []) {
+  for (const entity of Object.values(normalized.entities ?? {})) {
     const components = entity.components as Record<string, unknown> | undefined;
     const raw = components?.AnimationPlayer;
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) continue;

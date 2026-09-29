@@ -5,7 +5,7 @@
 // initialPath is accepted for API backward-compatibility but intentionally
 // ignored: canonical state lives in the core session store (requirements §C6).
 import { useCallback } from 'react';
-import { gateway, useCBNav } from '@forgeax/editor-core';
+import { gateway, normalizeCBPath, useCBNav } from '@forgeax/editor-core';
 
 export interface NavHistoryAPI {
   currentPath: string;
@@ -21,7 +21,7 @@ export function useNavHistory(_initialPath: string = ''): NavHistoryAPI {
   const { path, canGoBack, canGoForward } = useCBNav();
 
   const navigate = useCallback((p: string) => {
-    gateway.dispatch({ kind: 'setCBPath', path: p });
+    gateway.dispatch({ kind: 'setCBPath', path: normalizeCBPath(p) });
   }, []);
 
   const goBack = useCallback(() => {

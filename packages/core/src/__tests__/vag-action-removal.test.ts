@@ -24,8 +24,8 @@
 // platform.
 // FOOTGUN 2 (this loop): the environment's global git config sets
 // submodule.recurse=true, so a bare `git grep` DESCENDS into the packages/engine
-// | interface | platform-io submodules. AC-02/AC-05 gate EDITOR-PROPER source
-// only — the interface submodule has its own unrelated host-side ActionRegistry
+// and packages/platform-io submodules. AC-02/AC-05 gate EDITOR-PROPER source
+// only — the published Interface package owns an unrelated host-side ActionRegistry
 // (`def.run(args, {token})`, OOS-3, not a deletion target). We pass
 // --no-recurse-submodules so the scan stays inside editor source regardless of
 // the caller's git config.

@@ -14,7 +14,7 @@
  *   3. Runtime uploads, cooks, writes the sidecar, and publishes one terminal run.
  *
  * Progress while running (release / Shell+Transport only): see
- * `import-run-progress-transport-poll.ts` — **temporary poll**, not main's subscribe.
+ * `import-run-progress-transport-poll.ts` — bounded transport polling with monotonic progress.
  *
  * The startup scan does NOT use this file — it runs while the gateway is scan-locked
  * and calls `executeAssetImport` directly through the shared import executor.
@@ -23,6 +23,7 @@
 import {
   broadcastAssetsChanged,
   createImportFailure,
+  dispatchActiveEditorOperation,
   resolveFbxImportDependencies,
   resolveGamePath,
   retryViewportRuntimeOperationRun,
@@ -50,11 +51,13 @@ export interface ImportProgress {
   results: ImportFileResult[];
   currentRequestId?: string;
   currentRun?: OperationRun;
-  /** Release poll workaround — monotonic fraction; main uses subscribe instead. */
+  /** Transport progress projection keeps the displayed fraction monotonic. */
   liveFraction?: number;
   liveStage?: string;
   runs: ImportRunRecord[];
   actionError?: string;
+  /** Terminal failure on the most recently finished file (for progress overlay copy). */
+  lastFailure?: ImportFileResult['errorDetail'];
 }
 
 export interface ImportRunRecord {
@@ -75,7 +78,7 @@ export type ImportProgressCallback = (progress: ImportProgress) => void;
 
 function refreshImportedAssets(onReload?: () => void): void {
   onReload?.();
-  broadcastAssetsChanged('directory-only', 'local-op');
+  broadcastAssetsChanged('pack-changed', 'local-op');
 }
 
 function arrayBufferToBase64(buf: ArrayBuffer): string {
@@ -101,11 +104,13 @@ interface ImportUnit {
 }
 
 export function mapFbxDependencyResolutionCode(
-  code: 'fbx-external-texture-missing'
+  code:
+    | 'fbx-external-texture-missing'
     | 'fbx-external-texture-ambiguous'
     | 'fbx-external-texture-unsupported'
     | 'fbx-source-invalid',
-): 'IMPORT_FBX_DEPENDENCY_SCOPE_REQUIRED'
+):
+  | 'IMPORT_FBX_DEPENDENCY_SCOPE_REQUIRED'
   | 'IMPORT_FBX_DEPENDENCY_AMBIGUOUS'
   | 'IMPORT_FBX_SOURCE_INVALID'
   | 'IMPORT_FBX_UNSUPPORTED' {
@@ -119,7 +124,8 @@ export function mapFbxDependencyResolutionCode(
 }
 
 function normalizeSelectionPath(raw: string): string {
-  return raw.replaceAll('\\', '/').replace(/^\.?\//, '').replace(/^\/+|\/+$/g, '');
+  return raw.replaceAll('\\', '/').replace(/^\.?\//, '')
+    .replace(/^\/+|\/+$/g, '');
 }
 
 function selectionRelativePath(file: File): string {
@@ -148,10 +154,7 @@ function sourceRelativePath(sourcePath: string, candidatePath: string): string {
   const to = candidatePath.split('/').filter(Boolean);
   let common = 0;
   while (common < from.length && common < to.length && from[common] === to[common]) common++;
-  return [
-    ...from.slice(common).map(() => '..'),
-    ...to.slice(common),
-  ].join('/') || './';
+  return [...from.slice(common).map(() => '..'), ...to.slice(common)].join('/') || './';
 }
 
 function joinGamePath(base: string, relativePath: string): string {
@@ -204,7 +207,9 @@ async function prepareFolderImportUnit(
   }
   const dependencies: ImportDependencyFile[] = [];
   for (const dependency of resolution.files) {
-    const candidate = candidates.find((entry) => entry.relativePath.toLowerCase() === dependency.relativePath.toLowerCase());
+    const candidate = candidates.find(
+      (entry) => entry.relativePath.toLowerCase() === dependency.relativePath.toLowerCase(),
+    );
     if (candidate === undefined) {
       return {
         ok: false,
@@ -239,11 +244,21 @@ function failureResult(
   return { filename, status: 'error', error: hint, errorDetail };
 }
 
-export function importRunToResult(filename: string, path: string, run: OperationRun): ImportFileResult {
+export function importRunToResult(
+  filename: string,
+  path: string,
+  run: OperationRun,
+): ImportFileResult {
   if (run.status === 'succeeded') {
     const result = run.result as ImportFileResult | undefined;
     return result === undefined
-      ? failureResult(filename, path, 'IMPORT_EXECUTION_FAILED', 'Import completed without a terminal result', false)
+      ? failureResult(
+          filename,
+          path,
+          'IMPORT_EXECUTION_FAILED',
+          'Import completed without a terminal result',
+          false,
+        )
       : { ...result, filename };
   }
   const terminalError = run.error;
@@ -251,7 +266,7 @@ export function importRunToResult(filename: string, path: string, run: Operation
     filename,
     terminalError?.subjectRef?.id ?? path,
     typeof terminalError?.code === 'string' && terminalError.code.startsWith('IMPORT_')
-      ? terminalError.code as ImportFailureCode
+      ? (terminalError.code as ImportFailureCode)
       : 'IMPORT_EXECUTION_FAILED',
     terminalError?.hint ?? terminalError?.code ?? `Import ${run.status}.`,
     terminalError?.retryable ?? false,
@@ -259,7 +274,12 @@ export function importRunToResult(filename: string, path: string, run: Operation
 }
 
 export type ImportRetryResult =
-  | { ok: true; requestId: string; terminal: OperationRun; result: ImportFileResult }
+  | {
+      ok: true;
+      requestId: string;
+      terminal: OperationRun;
+      result: ImportFileResult;
+    }
   | { ok: false; error: { code: string; hint: string } };
 
 export async function retryImportRun(
@@ -268,14 +288,26 @@ export async function retryImportRun(
 ): Promise<ImportRetryResult> {
   const requestId = crypto.randomUUID();
   const dispatched = await retryViewportRuntimeOperationRun(record.requestId, requestId);
-  if (dispatched.error !== undefined) return { ok: false, error: { code: dispatched.error.code, hint: dispatched.error.hint } };
+  if (dispatched.error !== undefined)
+    return {
+      ok: false,
+      error: { code: dispatched.error.code, hint: dispatched.error.hint },
+    };
   const accepted = dispatched.result as OperationRun | undefined;
   if (accepted === undefined) {
-    return { ok: false, error: { code: 'IMPORT_EXECUTION_FAILED', hint: 'Retry was accepted without an OperationRun.' } };
+    return {
+      ok: false,
+      error: {
+        code: 'IMPORT_EXECUTION_FAILED',
+        hint: 'Retry was accepted without an OperationRun.',
+      },
+    };
   }
   onRun?.(requestId, accepted);
   try {
-    const terminal = await waitForImportRunViaTransportPoll(requestId, (run) => onRun?.(requestId, run));
+    const terminal = await waitForImportRunViaTransportPoll(requestId, (run) =>
+      onRun?.(requestId, run),
+    );
     onRun?.(requestId, terminal);
     return {
       ok: true,
@@ -309,11 +341,11 @@ export async function importFiles(
 ): Promise<ImportFileResult[]> {
   logImport('pipeline.importFiles.start', {
     total: files.length,
-    names: files.map(f => f.name),
+    names: files.map((f) => f.name),
     currentPath,
   });
 
-  const importable = files.filter(f => isImportable(f.name));
+  const importable = files.filter((f) => isImportable(f.name));
   const folderSelection = files.some((file) => {
     const relative = (file as File & { readonly webkitRelativePath?: string }).webkitRelativePath;
     return typeof relative === 'string' && relative.length > 0;
@@ -322,25 +354,29 @@ export async function importFiles(
     const fbxRoots = files.filter(isFbx);
     if (fbxRoots.length !== 1) {
       const name = fbxRoots.length === 0 ? 'selected-folder' : 'selected-folder (choose one FBX)';
-      return [failureResult(
-        name,
-        name,
-        'IMPORT_FBX_ROOT_SELECTION_REQUIRED',
-        fbxRoots.length === 0
-          ? 'Folder import requires exactly one FBX root file; choose an FBX file or a folder containing one FBX.'
-          : `Folder import found ${fbxRoots.length} FBX roots; choose one FBX file instead of importing the whole folder.`,
-        false,
-      )];
+      return [
+        failureResult(
+          name,
+          name,
+          'IMPORT_FBX_ROOT_SELECTION_REQUIRED',
+          fbxRoots.length === 0
+            ? 'Folder import requires exactly one FBX root file; choose an FBX file or a folder containing one FBX.'
+            : `Folder import found ${fbxRoots.length} FBX roots; choose one FBX file instead of importing the whole folder.`,
+          false,
+        ),
+      ];
     }
     const prepared = await prepareFolderImportUnit(files, fbxRoots[0]!);
     if (!prepared.ok) {
-      return [failureResult(
-        fbxRoots[0]!.name,
-        selectionRelativePath(fbxRoots[0]!),
-        prepared.code,
-        prepared.hint,
-        false,
-      )];
+      return [
+        failureResult(
+          fbxRoots[0]!.name,
+          selectionRelativePath(fbxRoots[0]!),
+          prepared.code,
+          prepared.hint,
+          false,
+        ),
+      ];
     }
     return importPreparedUnits([prepared.unit], currentPath, onProgress, onReload, files);
   }
@@ -348,27 +384,21 @@ export async function importFiles(
     const root = importable[0]!;
     const prepared = await prepareFolderImportUnit([root], root);
     if (!prepared.ok) {
-      return [failureResult(
-        root.name,
-        root.name,
-        prepared.code,
-        prepared.hint,
-        false,
-      )];
+      return [failureResult(root.name, root.name, prepared.code, prepared.hint, false)];
     }
     return importPreparedUnits([prepared.unit], currentPath, onProgress, onReload, files);
   }
   if (importable.length === 0) {
     logImport('pipeline.importFiles.skip', {
       reason: 'no importable files',
-      rejected: files.map(f => f.name),
+      rejected: files.map((f) => f.name),
     });
     return [];
   }
 
   logImport('pipeline.importFiles.accepted', {
     count: importable.length,
-    names: importable.map(f => f.name),
+    names: importable.map((f) => f.name),
   });
 
   return importPreparedUnits(
@@ -421,27 +451,46 @@ async function importPreparedUnits(
     const gameRelPath = joinGamePath(gameRelBase, unit.destinationPath);
     let result: ImportFileResult;
     try {
-      logImport('pipeline.file.readBytes', { filename: file.name, size: file.size, uploadPath, gameRelPath });
+      logImport('pipeline.file.readBytes', {
+        filename: file.name,
+        size: file.size,
+        uploadPath,
+        gameRelPath,
+      });
       const base64 = arrayBufferToBase64(await file.arrayBuffer());
-      const uiCompanion = unit.dependencies === undefined && file.name.toLowerCase().endsWith('.ui.html')
-        ? selectedFiles.find(candidate => candidate.name.toLowerCase() === file.name.toLowerCase().replace(/\.ui\.html$/, '.ui.css'))
-        : undefined;
-      const companionSources = uiCompanion === undefined
-        ? undefined
-        : [{
-          destPath: `${gameRelBase}/${uiCompanion.name}`,
-          base64: arrayBufferToBase64(await uiCompanion.arrayBuffer()),
-        }];
-      const sourceFiles = unit.dependencies === undefined
-        ? undefined
-        : await Promise.all(unit.dependencies.map(async (dependency) => ({
-          destPath: joinGamePath(gameRelBase, dependency.relativePath),
-          relativePath: dependency.sourceRelativePath,
-          base64: arrayBufferToBase64(await dependency.file.arrayBuffer()),
-        })));
+      const uiCompanion =
+        unit.dependencies === undefined && file.name.toLowerCase().endsWith('.ui.html')
+          ? selectedFiles.find(
+              (candidate) =>
+                candidate.name.toLowerCase() ===
+                file.name.toLowerCase().replace(/\.ui\.html$/, '.ui.css'),
+            )
+          : undefined;
+      const companionSources =
+        uiCompanion === undefined
+          ? undefined
+          : [
+              {
+                destPath: `${gameRelBase}/${uiCompanion.name}`,
+                base64: arrayBufferToBase64(await uiCompanion.arrayBuffer()),
+              },
+            ];
+      const sourceFiles =
+        unit.dependencies === undefined
+          ? undefined
+          : await Promise.all(
+              unit.dependencies.map(async (dependency) => ({
+                destPath: joinGamePath(gameRelBase, dependency.relativePath),
+                relativePath: dependency.sourceRelativePath,
+                base64: arrayBufferToBase64(await dependency.file.arrayBuffer()),
+              })),
+            );
       {
         // Pass game-relative paths. Runtime owns resolveGamePath and every write.
-        logImport('pipeline.file.dispatching', { filename: file.name, gameRelPath });
+        logImport('pipeline.file.dispatching', {
+          filename: file.name,
+          gameRelPath,
+        });
         const requestId = crypto.randomUUID();
         progress.currentRequestId = requestId;
         progress.liveFraction = 0;
@@ -497,18 +546,34 @@ async function importPreparedUnits(
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logImport('pipeline.importFiles.fileError', { filename: file.name, error: msg });
+      logImport('pipeline.importFiles.fileError', {
+        filename: file.name,
+        error: msg,
+      });
       result = { filename: file.name, status: 'error', error: msg };
     }
 
     results.push(result);
     progress.completed++;
-    logImport('pipeline.file.done', { filename: file.name, status: result.status, error: result.error });
+    if (result.status === 'error' && result.errorDetail !== undefined) {
+      progress.lastFailure = result.errorDetail;
+      if (result.errorDetail.code !== 'IMPORT_SOURCE_TARGET_CONFLICT') {
+        progress.actionError = result.errorDetail.hint;
+      }
+    }
+    logImport('pipeline.file.done', {
+      filename: file.name,
+      status: result.status,
+      error: result.error,
+    });
     publishProgress();
     refreshImportedAssets(onReload);
   }
 
-  logImport('pipeline.importFiles.complete', { total: results.length, results: results.map(r => ({ f: r.filename, s: r.status, e: r.error })) });
+  logImport('pipeline.importFiles.complete', {
+    total: results.length,
+    results: results.map((r) => ({ f: r.filename, s: r.status, e: r.error })),
+  });
 
   return results;
 }

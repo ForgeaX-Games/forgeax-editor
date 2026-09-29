@@ -11,6 +11,7 @@ import {
   type ViewportProjectionEnvelope,
   type ViewportRuntimeIdentity,
 } from '@forgeax/editor-product';
+import { traceHierarchyVisibility } from './hierarchy-visibility-trace';
 import type { RuntimeCatalogRoot } from '@forgeax/engine-types';
 import type { VersionControlSnapshot } from './version-control-schema';
 
@@ -75,6 +76,32 @@ let active: {
 } | null = null;
 let snapshot: ViewportRuntimeClientSnapshot = Object.freeze({ status: 'disconnected', runtime: null, catalogRoots: null });
 let selectionSnapshot = EMPTY_SELECTION;
+export interface ViewportRuntimeHierarchyRowSnapshot {
+  readonly id: number;
+  readonly name: string;
+  readonly typeId: string;
+  readonly hidden?: boolean;
+  readonly ancestorHidden?: boolean;
+  readonly mobility: string;
+  readonly childIds: readonly number[];
+}
+
+export interface ViewportRuntimeHierarchyStructureSnapshot {
+  readonly structureEpoch: number;
+  readonly projectionRevision?: number;
+  readonly rows: readonly ViewportRuntimeHierarchyRowSnapshot[];
+}
+
+/** Runtime-owned hierarchy read model cached on the disposable shell. */
+export interface ViewportRuntimeHierarchySnapshot {
+  readonly structure: ViewportRuntimeHierarchyStructureSnapshot;
+  readonly selectionIds: readonly number[];
+  readonly editorWorld?: unknown;
+}
+
+let hierarchySnapshot: ViewportRuntimeHierarchySnapshot | null = null;
+const hierarchyListeners = new Set<() => void>();
+let shellHierarchyInvalidationListenerInstalled = false;
 let requestSequence = 0;
 const listeners = new Set<() => void>();
 
@@ -89,6 +116,116 @@ export function getViewportRuntimeClientSnapshot(): ViewportRuntimeClientSnapsho
 /** Disposable shell projection; the Runtime remains the only selection authority. */
 export function getViewportRuntimeSelectionSnapshot(): ViewportRuntimeSelectionSnapshot {
   return selectionSnapshot;
+}
+
+function freezeHierarchySnapshot(
+  value: ViewportRuntimeHierarchySnapshot,
+): ViewportRuntimeHierarchySnapshot {
+  return Object.freeze({
+    structure: Object.freeze({
+      structureEpoch: value.structure.structureEpoch,
+      ...(value.structure.projectionRevision === undefined
+        ? {}
+        : { projectionRevision: value.structure.projectionRevision }),
+      rows: Object.freeze(value.structure.rows.map((row) => Object.freeze({
+        id: row.id,
+        name: row.name,
+        typeId: row.typeId,
+        mobility: row.mobility,
+        childIds: Object.freeze([...row.childIds]),
+        ...(row.hidden === undefined ? {} : { hidden: row.hidden }),
+        ...(row.ancestorHidden === undefined ? {} : { ancestorHidden: row.ancestorHidden }),
+      }))),
+    }),
+    selectionIds: Object.freeze([...value.selectionIds]),
+    ...(value.editorWorld === undefined ? {} : { editorWorld: value.editorWorld }),
+  });
+}
+
+function isHierarchySnapshot(value: unknown): value is ViewportRuntimeHierarchySnapshot {
+  if (value === null || typeof value !== 'object') return false;
+  const candidate = value as Partial<ViewportRuntimeHierarchySnapshot>;
+  if (!Array.isArray(candidate.selectionIds) || !candidate.structure || typeof candidate.structure !== 'object') return false;
+  const structure = candidate.structure as Partial<ViewportRuntimeHierarchyStructureSnapshot>;
+  return Number.isFinite(structure.structureEpoch) && Array.isArray(structure.rows);
+}
+
+function publishHierarchyListeners(): void {
+  for (const listener of [...hierarchyListeners]) listener();
+}
+
+/** Carrier push or query refresh: install the shell hierarchy cache (generation-fenced). */
+export function publishViewportRuntimeHierarchySnapshot(
+  next: ViewportRuntimeHierarchySnapshot,
+): void {
+  if (active === null) {
+    traceHierarchyVisibility('carrier.publish.skipped', { reason: 'client-not-bound' });
+    return;
+  }
+  hierarchySnapshot = freezeHierarchySnapshot(next);
+  traceHierarchyVisibility('carrier.publish', {
+    rowCount: next.structure.rows.length,
+    revision: next.structure.projectionRevision ?? next.structure.structureEpoch,
+    selectionCount: next.selectionIds.length,
+  });
+  publishHierarchyListeners();
+}
+
+export function getViewportRuntimeHierarchySnapshot(): ViewportRuntimeHierarchySnapshot | null {
+  return hierarchySnapshot;
+}
+
+export function subscribeViewportRuntimeHierarchySnapshot(listener: () => void): () => void {
+  ensureShellHierarchyInvalidationListener();
+  hierarchyListeners.add(listener);
+  return () => hierarchyListeners.delete(listener);
+}
+
+function ensureShellHierarchyInvalidationListener(): void {
+  if (shellHierarchyInvalidationListenerInstalled || typeof window === 'undefined') return;
+  shellHierarchyInvalidationListenerInstalled = true;
+  window.addEventListener('message', (event: MessageEvent) => {
+    const data = event.data;
+    if (data === null || typeof data !== 'object' || (data as { type?: unknown }).type !== 'FORGEAX_VIEWPORT_RUNTIME_PROJECTION_INVALIDATED') {
+      return;
+    }
+    const projection = (data as { projection?: unknown }).projection;
+    if (projection !== 'hierarchy') return;
+    const runtime = (data as { runtime?: ViewportRuntimeIdentity }).runtime;
+    traceHierarchyVisibility('carrier.message.in', {
+      type: (data as { type?: unknown }).type,
+      projection,
+      revision: (data as { revision?: unknown }).revision,
+      origin: event.origin,
+      runtimeGeneration: runtime?.runtimeGeneration,
+    });
+    if (active === null || runtime === undefined || !isCurrentViewportRuntime(active.runtime, runtime)) {
+      traceHierarchyVisibility('carrier.message.ignored', {
+        reason: active === null ? 'client-not-bound' : 'stale-runtime-generation',
+      });
+      return;
+    }
+    void refreshViewportRuntimeHierarchySnapshot().catch(() => undefined);
+  });
+}
+
+/** Refresh the replaceable shell hierarchy cache from the current Runtime generation. */
+export async function refreshViewportRuntimeHierarchySnapshot(): Promise<ViewportRuntimeHierarchySnapshot> {
+  const envelope = await queryViewportRuntimeProjection<ViewportRuntimeHierarchySnapshot>({ kind: 'hierarchy.structure' });
+  if (envelope.status === 'ready' && isHierarchySnapshot(envelope.value)) {
+    publishViewportRuntimeHierarchySnapshot(envelope.value);
+    return hierarchySnapshot!;
+  }
+  if (envelope.status === 'empty') {
+    publishViewportRuntimeHierarchySnapshot({
+      structure: { structureEpoch: envelope.revision, rows: [] },
+      selectionIds: [],
+    });
+    return hierarchySnapshot!;
+  }
+  hierarchySnapshot = null;
+  publishHierarchyListeners();
+  throw new Error('viewport-hierarchy-projection-invalid');
 }
 
 function relayError(request: TransportRequest, code: string, hint: string): TransportResponse {
@@ -134,13 +271,17 @@ export function bindViewportRuntimeClient(
   active = binding;
   snapshot = Object.freeze({ status: 'ready', runtime, catalogRoots: roots });
   selectionSnapshot = EMPTY_SELECTION;
+  hierarchySnapshot = null;
   publish();
+  publishHierarchyListeners();
   return () => {
     if (active !== binding) return;
     active = null;
     snapshot = Object.freeze({ status: 'disconnected', runtime: null, catalogRoots: null });
     selectionSnapshot = EMPTY_SELECTION;
+    hierarchySnapshot = null;
     publish();
+    publishHierarchyListeners();
   };
 }
 

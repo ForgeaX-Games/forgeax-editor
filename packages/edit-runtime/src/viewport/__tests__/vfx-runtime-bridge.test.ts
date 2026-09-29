@@ -18,7 +18,8 @@ function makeHost() {
     feature,
     async attachWorld(input: { world: unknown; assets: unknown }) {
       if (attached.some((entry) => entry.world === input.world)) {
-        return { ok: true as const, value: { state: 'already-attached' as const } };
+        return { ok: true as const, value: { state: 'already-attached' as const },
+        };
       }
       attached.push(input);
       return { ok: true as const, value: { state: 'attached' as const } };
@@ -39,20 +40,24 @@ describe('Edit VFX runtime bridge', () => {
     expect(supportsVfxRenderFeature(undefined)).toBe(false);
   });
 
-  it('does not pre-register the optional GPU particle feature before capabilities are known', () => {
+  it('registers the GPU particle feature during renderer construction and reports active capabilities', () => {
     const source = readFileSync(
       fileURLToPath(new URL('../ViewportComponent.tsx', import.meta.url)),
       'utf8',
     );
-    const featureList = source.match(/const renderFeatures = \[([\s\S]*?)\] as readonly RenderFeature/)?.[1];
+    const featureList = source.match(
+      /const renderFeatures = \[([\s\S]*?)\] as readonly RenderFeature/,
+    )?.[1];
     expect(featureList).toBeDefined();
     expect(featureList).toContain('infiniteGridFeature');
-    expect(featureList).not.toContain('vfxBridge.host.feature');
+    expect(featureList).toContain('vfxBridge.host.feature');
+    expect(source).toContain('features: renderFeatures');
 
-    const capabilityCheck = source.indexOf('supportsVfxRenderFeature(renderer.inspect().capabilities)');
-    const install = source.indexOf('renderFeaturePlugin(vfxBridge.host.feature)');
+    const capabilityCheck = source.indexOf(
+      'supportsVfxRenderFeature(renderer.inspect().capabilities)',
+    );
     expect(capabilityCheck).toBeGreaterThan(-1);
-    expect(install).toBeGreaterThan(capabilityCheck);
+    expect(source).not.toContain('renderFeaturePlugin(vfxBridge.host.feature)');
     expect(source).not.toContain('renderer.installRenderFeature');
   });
 
@@ -65,7 +70,8 @@ describe('Edit VFX runtime bridge', () => {
       order: 0,
       status: 'active' as const,
       latestError: undefined,
-    }];
+    },
+    ];
     const bridge = createEditVfxRuntimeBridge({
       camera: { read: () => undefined },
       renderFeatureDiagnostics: () => diagnostics,
@@ -84,7 +90,8 @@ describe('Edit VFX runtime bridge', () => {
           feature: 'forgeax.vfx-render.gpu-particles',
         },
       },
-    }]);
+    },
+    ]);
 
     const first = await bridge.attachWorld(editWorld, assets as never);
     const duplicate = await bridge.attachWorld(editWorld, assets as never);
@@ -99,7 +106,8 @@ describe('Edit VFX runtime bridge', () => {
   });
 
   it('does not route VFX through VAG or a UI store setter', () => {
-    const source = readFileSync(fileURLToPath(new URL('../vfx-runtime-bridge.ts', import.meta.url)), 'utf8');
+    const source = readFileSync(fileURLToPath(new URL('../vfx-runtime-bridge.ts', import.meta.url)), 'utf8',
+    );
     expect(source).not.toContain('editor-core/protocol');
     expect(source).not.toMatch(/store\/.*set[A-Z]/);
     expect(source).toContain('createVfxRuntimeHost');
@@ -112,7 +120,7 @@ describe('Edit VFX runtime bridge', () => {
       'utf8',
     );
     const configure = source.indexOf('assets.configureRuntimeBinding');
-    const enumerate = source.indexOf('await assets.enumerateCatalog()');
+    const enumerate = source.indexOf('const catalogResult = await assets.enumerateCatalog()');
     const attach = source.indexOf('await vfxBridge.attachWorld(world, assets)');
 
     expect(configure).toBeGreaterThan(-1);
@@ -130,7 +138,8 @@ describe('Edit VFX runtime bridge', () => {
         order: 0,
         status,
         latestError: undefined,
-      }],
+      },
+      ],
       hostFactory: () => fake.host as never,
     });
     let notifications = 0;
@@ -158,15 +167,18 @@ describe('Edit VFX runtime bridge', () => {
         order: 0,
         status: 'failed',
         latestError: undefined,
-      }],
+      },
+      ],
       hostFactory: () => fake.host as never,
     });
 
     expect(bridge.diagnosticsProvider.snapshot()).toMatchObject([{
       retryable: true,
       recoveryActions: ['stop', 'play'],
-      detail: { recovery: { via: 'gateway.dispatch', operations: ['stop', 'play'] } },
-    }]);
+      detail: { recovery: { via: 'gateway.dispatch', operations: ['stop', 'play'] },
+        },
+    },
+    ]);
   });
 
 });

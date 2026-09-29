@@ -110,7 +110,7 @@ describe('tree selection sync — CBSourceTree click wiring contract', () => {
     // on navigation (tree click, folder double-click, breadcrumb, explicit
     // reveal — all of which write nav.currentPath). Coupling it to
     // `selectedSourcePath` (derived from every card click) was the regression.
-    expect(contentBrowser).toContain('const treeCurrentPath = nav.currentPath || null;');
+    expect(contentBrowser).toContain('const treeCurrentPath = nav.currentPath;');
     expect(contentBrowser).toContain('selectedPath={treeCurrentPath}');
     expect(contentBrowser).not.toContain('selectedPath={selectedSourcePath}');
   });
@@ -145,11 +145,13 @@ describe('tree selection sync — CBSourceTree click wiring contract', () => {
     // each head toggles only its own body.
     expect(tsx).toContain('cb-source-group-head');
     expect(tsx).toContain('cb-source-group-body');
-    expect(tsx).toContain('renderRows(sourceTree, 0');
+    expect(tsx).toContain('CBVirtualAllRow');
+    expect(tsx).toContain('renderRows(sourceTree, 1');
     expect(tsx).toContain('collectFavoriteDirs(sourceTree)');
     expect(tsx).toContain('const [favoritesGroupOpen, setFavoritesGroupOpen] = useState(true);');
     expect(tsx).toContain('const [projectOpen, setProjectOpen] = useState(true);');
     expect(tsx).toContain('editor.contentBrowser.sourceTree.favorites');
+    expect(tsx).toContain('editor.contentBrowser.sourceTree.all');
     expect(tsx).not.toContain('cb-source-count');
     expect(tsx).not.toContain('assetCount');
   });

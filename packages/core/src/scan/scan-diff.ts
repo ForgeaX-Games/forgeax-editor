@@ -1,4 +1,4 @@
-// scan/scan-diff.ts — three-tier incremental diff (G1: L0/L1/L2).
+// scan/scan-diff.ts — three-tier incremental diff (G1: dir / file-stat / content-hash).
 //
 // Pure functions that take previous scan state + current filesystem stats and
 // produce categorized change sets: unchanged, new, changed (needs reimport),
@@ -30,7 +30,7 @@ export interface ScanDiff {
   changed: string[];
   /** Files where mtime changed but content hash is the same — false positive. */
   falsePositives: string[];
-  /** Files where mtime hasn't changed (L1 pass) — skip entirely. */
+  /** Files where mtime hasn't changed (file-stat pass) — skip entirely. */
   unchanged: string[];
   /** Entries in scan-state whose source file no longer exists on disk. */
   orphaned: string[];
@@ -40,7 +40,7 @@ export interface ScanDiff {
   unchangedDirs: string[];
 }
 
-// ── L0: directory-level change detection ──────────────────────────────────────
+// ── Tier 0: directory-level change detection ──────────────────────────────────
 
 /**
  * Compare current directory stats against previous scan-state dirs.
@@ -65,11 +65,11 @@ export function diffDirs(
   return { changed, unchanged };
 }
 
-// ── L1: file-level mtime+size fast check ──────────────────────────────────────
+// ── Tier 1: file-level mtime+size fast check ────────────────────────────────
 
 /**
  * Compare current file stats against previous scan-state entries.
- * Only processes files under directories that changed at L0.
+ * Only processes files under directories that changed at tier 0.
  */
 export function diffFilesL1(
   prevEntries: Record<string, ScanEntry>,
@@ -99,11 +99,11 @@ export function diffFilesL1(
     if (!prev) {
       added.push(path);
     } else if (prev.mtime !== stat.mtime || prev.size !== stat.size) {
-      // If size changed, it's definitely changed (skip L2)
+      // If size changed, it's definitely changed (skip hash tier)
       if (prev.size !== stat.size) {
         maybeChanged.push(path);
       } else {
-        // mtime changed but size same — need L2 hash check
+        // mtime changed but size same — need content-hash check
         maybeChanged.push(path);
       }
     } else {
@@ -121,13 +121,13 @@ export function diffFilesL1(
   return { unchanged, maybeChanged, added, orphaned };
 }
 
-// ── L2: content hash check (false-positive guard) ─────────────────────────────
+// ── Tier 2: content hash check (false-positive guard) ───────────────────────
 
 /**
  * Check which "maybeChanged" files actually changed by comparing content hashes.
  * Files with same hash are false positives (mtime changed due to touch/copy).
  *
- * @param maybeChanged - paths that differed at L1
+ * @param maybeChanged - paths that differed at tier 1
  * @param prevEntries - previous scan-state entries (for cached hashes)
  * @param currentHashes - map of path → xxHash64 string from current files
  */
@@ -172,26 +172,26 @@ export function fullScanDiff(
   const { changed: changedDirList, unchanged: unchangedDirs } = diffDirs(prevDirs, currentDirs);
   const changedDirSet = new Set(changedDirList);
 
-  const l1 = diffFilesL1(prevEntries, currentFiles, changedDirSet);
+  const fileStatPass = diffFilesL1(prevEntries, currentFiles, changedDirSet);
 
   let changed: string[] = [];
   let falsePositives: string[] = [];
 
-  if (currentHashes && l1.maybeChanged.length > 0) {
-    const l2 = diffFilesL2(l1.maybeChanged, prevEntries, currentHashes);
-    changed = l2.changed;
-    falsePositives = l2.falsePositives;
+  if (currentHashes && fileStatPass.maybeChanged.length > 0) {
+    const hashPass = diffFilesL2(fileStatPass.maybeChanged, prevEntries, currentHashes);
+    changed = hashPass.changed;
+    falsePositives = hashPass.falsePositives;
   } else {
     // No hashes available — all maybeChanged are treated as changed
-    changed = l1.maybeChanged;
+    changed = fileStatPass.maybeChanged;
   }
 
   return {
-    added: l1.added,
+    added: fileStatPass.added,
     changed,
     falsePositives,
-    unchanged: l1.unchanged,
-    orphaned: l1.orphaned,
+    unchanged: fileStatPass.unchanged,
+    orphaned: fileStatPass.orphaned,
     changedDirs: changedDirList,
     unchangedDirs,
   };

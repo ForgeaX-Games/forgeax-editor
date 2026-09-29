@@ -19,11 +19,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import {
   gateway,
   initSceneList,
+  getSceneAuthoringSession,
   getSceneFile,
   getSceneList,
   setPathResolver,
 } from '@forgeax/editor-core';
 import type { EditorOp } from '@forgeax/editor-core';
+import { AUTHORED_SCENE_AUTHORING_SESSION } from '../io/scene-authoring-session';
+import { ctx } from '../store/scene-persistence';
 
 // Two enemy-prefab scene packs (kind:"scene", no defaultScene points at them) —
 // the shoot-opt shape. `assassin` sorts before `bomber`, so the OLD code would
@@ -190,6 +193,8 @@ describe('initSceneList — generated default remains discoverable beside author
     globalThis.fetch = realFetch;
     setPathResolver(null);
     gateway.dispatch({ kind: 'setSceneId', id: null } as EditorOp);
+    ctx.authoringSession = AUTHORED_SCENE_AUTHORING_SESSION;
+    ctx.previewState = null;
     try { localStorage.clear(); } catch { /* no localStorage in this env */ }
   });
 
@@ -204,5 +209,7 @@ describe('initSceneList — generated default remains discoverable beside author
       provenance: 'catalog-default',
     });
     expect(getSceneFile()).toBe('default');
+    expect(getSceneAuthoringSession().mode).toBe('authored');
+    expect(getSceneAuthoringSession().canMutate).toBe(true);
   });
 });

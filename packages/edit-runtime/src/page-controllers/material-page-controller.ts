@@ -10,7 +10,7 @@ import type {
   PageClosePreparation,
   PageCloseReason,
   PageMenuItem,
-} from '@forgeax/interface/core/page-platform';
+} from '@forgeax/app-shell/application';
 import {
   closeMaterialStaging,
   commitMaterialStaging,
@@ -22,7 +22,9 @@ import {
   getViewportRuntimeClientSnapshot,
   isMaterialStagingDirty,
   listDirtyMaterialStagingGuids,
+  materialCatalogLookup,
   openMaterialStaging,
+  resolveOverrides,
   type MaterialStagingPayload,
   type SelectedAsset,
 } from '@forgeax/editor-core';
@@ -177,11 +179,15 @@ export function createMaterialPageController(
     : encodePageKey(context.key);
 
   if (guid && packPath) {
+    const catalogFlat = gateway.doc.registry
+      ? resolveOverrides(guid, materialCatalogLookup(gateway.doc.registry))
+      : {};
     openMaterialStaging({
       guid,
       packPath,
       name,
       payload: asset?.payload,
+      catalogFlatValues: catalogFlat,
     });
   }
 

@@ -20,47 +20,47 @@ export type {
 	AssetSourcePhase,
 	AssetSourceState,
 	CreateAssetBrowserReadModelDeps,
-} from "../assets/asset-browser-read-model";
+} from '../assets/asset-browser-read-model';
 export {
 	assetWorkspaceSnapshotToBrowserSnapshot,
 	createAssetBrowserReadModel,
 	projectScriptablePackCatalog,
 	projectScriptablePackCatalogRows,
-} from "../assets/asset-browser-read-model";
+} from '../assets/asset-browser-read-model';
 export type {
 	AssetPlacementPlan,
 	AssetPlacementPlanError,
 	AssetPlacementPlanOptions,
 	AssetPlacementPlanResult,
-} from "../assets/asset-placement-plan";
-export { planAssetPlacement } from "../assets/asset-placement-plan";
-export type { PackAsset, RawAsset } from "../assets/assets";
+} from '../assets/asset-placement-plan';
+export { planAssetPlacement } from '../assets/asset-placement-plan';
+export type { PackAsset, RawAsset } from '../assets/assets';
 export {
 	extractPackDirs,
 	loadRawAssets,
 	materialSwatch,
-} from "../assets/assets";
-export type { DragAssetRef, SpawnRefEntity } from "../assets/drag-asset-spawn";
-export { buildSpawnEntityFromDragRef } from "../assets/drag-asset-spawn";
-export type { FbxCookResult } from "../assets/fbx-cook";
-export { cookFbxMeta, mergeFbxImportSettings } from "../assets/fbx-cook";
-export { resolveFbxImportDependencies } from "../assets/fbx-cook";
+} from '../assets/assets';
+export type { DragAssetRef, SpawnRefEntity } from '../assets/drag-asset-spawn';
+export { buildSpawnEntityFromDragRef } from '../assets/drag-asset-spawn';
+export type { FbxCookResult } from '../assets/fbx-cook';
+export { cookFbxMeta, mergeFbxImportSettings } from '../assets/fbx-cook';
+export { resolveFbxImportDependencies } from '../assets/fbx-cook';
 export type {
 	FbxDependencyCandidate,
 	FbxDependencyResolution,
-} from "../assets/fbx-cook";
-export type { GltfCookResult } from "../assets/gltf-cook";
-export { cookGltfMeta } from "../assets/gltf-cook";
+} from '../assets/fbx-cook';
+export type { GltfCookResult } from '../assets/gltf-cook';
+export { cookGltfMeta } from '../assets/gltf-cook';
 export type {
 	SourceAuthoringOperationDescriptor,
 	SourceAuthoringRuntime,
 	SourceAuthoringRuntimeResult,
-} from "../session/source-authoring-ops";
-export { installSourceAuthoringOps } from "../session/source-authoring-ops";
+} from '../session/source-authoring-ops';
+export { installSourceAuthoringOps } from '../session/source-authoring-ops';
 export {
 	projectScriptablePackReadModel,
 	SCRIPTABLE_PACK_READ_MODEL_SCHEMA,
-} from "../assets/scriptable-pack-read-model";
+} from '../assets/scriptable-pack-read-model';
 export type {
 	ScriptablePackDependencyProjection,
 	ScriptablePackDependencyStatus,
@@ -72,7 +72,7 @@ export type {
 	ScriptablePackReadModelInput,
 	ScriptablePackReadModelStatus,
 	ScriptablePackSourceReadModel,
-} from "../assets/scriptable-pack-read-model";
+} from '../assets/scriptable-pack-read-model';
 export type {
 	ActiveSceneSourceReference,
 	AssetIoSourceOutput,
@@ -87,12 +87,12 @@ export type {
 	SourceMutationPreflightInput,
 	SourceMutationPreflightResult,
 	SourceMutationProjectionError,
-} from "../assets/source-mutation-preflight";
+} from '../assets/source-mutation-preflight';
 export {
 	createSourceMutationPreflightCoordinator,
 	preflightSourceMutation,
 	readAssetSourceFact,
-} from "../assets/source-mutation-preflight";
+} from '../assets/source-mutation-preflight';
 export type {
 	GeneratedSceneRefreshError,
 	GeneratedSceneRefreshHost,
@@ -101,71 +101,64 @@ export type {
 	GeneratedSceneRefreshResult,
 	GeneratedSceneStagedTree,
 	GeneratedSceneWrapperSnapshot,
-} from "../scene/generated-scene-refresh";
-export { createGeneratedSceneRefreshOwner } from "../scene/generated-scene-refresh";
-export { refreshGeneratedSceneInstances } from "../scene/generated-scene-refresh-runtime";
+} from '../scene/generated-scene-refresh';
+export { createGeneratedSceneRefreshOwner } from '../scene/generated-scene-refresh';
+export { refreshGeneratedSceneInstances } from '../scene/generated-scene-refresh-runtime';
 export {
 	requestAddAssetToScene,
 	spawnAssetRefToScene,
 	validateMeshRendererMaterialBinding,
-} from "../scene/spawn-asset-ref";
+} from '../scene/spawn-asset-ref';
 export type {
 	BasenameValidation,
 	PathJailbreakCheck,
-} from "../session/asset-basename";
+} from '../session/asset-basename';
 export {
 	ASSET_BASENAME_MAX_LENGTH,
 	checkPathNotJailbreak,
 	validateAssetBasename,
-} from "../session/asset-basename";
+} from '../session/asset-basename';
 export type {
 	ScriptablePackRecoveryAction,
 	ScriptablePackRecoveryInput,
 	ScriptablePackRecoveryPlan,
 	SourceAuthoringOperationManifestEntry,
-} from "../session/scriptable-pack-ops";
+} from '../session/scriptable-pack-ops';
 export {
 	GENERATED_SCENE_RECOVERY_ACTIONS,
 	planScriptablePackRecovery,
 	recoveryActionsForScriptablePackError,
 	SCRIPTABLE_PACK_RECOVERY_ACTIONS,
 	sourceAuthoringOperationManifest,
-} from "../session/scriptable-pack-ops";
+} from '../session/scriptable-pack-ops';
 /**
  * Public source-authoring error index. AI callers branch on `code` and the
  * structured recovery fields below; `hint` is explanatory text only.
  */
 export type AssetSourceAuthoringErrorCode =
-	| "asset-source-key-missing"
-	| "asset-source-key-unknown"
-	| "asset-source-key-ambiguous"
-	| "asset-meta-revision-conflict"
-	| "asset-confirmation-required"
-	| "asset-confirmation-expired"
-	| "asset-confirmation-mismatch"
-	| "asset-validation-failed"
-	| "asset-cook-failed"
-	| "asset-publish-observation-timeout"
-	| "asset-catalog-subscription-gap"
-	| "asset-operation-cas-committed"
-	| "run-cancelled-before-cas";
+	| 'asset-source-key-missing'
+  | 'asset-source-key-unknown'
+  | 'asset-source-key-ambiguous'
+  | 'asset-meta-revision-conflict'
+  | 'asset-confirmation-required'
+  | 'asset-confirmation-expired'
+  | 'asset-confirmation-mismatch'
+  | 'asset-validation-failed'
+  | 'asset-cook-failed'
+  | 'asset-publish-observation-timeout'
+  | 'asset-catalog-subscription-gap'
+  | 'asset-operation-cas-committed'
+  | 'run-cancelled-before-cas';
 
 /** One Gateway-correlated failure fact from preflight through publication. */
 export interface AssetSourceAuthoringError {
 	readonly code: AssetSourceAuthoringErrorCode;
-	readonly phase:
-		| "preflight"
-		| "entry"
-		| "cas"
-		| "cook"
-		| "validation"
-		| "publication"
-		| "gap";
+	readonly phase: 'preflight' | 'entry' | 'cas' | 'cook' | 'validation' | 'publication' | 'gap';
 	readonly operationId: string;
 	readonly requestId: string;
 	readonly runId?: string;
 	readonly subjectRef: {
-		readonly kind: "asset-source";
+		readonly kind: 'asset-source';
 		readonly guid: string;
 		readonly sourceKey?: string;
 	};
@@ -193,7 +186,7 @@ export type {
 	ImportedOutputRecord,
 	ImportedOutputReference,
 	ReimportTopologyResult,
-} from "@forgeax/editor-product";
+} from '@forgeax/editor-product';
 export {
 	authorizeAssetMutation,
 	compareAssetWorkspaceSnapshots,
@@ -202,19 +195,19 @@ export {
 	getAssetSubjectCapability,
 	preflightAssetMutation,
 	reconcileImportedTopology,
-} from "@forgeax/editor-product";
-export { installAssetHmrBridge } from "../assets/asset-hmr-bridge";
-export type { AuthoredAssetCatalogBarrierOptions } from "../assets/authored-asset-barrier";
-export { createAuthoredAssetCatalogBarrier } from "../assets/authored-asset-barrier";
-export { ensureAssetCataloged, ensureAssetCatalogedResult } from "../assets/ensure-asset-cataloged";
+} from '@forgeax/editor-product';
+export { installAssetHmrBridge } from '../assets/asset-hmr-bridge';
+export type { AuthoredAssetCatalogBarrierOptions } from '../assets/authored-asset-barrier';
+export { createAuthoredAssetCatalogBarrier } from '../assets/authored-asset-barrier';
+export { ensureAssetCataloged, ensureAssetCatalogedResult } from '../assets/ensure-asset-cataloged';
 export type {
 	AuthoredSceneFact,
 	SceneActivationAssetFacts,
 	SceneActivationDescriptor,
 	SceneActivationMode,
 	SceneActivationUnavailable,
-} from "../assets/scene-activation";
-export { describeSceneActivation } from "../assets/scene-activation";
+} from '../assets/scene-activation';
+export { describeSceneActivation } from '../assets/scene-activation';
 export type {
 	AssetIoError,
 	AssetIoResult,
@@ -225,24 +218,24 @@ export type {
 	SourceFileDeleteResult,
 	SourceOverrideCommitInput,
 	SourceOverrideCommitResult,
-} from "../io/asset-io-facade";
+} from '../io/asset-io-facade';
 export {
 	AssetIOFacade,
 	AssetResourceConflictError,
 	assetIO,
 	SOURCE_SIDECAR_REVISION_DOMAIN,
-} from "../io/asset-io-facade";
+} from '../io/asset-io-facade';
 export type {
 	AssetMutationSafetyAdapter,
 	AssetMutationSafetyAdapterOptions,
 	AssetProducerAdapter,
 	AssetProducerAvailability,
 	AssetProducerSource,
-} from "../product/asset-producer-adapter";
+} from '../product/asset-producer-adapter';
 export {
 	createAssetMutationSafetyAdapter,
 	createAssetProducerAdapter,
-} from "../product/asset-producer-adapter";
+} from '../product/asset-producer-adapter';
 export type {
 	PreparedResourceTransaction,
 	ResourceChangePort,
@@ -252,19 +245,27 @@ export type {
 	ResourceRootPort,
 	ResourceSnapshotPort,
 	ResourceTransactionAdapter,
-} from "../product/resource-transaction";
-export { createResourceTransactionAdapter } from "../product/resource-transaction";
+} from '../product/resource-transaction';
+export { createResourceTransactionAdapter } from '../product/resource-transaction';
 export type {
 	AuthoredInlineAssetSnapshot,
 	AuthoredMaterialReadiness,
 	AuthoredMaterialWriteStage,
-} from "../session/authored-asset-write";
+} from '../session/authored-asset-write';
+export type { SourcePackageCatalogExpectation } from '../session/authored-asset-write';
+export type { SourcePackageCatalogRow } from '../assets/source-package-catalog-visibility';
+export {
+	isSourcePackageCatalogVisible,
+	sourcePathMatchesCatalogExpectation,
+} from '../assets/source-package-catalog-visibility';
 export {
 	awaitAuthoredMaterialReady,
 	awaitPostAssetWriteCatalogSync,
+	awaitPostSourcePackageCatalogSync,
 	registerAuthoredInlineAssetTracker,
 	registerPostAssetWriteCatalogSync,
-} from "../session/authored-asset-write";
+	registerPostSourcePackageCatalogSync,
+} from '../session/authored-asset-write';
 export type {
 	AssetImportSpec,
 	ImportCancellationPolicy,
@@ -275,13 +276,13 @@ export type {
 	ImportProgressEvent,
 	ImportProgressStage,
 	ImportSubAsset,
-} from "../session/import-ops";
-export { createImportFailure, executeAssetImport } from "../session/import-ops";
+} from '../session/import-ops';
+export { createImportFailure, executeAssetImport } from '../session/import-ops';
 export {
 	createDirectory,
 	deleteAsset,
 	deleteDirectory,
 	generateAssetGuid,
 	renameAssetInPack,
-} from "../session/pack-ops";
-export type { SourceFileDeleteStatus } from "../session/source-file-delete-status";
+} from '../session/pack-ops';
+export type { SourceFileDeleteStatus } from '../session/source-file-delete-status';

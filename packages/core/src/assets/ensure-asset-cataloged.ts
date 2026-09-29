@@ -31,30 +31,69 @@ export async function ensureAssetCatalogedResult(
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: CatalogAssetLoadError }> {
   const failure = (code: string, hint: string, retryable: boolean, cause?: unknown) => ({
     ok: false as const,
-    error: { code, hint, retryable, recoveryActions: ['editor.discover', 'query'],
-      details: { guid, ...(cause === undefined ? {} : { cause: cause instanceof Error
-        ? { ...cause, name: cause.name, message: cause.message,
-          ...('cause' in cause ? { cause: cause.cause } : {}) }
-        : cause }) } },
+    error: {
+      code,
+      hint,
+      retryable,
+      recoveryActions: ['editor.discover', 'query'],
+      details: {
+        guid,
+        ...(cause === undefined
+          ? {}
+          : {
+              cause:
+                cause instanceof Error
+                  ? {
+                      ...cause,
+                      name: cause.name,
+                      message: cause.message,
+                      ...('cause' in cause ? { cause: cause.cause } : {}),
+                    }
+                  : cause,
+            }),
+      },
+    },
   });
-  if (registry === undefined) return failure('asset-registry-unavailable',
-    'Wait for the Editor asset registry to connect, then repeat the asset payload query.', true);
+  if (registry === undefined)
+    return failure(
+      'asset-registry-unavailable',
+      'Wait for the Editor asset registry to connect, then repeat the asset payload query.',
+      true,
+    );
   const parsed = AssetGuid.parse(guid);
-  if (!parsed.ok) return failure('asset-guid-invalid',
-    'Use a GUID returned by assets.catalog or the import receipt.', false, parsed.error);
+  if (!parsed.ok)
+    return failure(
+      'asset-guid-invalid',
+      'Use a GUID returned by assets.catalog or the import receipt.',
+      false,
+      parsed.error,
+    );
   const catalog = registry.catalogSnapshot?.();
-  if (catalog?.stale === true) return failure('asset-catalog-stale',
-    'Wait for the catalog to reconcile before repeating the asset payload query.', true, catalog.diagnostics);
+  if (catalog?.stale === true)
+    return failure(
+      'asset-catalog-stale',
+      'Wait for the catalog to reconcile before repeating the asset payload query.',
+      true,
+      catalog.diagnostics,
+    );
   if (registry.lookup(guid) !== undefined) return { ok: true };
   try {
     const result = await registry.loadByGuid(parsed.value);
-    if (!result.ok) return failure('asset-payload-load-failed',
-      'The asset payload could not be loaded. Inspect the producer cause before retrying this query.', false, result.error);
+    if (!result.ok)
+      return failure(
+        'asset-payload-load-failed',
+        'The asset payload could not be loaded. Inspect the producer cause before retrying this query.',
+        false,
+        result.error,
+      );
     return { ok: true };
   } catch (cause) {
-    return failure('asset-payload-load-failed',
-      'The asset payload loader threw. Inspect the cause and restore the asset source before retrying.', false,
-      cause);
+    return failure(
+      'asset-payload-load-failed',
+      'The asset payload loader threw. Inspect the cause and restore the asset source before retrying.',
+      false,
+      cause,
+    );
   }
 }
 

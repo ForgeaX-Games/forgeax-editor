@@ -88,7 +88,7 @@ describe('source authoring host seam', () => {
     });
   });
 
-  it('projects real Catalog and Meta facts into the SourceAuthoringRuntime seams', async () => {
+	it('projects real Catalog and Meta facts into the SourceAuthoringRuntime seams', async () => {
     const events: string[] = [];
     const runtime = createSourceAuthoringRuntime({
       catalog: () => [row],
@@ -98,7 +98,7 @@ describe('source authoring host seam', () => {
       },
       triggerCook: async (guid, signal) => {
         events.push(`cook:${guid}:${signal?.aborted === true}`);
-        return { ok: true, value: { attempts: 1, retryWaitMs: 0 } };
+        return { ok: true, value: { attempts: 1, retryWaitMs: 0, entries: [] } };
       },
       observePublication: async ({ op, signal }) => {
         events.push(`observe:${(op as { requestId: string }).requestId}:${signal.aborted}`);
@@ -124,14 +124,47 @@ describe('source authoring host seam', () => {
     const controller = new AbortController();
     await runtime.rebuild({ op, signal: controller.signal });
     await runtime.observePublication?.({ op, signal: controller.signal });
-    expect(events).toEqual([
-      'meta:assets/Fox.glb.meta.json',
-      'cook:guid:fox:false',
-      'observe:host-seam-1:false',
-    ]);
-  });
+		expect(events).toEqual([
+			'meta:assets/Fox.glb.meta.json',
+			'cook:guid:fox:false',
+			'observe:host-seam-1:false',
+		]);
+	});
 
-  it('uses the producer preflight for ScriptablePack sources instead of a disk Meta sidecar', async () => {
+	it('reconciles the catalog after a failed cook before exposing the cook error', async () => {
+		let reconciles = 0;
+		const runtime = createSourceAuthoringRuntime({
+			catalog: () => [row],
+			triggerCook: async () => ({
+				ok: false,
+				error: {
+					kind: 'http',
+					status: 422,
+					hint: 'the importer failed while converting the source',
+				},
+			}),
+			reconcileCatalog: async () => {
+				reconciles += 1;
+			},
+		});
+
+		await expect(runtime.rebuild({
+			op: {
+				kind: 'reimportAsset',
+				guid: row.guid,
+				scope: { sourceKey: SOURCE_KEY },
+				expectedRevision: 'meta:r1',
+				requestId: 'host-seam-cook-failed-1',
+			} as never,
+			signal: new AbortController().signal,
+		})).rejects.toMatchObject({
+			code: 'asset-cook-failed',
+			message: 'the importer failed while converting the source',
+		});
+		expect(reconciles).toBe(1);
+	});
+
+	it('uses the producer preflight for ScriptablePack sources instead of a disk Meta sidecar', async () => {
     const packRow: SourceCatalogRow = {
       ...row,
       guid: 'guid:pack-scene',

@@ -12,12 +12,15 @@ import {
 type FakeHost = HTMLDivElement & { readonly children: readonly unknown[] };
 type FakeApp = {
   readonly world: object;
-  readonly renderer: {};
   readonly assets: {
     configureRuntimeBinding(binding: unknown): void;
+    setCatalogSource(source: unknown): void;
+    enumerateCatalog(): Promise<{ ok: true; value: readonly unknown[] }>;
     invalidate(guid: unknown): void;
     loadByGuid(guid: unknown): Promise<{ ok: boolean; value?: unknown; error?: { code: string } }>;
-    instantiate(handle: unknown, world: unknown): { ok: boolean; value?: unknown; error?: { code: string } };
+    instantiate(handle: unknown, world: unknown,
+    ): { ok: boolean; value?: unknown; error?: { code: string } };
+    dispose(): void;
   };
   readonly start: ReturnType<typeof mock>;
   readonly stop: ReturnType<typeof mock>;
@@ -45,8 +48,10 @@ type FakeAssembly = {
 const apps: FakeApp[] = [];
 const viewports: FakeViewport[] = [];
 const assemblies: FakeAssembly[] = [];
-const boundsOverlayInstalls: { readonly debugDraw: unknown; readonly getAabb: () => unknown; readonly isVisible: () => boolean }[] = [];
-const skeletonOverlayInstalls: { readonly debugDraw: unknown; readonly getRoot: () => unknown; readonly isVisible: () => boolean }[] = [];
+const boundsOverlayInstalls: { readonly debugDraw: unknown; readonly getAabb: () => unknown; readonly isVisible: () => boolean;
+}[] = [];
+const skeletonOverlayInstalls: { readonly debugDraw: unknown; readonly getRoot: () => unknown; readonly isVisible: () => boolean;
+}[] = [];
 let sceneInstantiateCalls = 0;
 let lastSceneInstantiateHandle: unknown = undefined;
 let sceneInstantiateOk = true;
@@ -118,10 +123,12 @@ function meshAsset(guid: string): {
   readonly packPath: string;
   readonly payload: Record<string, unknown>;
 } {
-  return { kind: 'mesh', guid, name: guid, packPath: 'sample/assets/test.pack.json', payload: {} };
+  return { kind: 'mesh', guid, name: guid, packPath: 'sample/assets/test.pack.json', payload: {},
+  };
 }
 
-function sceneAsset(guid: string, skinGuids: readonly string[] = []): {
+function sceneAsset(guid: string, skinGuids: readonly string[] = [],
+): {
   readonly kind: 'scene';
   readonly guid: string;
   readonly name: string;
@@ -144,35 +151,41 @@ function createDependencies(
   return {
     createPreviewBundlerOptions: async () => ({
       shaderManifestUrl: '/fixture/shaders/manifest.json',
-      importTransport: { fetchPack: async () => { throw new Error('fixture does not fetch packs'); } } as never,
+      importTransport: {
+        fetchPack: async () => {
+          throw new Error('fixture does not fetch packs');
+        },
+      } as never,
     }),
     createApp: (async (_canvas: unknown, _options: unknown, bundlerOptions: unknown) => {
       createdBundlerOptions.push(bundlerOptions);
       const app: FakeApp = {
         world: {},
-        renderer: {},
         assets: {
-            invalidate() { previewInvalidateCalls += 1; },
-            configureRuntimeBinding(binding) {
-              configuredBindings.push(binding);
-            },
-            async loadByGuid(guid) {
-              previewLoadCalls += 1;
-              const key = guid instanceof Uint8Array
-                ? [...guid].map((byte) => byte.toString(16).padStart(2, '0')).join('')
-                : '';
-              const value = previewPayloads.get(key);
-              return value === undefined
-                ? { ok: false, error: { code: 'asset-not-found' } }
-                : { ok: true, value };
-            },
-            instantiate(handle, _world) {
-              sceneInstantiateCalls += 1;
-              lastSceneInstantiateHandle = handle;
-              return sceneInstantiateOk
-                ? { ok: true, value: sceneRootHandle }
-                : { ok: false, error: { code: 'scene-instantiate-failed' } };
-            },
+          invalidate() { previewInvalidateCalls += 1; },
+          configureRuntimeBinding(binding) {
+            configuredBindings.push(binding);
+          },
+          setCatalogSource() {},
+          async enumerateCatalog() { return { ok: true as const, value: [] }; },
+          async loadByGuid(guid) {
+            previewLoadCalls += 1;
+            const key = guid instanceof Uint8Array
+              ? [...guid].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+              : '';
+            const value = previewPayloads.get(key);
+            return value === undefined
+              ? { ok: false, error: { code: 'asset-not-found' } }
+              : { ok: true, value };
+          },
+          instantiate(handle, _world) {
+            sceneInstantiateCalls += 1;
+            lastSceneInstantiateHandle = handle;
+            return sceneInstantiateOk
+              ? { ok: true, value: sceneRootHandle }
+              : { ok: false, error: { code: 'scene-instantiate-failed' } };
+          },
+          dispose() {},
         },
         start: mock(() => undefined),
         stop: mock(() => undefined),
@@ -185,8 +198,10 @@ function createDependencies(
       despawnScene(root: unknown) { sceneDespawnCalls.push(root); },
       allocSharedRef(_target: string, _payload: unknown) { return { facadeHandle: true }; },
     })) as unknown as PreviewWorldServiceDependencies['createEngineFacade'],
-    getViewportRuntimeClientSnapshot: (() => ({ status: 'ready' })) as PreviewWorldServiceDependencies['getViewportRuntimeClientSnapshot'],
-    queryViewportRuntimeProjection: (async (query: { readonly kind: string; readonly guid?: string }) => {
+    getViewportRuntimeClientSnapshot: (() => ({ status: 'ready',
+    })) as PreviewWorldServiceDependencies['getViewportRuntimeClientSnapshot'],
+    queryViewportRuntimeProjection: (async (query: { readonly kind: string; readonly guid?: string;
+    }) => {
       queryCalls += 1;
       if (query.kind === 'assets.runtime-binding') {
         return projectedBinding === undefined
@@ -273,11 +288,16 @@ describe('PreviewWorldService', () => {
     const snapshots: Array<{ status: string; error?: string }> = [];
     const service = new PreviewWorldService({
       ...createDependencies(),
-      createPreviewBundlerOptions: async () => { throw new Error('shader manifest unavailable'); },
+      createPreviewBundlerOptions: async () => {
+        throw new Error('shader manifest unavailable');
+      },
     });
     await service.mount(makeHost(), (snapshot) => snapshots.push(snapshot));
     expect(apps).toHaveLength(0);
-    expect(snapshots.at(-1)).toMatchObject({ status: 'failed', error: 'shader manifest unavailable' });
+    expect(snapshots.at(-1)).toMatchObject({
+      status: 'failed',
+      error: 'shader manifest unavailable',
+    });
     service.dispose();
   });
 
@@ -339,7 +359,8 @@ describe('PreviewWorldService', () => {
   });
 
   it('replaces subjects in the preview world and never queries after disposal', async () => {
-    const payload = { kind: 'mesh', vertices: new Float32Array([0, 0, 0]), submeshes: [] };
+    const payload = { kind: 'mesh', vertices: new Float32Array([0, 0, 0]), submeshes: [],
+    };
     payloads.set('mesh-a', payload);
     const service = new PreviewWorldService(createDependencies());
     const host = makeHost();
@@ -395,7 +416,8 @@ describe('PreviewWorldService', () => {
       jointPaths: ['root', 'root/spine', 'root/spine/head'],
     });
     const service = new PreviewWorldService(createDependencies());
-    const snapshots: { status: string; assetGuid?: string; bounds?: unknown; skeletonTree?: unknown }[] = [];
+    const snapshots: { status: string; assetGuid?: string; bounds?: unknown; skeletonTree?: unknown;
+    }[] = [];
     await service.mount(makeHost(), (s) => snapshots.push(s as never));
     await service.replaceSubject(sceneAsset(guid, [skinGuid]));
 
@@ -412,7 +434,8 @@ describe('PreviewWorldService', () => {
     expect(ready?.bounds).toEqual({ center: [0, 1, 0], radius: 2.5 });
     // P1.4: the ready snapshot carries the parsed bone hierarchy.
     expect(Array.isArray(ready?.skeletonTree)).toBe(true);
-    const tree = ready?.skeletonTree as { readonly name: string; readonly children: readonly unknown[] }[];
+    const tree = ready?.skeletonTree as { readonly name: string; readonly children: readonly unknown[];
+    }[];
     expect(tree).toHaveLength(1);
     expect(tree[0]!.name).toBe('root');
     expect(tree[0]!.children).toHaveLength(1);
@@ -421,7 +444,8 @@ describe('PreviewWorldService', () => {
 
   it('emits no skeletonTree for a scene with no skins', async () => {
     const guid = '019d0000-0000-7000-8000-000000000032';
-    previewPayloads.set(guid.replaceAll('-', ''), { kind: 'scene', entities: [], skinGuids: [] });
+    previewPayloads.set(guid.replaceAll('-', ''), { kind: 'scene', entities: [], skinGuids: [],
+    });
     const service = new PreviewWorldService(createDependencies());
     const snapshots: { status: string; skeletonTree?: unknown }[] = [];
     await service.mount(makeHost(), (s) => snapshots.push(s as never));
@@ -433,7 +457,8 @@ describe('PreviewWorldService', () => {
   it('despawns the previous Scene root when switching from a Scene to a Mesh subject', async () => {
     const sceneGuid = '019d0000-0000-7000-8000-000000000030';
     const meshGuid = '019d0000-0000-7000-8000-000000000020';
-    previewPayloads.set(sceneGuid.replaceAll('-', ''), { kind: 'scene', entities: [], skinGuids: [] });
+    previewPayloads.set(sceneGuid.replaceAll('-', ''), { kind: 'scene', entities: [], skinGuids: [],
+    });
     previewPayloads.set(meshGuid.replaceAll('-', ''), {
       kind: 'mesh',
       vertices: new Float32Array([0, 0, 0]),
@@ -454,7 +479,8 @@ describe('PreviewWorldService', () => {
 
   it('fails closed when Scene instantiate returns an error', async () => {
     const guid = '019d0000-0000-7000-8000-000000000030';
-    previewPayloads.set(guid.replaceAll('-', ''), { kind: 'scene', entities: [], skinGuids: [] });
+    previewPayloads.set(guid.replaceAll('-', ''), { kind: 'scene', entities: [], skinGuids: [],
+    });
     sceneInstantiateOk = false;
     const service = new PreviewWorldService(createDependencies());
     const snapshots: { status: string; error?: string }[] = [];
@@ -502,7 +528,8 @@ describe('PreviewWorldService', () => {
     expect(configuredBindings).toEqual([binding]);
     expect(queryCalls).toBe(1);
     expect(createdBundlerOptions[0]).toMatchObject({
-      importTransport: expect.objectContaining({ fetchPack: expect.any(Function) }),
+      importTransport: expect.objectContaining({ fetchPack: expect.any(Function),
+      }),
     });
   });
 
@@ -531,7 +558,8 @@ describe('PreviewWorldService', () => {
     expect(apps).toHaveLength(1);
     expect(configuredBindings).toEqual([binding]);
     expect(createdBundlerOptions[0]).toMatchObject({
-      importTransport: expect.objectContaining({ fetchPack: expect.any(Function) }),
+      importTransport: expect.objectContaining({ fetchPack: expect.any(Function),
+      }),
     });
   });
 
@@ -575,7 +603,8 @@ describe('PreviewWorldService', () => {
     const payloadA = new Promise<unknown>((resolve) => {
       resolveA = resolve;
     });
-    const payloadB = { kind: 'mesh', vertices: new Float32Array([1, 0, 0]), submeshes: [] };
+    const payloadB = { kind: 'mesh', vertices: new Float32Array([1, 0, 0]), submeshes: [],
+    };
     payloads.set('mesh-a', payloadA);
     payloads.set('mesh-b', payloadB);
 
@@ -587,7 +616,8 @@ describe('PreviewWorldService', () => {
     await second;
 
     expect(assemblies[0]?.replaced).toEqual([payloadB]);
-    resolveA({ kind: 'mesh', vertices: new Float32Array([2, 0, 0]), submeshes: [] });
+    resolveA({ kind: 'mesh', vertices: new Float32Array([2, 0, 0]), submeshes: [],
+    });
     await first;
     expect(assemblies[0]?.replaced).toEqual([payloadB]);
   });

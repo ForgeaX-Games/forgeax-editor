@@ -1,29 +1,5 @@
-/**
- * TEMPORARY (release / Shell+Transport only) — import OperationRun progress via poll.
- *
- * ## Canonical design (editor `main`, unchanged)
- *
- * Content Browser runs beside the live Gateway and uses **push** updates:
- *
- *   gateway.dispatch({ kind: 'importAsset', requestId, ... })
- *   gateway.subscribeOperationRun(requestId, onRunUpdate)
- *   await gateway.waitOperationRun(requestId)
- *
- * See `packages/core/src/io/catalog.ts` → `importAsset.operationRun.read.subscribe`.
- *
- * ## Why this file exists (release20260901+ / Studio pin)
- *
- * After #585, the Shell dispatches through Transport (`dispatchActiveEditorOperation`)
- * and cannot call `gateway.subscribeOperationRun`. Transport exposes `run.get` /
- * `run.wait` but **not** `run.subscribe` yet. This module polls `run.get` every
- * 100ms as a **stopgap** until scheme B lands (Transport `run.subscribe`).
- *
- * **Do not merge this poll path into `main` without replacing it by subscribe.**
- * **Delete this file** when scheme B is implemented (checklist in
- * `puckyu-doc/knowledge/editor-import-progress-bar-design.md` §8).
- *
- * SSOT for the decision / migration plan: that knowledge doc.
- */
+/** Transport-backed import progress. Keep updates monotonic while transient
+ * viewport rebinding interrupts run.get/run.wait; the Runtime remains the owner. */
 
 import {
   dispatchActiveEditorOperation,
@@ -34,7 +10,7 @@ import {
   type OperationRun,
 } from '@forgeax/editor-core';
 
-/** Poll interval — trade latency vs Transport load; not used on main. */
+/** Poll interval while Transport provides run.get/run.wait without run.subscribe. */
 export const IMPORT_RUN_TRANSPORT_POLL_MS = 100;
 
 const BENIGN_VIEWPORT_RUNTIME_TRANSPORT_ERRORS = new Set([
@@ -169,7 +145,10 @@ type ImportAssetOp = Extract<EditorOp, { kind: 'importAsset' }>;
 export async function dispatchImportAssetWithTransportPoll(
   operation: ImportAssetOp,
   onRunUpdate: (run: OperationRun) => void,
-): Promise<{ readonly dispatch: Awaited<ReturnType<typeof dispatchActiveEditorOperation>>; readonly terminal: OperationRun }> {
+): Promise<{
+  readonly dispatch: Awaited<ReturnType<typeof dispatchActiveEditorOperation>>;
+  readonly terminal: OperationRun;
+}> {
   const requestId = operation.requestId;
   const [dispatch, terminal] = await Promise.all([
     dispatchActiveEditorOperation(operation, 'human'),

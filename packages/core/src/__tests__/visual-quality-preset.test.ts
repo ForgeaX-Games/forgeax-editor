@@ -3,7 +3,7 @@
 // normal AI origin/ledger, and collapses to one undo step.
 
 import { beforeEach, describe, expect, it } from 'bun:test';
-import { Camera, DirectionalLight, PointLightShadow, SpotLight } from '@forgeax/engine-render';
+import { Camera, DirectionalLight, DirectionalShadowFilterValue, PointLightShadow, SpotLight } from '@forgeax/engine-render';
 import { EditGateway } from '../io/gateway';
 import { querySnapshot } from '../io/query-snapshot';
 import { createEditSession } from '../session/document';
@@ -35,8 +35,8 @@ describe('applyVisualQualityPreset', () => {
       kind: 'spawnEntity',
       name: 'Visual rig',
       components: {
-        Camera: { bloom: 0, bloomBlurRadius: 2 },
-        DirectionalLight: { direction: [-0.4, -1, -0.3], mapSize: 1024, cascadeCount: 2, pcfKernelSize: 1 },
+        Camera: { bloom: 0, bloomScatter: 0.25, bloomSoftKnee: 0.5 },
+        DirectionalLight: { direction: [-0.4, -1, -0.3], mapSize: 1024, cascadeCount: 2, shadowFilter: DirectionalShadowFilterValue.pcf1 },
         PointLightShadow: { mapSize: 256, pcfKernelSize: 1 },
       },
     });
@@ -54,15 +54,15 @@ describe('applyVisualQualityPreset', () => {
     const beforeUndoDepth = gateway.historySteps().filter((step) => !step.future).length;
     const result = gateway.dispatch({ kind: 'applyVisualQualityPreset', preset: 'cinematic' }, 'ai');
     expect(result.ok).toBe(true);
-    expect(rowFor(gateway, entity, 'Camera')).toMatchObject({ bloom: 1, bloomBlurRadius: 8 });
-    expect(rowFor(gateway, entity, 'DirectionalLight')).toMatchObject({ mapSize: 4096, cascadeCount: 4, pcfKernelSize: 5 });
+    expect(rowFor(gateway, entity, 'Camera')).toMatchObject({ bloom: 1, bloomScatter: 0.25, bloomSoftKnee: 0.5 });
+    expect(rowFor(gateway, entity, 'DirectionalLight')).toMatchObject({ mapSize: 4096, cascadeCount: 4, shadowFilter: DirectionalShadowFilterValue.pcf5 });
     expect(rowFor(gateway, entity, 'PointLightShadow')).toMatchObject({ mapSize: 1024, pcfKernelSize: 5 });
     expect(gateway.historySteps().filter((step) => !step.future)).toHaveLength(beforeUndoDepth + 1);
     expect(gateway.auditLog().at(-1)).toMatchObject({ origin: 'ai', op: { kind: 'applyVisualQualityPreset', preset: 'cinematic' } });
 
     expect(gateway.undo()).toBe(true);
-    expect(rowFor(gateway, entity, 'Camera')).toMatchObject({ bloom: 0, bloomBlurRadius: 2 });
-    expect(rowFor(gateway, entity, 'DirectionalLight')).toMatchObject({ mapSize: 1024, cascadeCount: 2, pcfKernelSize: 1 });
+    expect(rowFor(gateway, entity, 'Camera')).toMatchObject({ bloom: 0, bloomScatter: 0.25, bloomSoftKnee: 0.5 });
+    expect(rowFor(gateway, entity, 'DirectionalLight')).toMatchObject({ mapSize: 1024, cascadeCount: 2, shadowFilter: DirectionalShadowFilterValue.pcf1 });
     expect(rowFor(gateway, entity, 'PointLightShadow')).toMatchObject({ mapSize: 256, pcfKernelSize: 1 });
   });
 

@@ -1,8 +1,7 @@
 import {
   createApp,
   type ExecutionApp,
-  type ExecutionBootstrapValue,
-} from '@forgeax/engine-app';
+  type ExecutionBootstrapValue } from '@forgeax/engine-app';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import type { RuntimeAssetBinding } from '@forgeax/engine-types';
 import type { PointerLockProvider } from '@forgeax/engine-input';
@@ -41,7 +40,8 @@ export async function startPlayExecution(
     ...(options.physics === undefined ? {} : { physics: options.physics }),
     ...(options.runtimeBinding === undefined
       ? {}
-      : { runtimeBinding: options.runtimeBinding as unknown as PlayExecutionBootstrapData['runtimeBinding'] }),
+      : { runtimeBinding: options.runtimeBinding as unknown as PlayExecutionBootstrapData['runtimeBinding'],
+        }),
     ...(options.packIndexUrl === undefined ? {} : { packIndexUrl: options.packIndexUrl }),
     gamePluginModules: options.gamePluginModules,
   };
@@ -49,7 +49,6 @@ export async function startPlayExecution(
     options.canvas,
     {
       execution: {
-        tier: 'auto',
         bootstrap: new URL('./execution-bootstrap.ts', import.meta.url),
         bootstrapData: data as unknown as ExecutionBootstrapValue,
         bootstrapPort: channel.port2,

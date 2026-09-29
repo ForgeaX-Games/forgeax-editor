@@ -5,6 +5,7 @@
     {
       "guid": "427e8932-3ea3-49ad-a8ce-8c9561e53062",
       "kind": "material",
+      "execution": "cooked",
       "sourceKey": "arc-nova-flow.wgsl",
       "payload": {
         "kind": "material",

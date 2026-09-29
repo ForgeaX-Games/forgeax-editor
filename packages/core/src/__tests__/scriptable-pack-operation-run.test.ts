@@ -6,7 +6,7 @@ import {
   type SourceAuthoringRuntime,
   type SourceAuthoringRuntimeResult,
 } from '../session/source-authoring-ops';
-import { SOURCE_AUTHORING_OPERATION_DESCRIPTORS } from '@forgeax/engine-pack/source';
+import { sourceAuthoringOperationManifest } from '../session/scriptable-pack-ops';
 
 const uninstallers: Array<() => void> = [];
 
@@ -25,7 +25,7 @@ describe('asset source Gateway contract', () => {
       metaPath: () => '',
       validateSourceOverride: () => undefined,
       rebuild: async () => undefined,
-      structuredOperations: SOURCE_AUTHORING_OPERATION_DESCRIPTORS,
+      structuredOperations: sourceAuthoringOperationManifest().filter((entry) => entry.id !== "asset.preflight"),
       executeStructured,
     };
   }
@@ -38,17 +38,15 @@ describe('asset source Gateway contract', () => {
     const operations = new EditGateway().listOps().filter((entry) => entry.id.startsWith('asset-source.'));
 
     expect(operations.map((entry) => entry.id).sort()).toEqual([
-      'asset-source.add-external-asset',
-      'asset-source.add-output',
+      'asset-source.apply-values',
       'asset-source.clone',
       'asset-source.cold-cook',
       'asset-source.create',
+      'asset-source.create-instance',
       'asset-source.rebuild',
-      'asset-source.remove-output',
-      'asset-source.rename',
     ]);
     expect(operations.filter((entry) => entry.domain === 'transient')).toHaveLength(0);
-    expect(operations.filter((entry) => entry.domain === 'session')).toHaveLength(8);
+    expect(operations.filter((entry) => entry.domain === 'session')).toHaveLength(6);
     for (const operation of operations) {
       expect(operation).toMatchObject({
         source: 'registered',
@@ -107,7 +105,7 @@ describe('asset source Gateway contract', () => {
     }))));
     const gateway = new EditGateway();
     gateway.dispatch({
-      kind: 'asset-source.add-output',
+      kind: 'asset-source.apply-values',
       sourcePath: 'assets/showcase.pack.ts',
       sourceKey: 'mesh:new',
       assetKind: 'mesh',

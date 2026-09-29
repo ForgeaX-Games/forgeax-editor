@@ -3,12 +3,14 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'bun:test';
 
 const panel = readFileSync(resolve(import.meta.dir, '..', 'ViewportPanel.tsx'), 'utf8');
-const runtimeComponent = readFileSync(resolve(import.meta.dir, '..', 'ViewportComponent.tsx'), 'utf8');
+const runtimeComponent = readFileSync(resolve(import.meta.dir, '..', 'ViewportComponent.tsx'), 'utf8',
+);
 
 describe('Viewport panel Runtime authority', () => {
   it('routes shell toolbar operations through the active Runtime operation seam', () => {
-    for (const operation of ['setGizmoMode', 'setGizmoSpace', 'setGizmoPivot', 'setViewportPreferences', 'replayParticleEffect']) {
-      expect(panel).toContain(`dispatchActiveEditorOperation({ kind: '${operation}'`);
+    for (const operation of ['setGizmoMode', 'setGizmoSpace', 'setGizmoPivot', 'setViewportPreferences', 'replayParticleEffect',
+    ]) {
+      expect(panel).toMatch(new RegExp(`dispatchActiveEditorOperation\\(\\s*\\{ kind: '${operation}'`));
       expect(panel).not.toContain(`gateway.dispatch({ kind: '${operation}'`);
     }
   });
@@ -24,8 +26,13 @@ describe('Viewport panel Runtime authority', () => {
   });
 
   it('dispatches same-window Play through the live EditGateway when the Runtime client is disconnected', () => {
-    const operation = readFileSync(resolve(import.meta.dir, '../../../../core/src/store/active-operation.ts'), 'utf8');
-    expect(operation).toContain('getActiveRuntimeUiGraph() !== null');
+    const operation = readFileSync(
+      resolve(import.meta.dir, '../../../../core/src/store/active-operation.ts'),
+      'utf8',
+    );
+    expect(operation).toContain('getEditorPanelAuthoritySnapshot()');
+    expect(operation).toContain('canDispatchPanelDocumentOperations(authority)');
+    expect(operation).toContain('usesHostGatewayForPanelDispatch(authority)');
     expect(operation).toContain('gateway.dispatch(operation, origin)');
     expect(operation).toContain('[editor] operation blocked: Viewport Runtime is disconnected');
   });
@@ -36,5 +43,13 @@ describe('Viewport panel Runtime authority', () => {
     expect(runtimeComponent).toContain('gizmoPivot: getGizmoPivot()');
     expect(panel).toContain("'panel.viewport.gizmo': projectedGizmoState.mode");
     expect(panel).toContain('useProjectedGizmoState()');
+  });
+
+  it('registers viewport focus scope and Delete/Mod+A contextual keybindings', () => {
+    expect(panel).toContain('export function registerViewportScopedKeybindings');
+    expect(panel).toContain('host.keybindings.register');
+    expect(panel).toContain("commandId: 'editor.delete'");
+    expect(panel).toContain('scope: VIEWPORT_KEYBINDING_SCOPE');
+    expect(panel).toContain("commandId: 'editor.selectAll'");
   });
 });

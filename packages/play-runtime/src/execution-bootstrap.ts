@@ -1,7 +1,6 @@
 import {
   type ExecutionBootstrapEntry,
-  type Plugin,
-} from '@forgeax/engine-app';
+  type Plugin } from '@forgeax/engine-app';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import {
   addGamePluginSystems,
@@ -36,6 +35,16 @@ import { installCompletedFrameHeartbeat } from './completed-frame-heartbeat';
 const CYLINDER_GUID = 'c1111111-0000-5000-8000-000000000001';
 let nextExecutionRendererGeneration = 0;
 
+function isGpuVfxDrawPass(name: string): boolean {
+  return (
+    (
+      name.startsWith('forgeax.vfx-render.gpu-particles::gpu.')
+      && /\.draw(?:\.(?:regular|depth-sampled))?$/u.test(name)
+    ) || /^vfx\.w-[a-z0-9]+\.a-[a-z0-9]+\.r-\d+\.p-[a-z0-9]+\.[^.]+\.g-\d+\.renderer-\d+\.raster$/u.test(name,
+    )
+  );
+}
+
 function post(port: MessagePort | undefined, message: PlayExecutionRealmMessage): void {
   port?.postMessage(message);
 }
@@ -64,14 +73,16 @@ export function projectRuntimeDiagnostics(
       [typeof Name, typeof MeshFilter, typeof MeshRenderer],
       [],
       [typeof ChildOf]
-    >({ read: [Name, MeshFilter, MeshRenderer], optional: [ChildOf] })
+    >({ read: [Name, MeshFilter, MeshRenderer], optional: [ChildOf],
+    })
     .unwrap();
   // Query rows are borrowed facades: the engine rebinds one row object for
   // each iteration. Project each row before advancing the iterator so the
   // disposable snapshot never retains a later binding.
   type DiagnosticRow = {
     readonly entity: number;
-    get(component: unknown): {
+    get(component: unknown):
+      | {
       readonly value?: string;
       readonly assetHandle?: number;
       readonly materials?: readonly unknown[];
@@ -80,8 +91,10 @@ export function projectRuntimeDiagnostics(
   };
   const projectedEntities = Array.from(entityQuery as Iterable<DiagnosticRow>, (row) => {
     const name = row.get(Name) as { readonly value: string };
-    const meshFilter = row.get(MeshFilter) as { readonly assetHandle: number };
-    const meshRenderer = row.get(MeshRenderer) as { readonly materials: readonly unknown[] };
+    const meshFilter = row.get(MeshFilter) as { readonly assetHandle: number;
+    };
+    const meshRenderer = row.get(MeshRenderer) as { readonly materials: readonly unknown[];
+    };
     const childOf = row.get(ChildOf);
     const parent = childOf?.parent;
     const components: string[] = [Name.name, MeshFilter.name, MeshRenderer.name];
@@ -118,36 +131,45 @@ export function projectRuntimeDiagnostics(
         diagnostics(): readonly unknown[];
       }>('VfxGpuRuntime')
     : null;
-  const renderer = context.renderer.inspect();
-  const feature = renderer.featureDiagnostics.find(
+  // Render diagnostics are a detached snapshot owned by the Renderer. Do not
+  // reach into the old live render-system projections: a3 deliberately keeps
+  // those facts behind inspect() so the execution realm cannot retain GPU
+  // objects or a second diagnostics owner.
+  // Keep the projection tolerant of the deliberately small renderer doubles
+  // used by headless contract tests. The real Renderer always returns the
+  // complete inspection POD; a partial double simply omits render-only facts.
+  const rendererInspection = context.renderer.inspect() as Partial<ReturnType<Renderer['inspect']>>;
+  const feature = (rendererInspection.featureDiagnostics ?? []).find(
     (diagnostic) => diagnostic.identity === 'forgeax.vfx-render.gpu-particles',
   );
-  const featurePass = renderer.perFramePassNames.find((name) => (
-    name.startsWith('forgeax.vfx-render.gpu-particles::gpu.')
-    && /\.draw(?:\.(?:regular|depth-sampled))?$/u.test(name)
-  ));
-  const render = renderer.renderScene === undefined
+  const featurePass = (rendererInspection.perFramePassNames ?? []).find(isGpuVfxDrawPass);
+  const render = rendererInspection.renderScene === undefined
+    || rendererInspection.frustumStats === undefined
+    || rendererInspection.visibilityStats === undefined
+    || rendererInspection.meshMaterialBindings === undefined
+    || rendererInspection.bindGroupCounts === undefined
+    || rendererInspection.perFramePassNames === undefined
     ? undefined
-    : {
-        frustum: { ...renderer.frustumStats },
-        visibility: { ...renderer.visibilityStats },
+    : ({
+        frustum: { ...rendererInspection.frustumStats },
+        visibility: { ...rendererInspection.visibilityStats },
         scene: {
-          worldEntitiesScanned: renderer.renderScene.worldEntitiesScanned,
-          projectionRecords: renderer.renderScene.projectionRecords,
-          candidateCount: renderer.renderScene.topology.candidateCount,
-          batchCount: renderer.renderScene.topology.batchCount,
-          ineligible: renderer.renderScene.topology.ineligible,
-          gpuStatus: renderer.renderScene.gpu.status,
+          worldEntitiesScanned: rendererInspection.renderScene.worldEntitiesScanned,
+          projectionRecords: rendererInspection.renderScene.projectionRecords,
+          candidateCount: rendererInspection.renderScene.topology.candidateCount,
+          batchCount: rendererInspection.renderScene.topology.batchCount,
+          ineligible: rendererInspection.renderScene.topology.ineligible,
+          gpuStatus: rendererInspection.renderScene.gpu.status,
         },
-        meshMaterialBindings: renderer.meshMaterialBindings.slice(0, 32).map((observation) => ({
+        meshMaterialBindings: rendererInspection.meshMaterialBindings.slice(0, 32).map((observation) => ({
           worldId: observation.worldId,
           entityKey: observation.entityKey,
           bindingCount: observation.bindings.length,
           diagnosticCount: observation.diagnostics.length,
         })),
-        bindGroupCreates: renderer.bindGroupCounts.createBindGroup,
-        passCount: renderer.perFramePassNames.length,
-      } satisfies PlayExecutionRuntimeDiagnostics['render'];
+        bindGroupCreates: rendererInspection.bindGroupCounts.createBindGroup,
+        passCount: rendererInspection.perFramePassNames.length,
+      } satisfies PlayExecutionRuntimeDiagnostics['render']);
   return {
     entityCount: inspection.entityCount,
     activeComponents: [...inspection.activeComponents],
@@ -157,7 +179,8 @@ export function projectRuntimeDiagnostics(
     runtimeDiagnostics: (vfxRuntime?.diagnostics() ?? []) as PlayExecutionRuntimeDiagnostics['runtimeDiagnostics'],
     ...(featurePass === undefined ? {} : { featurePass }),
     ...(feature?.status === undefined ? {} : { featureStatus: feature.status }),
-    featureError: feature?.latestError as PlayExecutionRuntimeDiagnostics['featureError'],
+    ...(feature?.latestError === undefined ? {} : { featureError: feature.latestError as PlayExecutionRuntimeDiagnostics['featureError'],
+        }),
     ...(render === undefined ? {} : { render }),
   };
 }
@@ -193,8 +216,7 @@ const bootstrap: ExecutionBootstrapEntry = async (rawData) => {
       };
       if (data.runtimeBinding !== undefined) {
         assets.configureRuntimeBinding(
-          data.runtimeBinding as unknown as RuntimeAssetBinding,
-        );
+          data.runtimeBinding as unknown as RuntimeAssetBinding);
         await assets.refreshCatalog();
       }
       if (data.packIndexUrl !== undefined) assets.configurePackIndex(data.packIndexUrl);
@@ -245,7 +267,9 @@ const bootstrap: ExecutionBootstrapEntry = async (rawData) => {
         }
       }
       if (pluginLoad.plugins.some((plugin) => plugin.producer !== undefined)) {
-        const producers = await installGamePluginProducers(pluginLoad, { world: context.world });
+        const producers = await installGamePluginProducers(pluginLoad, {
+          world: context.world,
+        });
         if (!producers.ok) throw new Error(producers.error.hint);
         registerCleanup(() => producers.value.dispose());
       }
@@ -270,19 +294,25 @@ const bootstrap: ExecutionBootstrapEntry = async (rawData) => {
       });
 
       const pulse = createPlayExecutionPulse();
-      registerCleanup(installCompletedFrameHeartbeat({
-        subscribe: (listener) => renderer.subscribe((event) => {
-          if (event.kind === 'frame-submitted') listener();
+      registerCleanup(
+        installCompletedFrameHeartbeat({
+          // App owns the frame loop and Renderer owns the only submission event
+          // stream. `frame-submitted` is the completion heartbeat source; an
+          // execution host must not create a second rAF or call draw itself.
+          subscribe: (listener) =>
+            renderer.subscribe((event) => {
+              if (event.kind === 'frame-submitted') listener();
+            }),
+          now: () => performance.now(),
+          publish: (heartbeat) => {
+            post(context.executionBootstrapHost.port, {
+              protocol: PLAY_EXECUTION_PROTOCOL,
+              kind: 'heartbeat',
+              ...heartbeat,
+            });
+          },
         }),
-        now: () => performance.now(),
-        publish: (heartbeat) => {
-          post(context.executionBootstrapHost.port, {
-            protocol: PLAY_EXECUTION_PROTOCOL,
-            kind: 'heartbeat',
-            ...heartbeat,
-          });
-        },
-      }));
+      );
       context.world
         .addSystem(Update, {
           name: 'play-execution-diagnostics',
@@ -294,7 +324,10 @@ const bootstrap: ExecutionBootstrapEntry = async (rawData) => {
               post(context.executionBootstrapHost.port, {
                 protocol: PLAY_EXECUTION_PROTOCOL,
                 kind: 'runtime-diagnostics',
-                diagnostics: projectRuntimeDiagnostics({ world: context.world, renderer }),
+                diagnostics: projectRuntimeDiagnostics({
+                  world: context.world,
+                  renderer,
+                }),
               });
             }
           },

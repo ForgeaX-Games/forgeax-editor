@@ -77,17 +77,23 @@ export function getProjectValidationProvider(): ProjectValidationProvider | unde
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : undefined;
 }
 
-function providerFailure(value: unknown): value is { readonly ok: false; readonly error: CommandError } {
+function providerFailure(value: unknown,
+): value is { readonly ok: false; readonly error: CommandError } {
   const candidate = record(value);
   const error = record(candidate?.error);
-  return candidate?.ok === false && typeof error?.code === 'string' && typeof error?.hint === 'string';
+  return (
+    candidate?.ok === false && typeof error?.code === 'string' && typeof error?.hint === 'string'
+  );
 }
 
-function issueRow(value: unknown): { readonly file: string; readonly code: string; readonly message: string; readonly detail: Record<string, unknown> } | undefined {
+function issueRow(value: unknown,
+):
+  | { readonly file: string; readonly code: string; readonly message: string; readonly detail: Record<string, unknown>;
+    } | undefined {
   const candidate = record(value);
   if (typeof candidate?.file !== 'string' || typeof candidate.code !== 'string' || typeof candidate.message !== 'string') return undefined;
   return {
@@ -121,7 +127,8 @@ export function normalizeProjectValidationResult(value: unknown): ProjectValidat
     };
   }
 
-  const rows: Array<{ readonly severity: 'error' | 'warn'; readonly row: NonNullable<ReturnType<typeof issueRow>> }> = [];
+  const rows: Array<{ readonly severity: 'error' | 'warn'; readonly row: NonNullable<ReturnType<typeof issueRow>>;
+  }> = [];
   for (const value of blocking) {
     const row = issueRow(value);
     if (row !== undefined) rows.push({ severity: 'error', row });
@@ -150,7 +157,12 @@ export function normalizeProjectValidationResult(value: unknown): ProjectValidat
   const entities = numberStat(stats.entities);
   const packs = numberStat(stats.packs);
   const sidecars = numberStat(stats.sidecars);
-  if (bytes === undefined || entities === undefined || packs === undefined || sidecars === undefined) {
+  if (
+    bytes === undefined ||
+    entities === undefined ||
+    packs === undefined ||
+    sidecars === undefined
+  ) {
     return {
       ok: false,
       error: {
@@ -182,13 +194,18 @@ export function normalizeProjectValidationResult(value: unknown): ProjectValidat
 }
 
 /** Derive human diagnostics from the same terminal run result exposed to AI callers. */
-export function projectValidationDiagnostics(runs: readonly OperationRun[]): readonly RuntimeDiagnosticFact[] {
+export function projectValidationDiagnostics(
+  runs: readonly OperationRun[],
+): readonly RuntimeDiagnosticFact[] {
   const facts: RuntimeDiagnosticFact[] = [];
   // OperationRun.sequence is local to each run, so recency is the terminal
   // completion time; the input order breaks same-clock-tick ties.
   const latestTerminal = runs
-    .filter((run) => run.operationId === PROJECT_VALIDATION_OPERATION
-      && (run.status === 'succeeded' || run.status === 'failed' || run.status === 'cancelled'))
+    .filter(
+      (run) =>
+        run.operationId === PROJECT_VALIDATION_OPERATION &&
+        (run.status === 'succeeded' || run.status === 'failed' || run.status === 'cancelled'),
+    )
     .reduce<OperationRun | undefined>((latest, run) => {
       if (latest === undefined) return run;
       const runAt = run.completedAt ?? run.acceptedAt;
@@ -197,28 +214,41 @@ export function projectValidationDiagnostics(runs: readonly OperationRun[]): rea
     }, undefined);
   if (latestTerminal?.status !== 'succeeded') return Object.freeze(facts);
   const result = record(latestTerminal.result);
-  if (result?.schemaVersion !== PROJECT_VALIDATION_SCHEMA_VERSION || result.ok !== false) return Object.freeze(facts);
+  if (result?.schemaVersion !== PROJECT_VALIDATION_SCHEMA_VERSION || result.ok !== false)
+    return Object.freeze(facts);
   const issues = result.issues;
   if (!Array.isArray(issues)) return Object.freeze(facts);
   for (const issueValue of issues) {
     const issue = record(issueValue);
     const location = record(issue?.location);
-    if (typeof issue?.id !== 'string' || (issue?.severity !== 'error' && issue?.severity !== 'warn')
-      || typeof issue.code !== 'string' || typeof issue.message !== 'string'
-      || location?.kind !== 'file' || typeof location.id !== 'string') continue;
-    facts.push(Object.freeze({
-      id: `${latestTerminal.runId}:${issue.id}`,
-      severity: issue.severity,
-      code: issue.code,
-      title: location.id,
-      message: issue.message,
-      path: location.id,
-      ...(latestTerminal.requestId === undefined ? {} : { requestId: latestTerminal.requestId }),
-      subjectRef: Object.freeze({ kind: 'source-file', id: location.id }),
-      retryable: false,
-      recoveryActions: Object.freeze(['run.get']),
-      detail: Object.freeze({ runId: latestTerminal.runId, operationId: latestTerminal.operationId, issue: issueValue }),
-    }));
+    if (
+      typeof issue?.id !== 'string' ||
+      (issue?.severity !== 'error' && issue?.severity !== 'warn') ||
+      typeof issue.code !== 'string' ||
+      typeof issue.message !== 'string' ||
+      location?.kind !== 'file' ||
+      typeof location.id !== 'string'
+    )
+      continue;
+    facts.push(
+      Object.freeze({
+        id: `${latestTerminal.runId}:${issue.id}`,
+        severity: issue.severity,
+        code: issue.code,
+        title: location.id,
+        message: issue.message,
+        path: location.id,
+        ...(latestTerminal.requestId === undefined ? {} : { requestId: latestTerminal.requestId }),
+        subjectRef: Object.freeze({ kind: 'source-file', id: location.id }),
+        retryable: false,
+        recoveryActions: Object.freeze(['run.get']),
+        detail: Object.freeze({
+          runId: latestTerminal.runId,
+          operationId: latestTerminal.operationId,
+          issue: issueValue,
+        }),
+      }),
+    );
   }
   return Object.freeze(facts);
 }

@@ -114,9 +114,12 @@ describe('solo round-21 — editor ▶ Play drives a kinematic CharacterControll
       { component: RigidBody, data: { type: RIGID_BODY_TYPE_STATIC } },
       { component: Collider, data: { shape: 0, halfExtents: [10, 0.5, 10] } },
     );
-    // Kinematic capsule character resting on the ground (capsule half-total 0.8).
+    // Start just above the ground (capsule half-total 0.8 + a small margin).
+    // Starting at exact zero-distance contact can be classified as penetration
+    // during the first gravity pulses; the settle drive below still establishes
+    // ground contact before walking.
     const char = world.spawn(
-      { component: Transform, data: { pos: [0, 0.8, 0] } },
+      { component: Transform, data: { pos: [0, 0.85, 0] } },
       { component: RigidBody, data: { type: RIGID_BODY_TYPE_KINEMATIC } },
       { component: Collider, data: { shape: 2, radius: 0.3, halfHeight: 0.5 } },
       { component: CharacterController, data: {} },
@@ -155,7 +158,7 @@ describe('solo round-21 — editor ▶ Play drives a kinematic CharacterControll
       { component: Collider, data: { shape: 0, halfExtents: [0.5, 1, 4] } },
     );
     const char = world.spawn(
-      { component: Transform, data: { pos: [0, 0.8, 0] } },
+      { component: Transform, data: { pos: [0, 0.85, 0] } },
       { component: RigidBody, data: { type: RIGID_BODY_TYPE_KINEMATIC } },
       { component: Collider, data: { shape: 2, radius: 0.3, halfHeight: 0.5 } },
       { component: CharacterController, data: {} },

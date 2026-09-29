@@ -25,6 +25,8 @@ import {
 import { recordAssetLeaf } from './trace';
 import type { CommandError } from '../types';
 import { deletedEntryCache as rawDeletedEntryCache } from './asset-op-caches';
+import type { ImportCookCatalogEntry } from '../session/import-cook-catalog-apply.js';
+import { parseImportCookCatalogEntries } from '../session/import-cook-catalog-apply.js';
 
 /**
  * Resolve a game-relative pack path exactly once. Appliers historically called
@@ -43,7 +45,12 @@ function resolvePackPathOnce(packPath: string): string {
 }
 
 /** Mirror of the `/api/files/tree` response node (same shape as assets.ts TreeNode). */
-interface TreeNode { name: string; path: string; type: 'dir' | 'file'; children?: TreeNode[] }
+interface TreeNode {
+  name: string;
+  path: string;
+  type: 'dir' | 'file';
+  children?: TreeNode[];
+}
 
 /** A single asset entry inside a pack file (derived from the zod PackFile shape). */
 export type PackAssetEntry = PackFile['assets'][number];
@@ -58,9 +65,7 @@ export interface UpsertAssetResult {
   readonly previous: PackAssetEntry | null;
 }
 
-export type SourceFileDeleteResult =
-  | { ok: true }
-  | { ok: false; error: CommandError };
+export type SourceFileDeleteResult = { ok: true } | { ok: false; error: CommandError };
 
 export type SourceFileAbsenceResult =
   | { ok: true; absent: boolean }
@@ -80,6 +85,9 @@ export type AssetIoResult<T = void> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: AssetIoError };
 
+export type ImportCookTriggerResult = {
+  readonly entries: readonly ImportCookCatalogEntry[];
+};
 /** Cook trigger retry + server phase breakdown (browser-visible via import.engineCook.done). */
 export interface TriggerCookStats {
   readonly attempts: number;
@@ -96,7 +104,11 @@ export interface TriggerCookProgress {
 
 export type CreateAuthoredPackResult =
   | { readonly ok: true }
-  | { readonly ok: false; readonly reason: 'collision' | 'write-failed'; readonly hint: string };
+  | {
+      readonly ok: false;
+      readonly reason: 'collision' | 'write-failed';
+      readonly hint: string;
+    };
 
 /** Diagnosable result for createAssetInPack. `read-failed` means the target
  *  pack EXISTS on disk but could not be read/validated — the write was REFUSED
@@ -104,7 +116,11 @@ export type CreateAuthoredPackResult =
  *  bodies (the "material written but pack lost" gray-card root cause). */
 export type CreateAssetInPackResult =
   | { readonly ok: true }
-  | { readonly ok: false; readonly reason: 'read-failed' | 'write-failed'; readonly hint: string };
+  | {
+      readonly ok: false;
+      readonly reason: 'read-failed' | 'write-failed';
+      readonly hint: string;
+    };
 
 export const SOURCE_SIDECAR_REVISION_DOMAIN = 'source-sidecar-file-v1';
 
@@ -127,7 +143,10 @@ export interface AssetResourceTransactionPort<TInput = unknown> {
   readonly revisionDomain: typeof SOURCE_SIDECAR_REVISION_DOMAIN;
   readonly readResource: (resource: AssetResourceRef) => Promise<AssetResourceSnapshot>;
   readonly prepare: (input: TInput) => Promise<{
-    readonly commit: () => Promise<{ readonly revision: string; readonly result?: unknown }>;
+    readonly commit: () => Promise<{
+      readonly revision: string;
+      readonly result?: unknown;
+    }>;
     readonly rollback?: () => Promise<void>;
   }>;
 }
@@ -153,34 +172,44 @@ export class AssetResourceConflictError extends Error {
     readonly expectedRevision: string,
     readonly currentRevision: string | null,
   ) {
-    super(`resource revision mismatch (expected ${expectedRevision}, current ${currentRevision ?? 'missing'})`);
+    super(
+      `resource revision mismatch (expected ${expectedRevision}, current ${currentRevision ?? 'missing'})`,
+    );
     this.name = 'AssetResourceConflictError';
   }
 }
 
-function isSourceSidecarPort(port: AssetResourceTransactionPort | undefined): port is AssetResourceTransactionPort {
-  return port?.supportsExpectedRevision === true
-    && port.revisionDomain === SOURCE_SIDECAR_REVISION_DOMAIN
-    && typeof port.readResource === 'function';
+function isSourceSidecarPort(
+  port: AssetResourceTransactionPort | undefined,
+): port is AssetResourceTransactionPort {
+  return (
+    port?.supportsExpectedRevision === true &&
+    port.revisionDomain === SOURCE_SIDECAR_REVISION_DOMAIN &&
+    typeof port.readResource === 'function'
+  );
 }
 
 interface SourceSidecarPutInput {
   readonly resource: AssetResourceRef;
   readonly expectedRevision: string;
   readonly content: string;
-  readonly changes?: readonly [{
-    readonly kind: 'put';
-    readonly path: string;
-    readonly content: string;
-  }];
+  readonly changes?: readonly [
+    {
+      readonly kind: 'put';
+      readonly path: string;
+      readonly content: string;
+    },
+  ];
 }
 
 function isSourceSidecarPutInput(input: unknown): input is SourceSidecarPutInput {
   const candidate = input as Partial<SourceSidecarPutInput> | null;
-  return candidate?.resource?.kind === 'source-sidecar'
-    && typeof candidate.resource.path === 'string'
-    && typeof candidate.expectedRevision === 'string'
-    && typeof candidate.content === 'string';
+  return (
+    candidate?.resource?.kind === 'source-sidecar' &&
+    typeof candidate.resource.path === 'string' &&
+    typeof candidate.expectedRevision === 'string' &&
+    typeof candidate.content === 'string'
+  );
 }
 
 const isMetaPath = (packPath: string): boolean => packPath.endsWith('.meta.json');
@@ -220,32 +249,51 @@ export const deletedEntryCache = rawDeletedEntryCache as Map<string, AssetEntry>
 /** Transient import-route failures that settle once the pack watcher finishes indexing. */
 export function isRetryableCookTriggerFailure(
   status: number,
-  body: { readonly error?: string; readonly hint?: string; readonly reason?: string; readonly code?: string; readonly diagnostics?: readonly { readonly code?: string; readonly severity?: string; readonly cause?: unknown }[] },
+  body: {
+    readonly error?: string;
+    readonly hint?: string;
+    readonly reason?: string;
+    readonly code?: string;
+    readonly diagnostics?: readonly {
+      readonly code?: string;
+      readonly severity?: string;
+      readonly cause?: unknown;
+    }[];
+  },
   mode: 'rebuild' | 'cold-cook' = 'rebuild',
 ): boolean {
   const error = body.error ?? '';
   const hint = body.hint ?? body.reason ?? '';
   const code = body.code ?? '';
-  // Rebuild mode must not 404 on fresh sidecars; repeated meta-not-found means stale engine dist.
+  // A just-written sidecar can precede the producer index; retry within the bounded deadline.
   if (
-    status === 404
-    && (error === 'meta-not-found' || hint.includes('no source declares this GUID'))
+    status === 404 &&
+    (error === 'meta-not-found' || hint.includes('no source declares this GUID'))
   ) {
-    return mode === 'cold-cook';
+    return true;
   }
   // An invalid pack declaration needs a source edit; waiting cannot repair it.
-  if (error === 'runtime-scope-catalog-degraded' && body.diagnostics?.some(
-    (diagnostic) => {
+  if (
+    error === 'runtime-scope-catalog-degraded' &&
+    body.diagnostics?.some((diagnostic) => {
       if (diagnostic.severity !== 'blocking') return false;
       let current: unknown = diagnostic;
-      for (let depth = 0; depth < 8 && current !== null && typeof current === 'object'; depth += 1) {
-        const cause = current as { readonly code?: unknown; readonly cause?: unknown };
+      for (
+        let depth = 0;
+        depth < 8 && current !== null && typeof current === 'object';
+        depth += 1
+      ) {
+        const cause = current as {
+          readonly code?: unknown;
+          readonly cause?: unknown;
+        };
         if (typeof cause.code === 'string' && cause.code.startsWith('pack-source-')) return true;
         current = cause.cause;
       }
       return false;
-    },
-  )) return false;
+    })
+  )
+    return false;
   if (status === 409 && error.startsWith('runtime-scope')) return true;
   if (status === 410 && error.startsWith('runtime-scope-generation')) return true;
   if (status === 503 && error === 'runtime-scope-unavailable') return true;
@@ -285,7 +333,10 @@ export class AssetIOFacade {
     const prev = this.packWriteChains.get(packPath) ?? Promise.resolve();
     const next = prev.then(fn, fn);
     // Chain tail never rejects, so one failed write cannot wedge later writers.
-    const tail = next.then(() => undefined, () => undefined);
+    const tail = next.then(
+      () => undefined,
+      () => undefined,
+    );
     this.packWriteChains.set(packPath, tail);
     void tail.then(() => {
       if (this.packWriteChains.get(packPath) === tail) this.packWriteChains.delete(packPath);
@@ -322,7 +373,9 @@ export class AssetIOFacade {
     return this.runtimeBinding;
   }
 
-  async prepareResourceTransaction(input: unknown): Promise<Awaited<ReturnType<AssetResourceTransactionPort['prepare']>> | null> {
+  async prepareResourceTransaction(
+    input: unknown,
+  ): Promise<Awaited<ReturnType<AssetResourceTransactionPort['prepare']>> | null> {
     if (this.resourceTransaction === undefined) return null;
     return this.resourceTransaction.prepare(input);
   }
@@ -350,14 +403,16 @@ export class AssetIOFacade {
           }),
         });
         if (response.status === 409) {
-          const body = await response.json().catch(() => ({})) as { currentRevision?: unknown };
+          const body = (await response.json().catch(() => ({}))) as {
+            currentRevision?: unknown;
+          };
           throw new AssetResourceConflictError(
             prepared.expectedRevision,
             typeof body.currentRevision === 'string' ? body.currentRevision : null,
           );
         }
         if (!response.ok) throw new Error(`sidecar CAS failed (HTTP ${response.status})`);
-        const body = await response.json() as { revision?: unknown };
+        const body = (await response.json()) as { revision?: unknown };
         if (typeof body.revision !== 'string' || body.revision.length === 0) {
           throw new Error('sidecar CAS response did not include a revision');
         }
@@ -371,17 +426,20 @@ export class AssetIOFacade {
    * all producer-owned Meta fields; the resource port remains the sole commit
    * boundary and arbitrates concurrent writers on the expected revision.
    */
-  async commitSourceOverrides(input: SourceOverrideCommitInput): Promise<SourceOverrideCommitResult> {
+  async commitSourceOverrides(
+    input: SourceOverrideCommitInput,
+  ): Promise<SourceOverrideCommitResult> {
     recordAssetLeaf('assetIO.writeMetaSidecar');
     const snapshot = await this.readMetaSidecar(input.metaPath);
     if (!snapshot.ok) throw new Error(snapshot.error.hint);
     if (snapshot.value.revision !== input.expectedRevision) {
       throw new AssetResourceConflictError(input.expectedRevision, snapshot.value.revision);
     }
-    const document = mutateMetaSourceOverrides(
-      parseMetaDocument(snapshot.value.contents),
-      { scope: input.scope, override: input.override, discard: input.discard },
-    );
+    const document = mutateMetaSourceOverrides(parseMetaDocument(snapshot.value.contents), {
+      scope: input.scope,
+      override: input.override,
+      discard: input.discard,
+    });
     const contents = serializeMetaDocument(document);
     const prepared = await this.prepareRevisionAwareResourceTransaction({
       resource: { kind: 'source-sidecar', path: input.metaPath },
@@ -429,9 +487,12 @@ export class AssetIOFacade {
   async probeSourceFile(resolvedPath: string): Promise<SourceFilePresenceResult> {
     recordAssetLeaf('assetIO.probeSourceFile');
     try {
-      const response = await fetch(`/api/files?path=${encodeURIComponent(resolvedPath)}&optional=1`, {
-        cache: 'no-store',
-      });
+      const response = await fetch(
+        `/api/files?path=${encodeURIComponent(resolvedPath)}&optional=1`,
+        {
+          cache: 'no-store',
+        },
+      );
       if (!response.ok) {
         return {
           ok: false,
@@ -442,7 +503,9 @@ export class AssetIOFacade {
           },
         };
       }
-      const body = await response.json().catch(() => ({})) as { exists?: unknown };
+      const body = (await response.json().catch(() => ({}))) as {
+        exists?: unknown;
+      };
       return { ok: true, value: body.exists !== false };
     } catch (err) {
       return {
@@ -467,13 +530,13 @@ export class AssetIOFacade {
       return response.ok
         ? { ok: true, value: undefined }
         : {
-          ok: false,
-          error: {
-            kind: 'http',
-            status: response.status,
-            hint: `source promotion failed (${fromPath} -> ${toPath}, HTTP ${response.status})`,
-          },
-        };
+            ok: false,
+            error: {
+              kind: 'http',
+              status: response.status,
+              hint: `source promotion failed (${fromPath} -> ${toPath}, HTTP ${response.status})`,
+            },
+          };
     } catch (err) {
       return {
         ok: false,
@@ -543,9 +606,15 @@ export class AssetIOFacade {
     recordAssetLeaf('assetIO.deletePackEntry');
     return this.runExclusivePackWrite(packPath, async () => {
       const entry = await this.readPackEntry(packPath, guid);
-      if (!entry) throw new Error(`[editor-core] assetIO.deletePackEntry: entry ${guid} not found in ${packPath}`);
+      if (!entry)
+        throw new Error(
+          `[editor-core] assetIO.deletePackEntry: entry ${guid} not found in ${packPath}`,
+        );
       const ok = await deleteAsset(packPath, guid);
-      if (!ok) throw new Error(`[editor-core] assetIO.deletePackEntry: failed to delete ${guid} from ${packPath}`);
+      if (!ok)
+        throw new Error(
+          `[editor-core] assetIO.deletePackEntry: failed to delete ${guid} from ${packPath}`,
+        );
       return entry;
     });
   }
@@ -564,12 +633,18 @@ export class AssetIOFacade {
       let pack: PackFile;
       if (read.status === 'error') return false;
       if (read.status === 'missing') {
-        pack = { schemaVersion: '2.0.0', kind: 'internal-text-package', assets: [] };
+        pack = {
+          schemaVersion: '2.0.0',
+          kind: 'internal-text-package',
+          assets: [],
+        };
       } else {
         pack = read.pack;
       }
       const packEntry = entry as PackAssetEntry;
-      const idx = pack.assets.findIndex((a) => a.guid.toLowerCase() === packEntry.guid.toLowerCase());
+      const idx = pack.assets.findIndex(
+        (a) => a.guid.toLowerCase() === packEntry.guid.toLowerCase(),
+      );
       if (idx >= 0) pack.assets[idx] = packEntry;
       else pack.assets.push(packEntry);
       return writePack(resolvedPackPath, pack);
@@ -589,8 +664,21 @@ export class AssetIOFacade {
    *  network). Only `ok:true` may be treated as "the asset is on disk". */
   createAssetInPack(opts: {
     packPath: string;
-    asset: { guid: string; kind: string; name: string; payload: unknown; refs?: string[]; execution?: string };
-    extraAssets?: Array<{ guid: string; kind: string; name: string; payload: unknown; refs?: string[] }>;
+    asset: {
+      guid: string;
+      kind: string;
+      name: string;
+      payload: unknown;
+      refs?: string[];
+      execution?: string;
+    };
+    extraAssets?: Array<{
+      guid: string;
+      kind: string;
+      name: string;
+      payload: unknown;
+      refs?: string[];
+    }>;
   }): Promise<CreateAssetInPackResult> {
     recordAssetLeaf('assetIO.createAssetInPack');
     const resolvedPackPath = resolvePackPathOnce(opts.packPath);
@@ -605,7 +693,11 @@ export class AssetIOFacade {
         };
       }
       if (read.status === 'missing') {
-        pack = { schemaVersion: '2.0.0', kind: 'internal-text-package', assets: [] };
+        pack = {
+          schemaVersion: '2.0.0',
+          kind: 'internal-text-package',
+          assets: [],
+        };
       } else {
         pack = read.pack;
       }
@@ -639,7 +731,11 @@ export class AssetIOFacade {
       const written = await writePackDetailed(resolvedPackPath, pack);
       return written.ok
         ? { ok: true as const }
-        : { ok: false as const, reason: 'write-failed' as const, hint: written.hint };
+        : {
+            ok: false as const,
+            reason: 'write-failed' as const,
+            hint: written.hint,
+          };
     });
   }
 
@@ -647,11 +743,22 @@ export class AssetIOFacade {
    *  is the SSOT for deciding which arm applies; live catalog state may be cold. */
   async upsertAssetInPack(opts: {
     packPath: string;
-    asset: { guid: string; kind: string; name: string; payload: unknown; refs?: string[] };
+    asset: {
+      guid: string;
+      kind: string;
+      name: string;
+      payload: unknown;
+      refs?: string[];
+    };
   }): Promise<UpsertAssetResult> {
     recordAssetLeaf('assetIO.createAssetInPack');
     let pack = await readPack(opts.packPath);
-    if (!pack) pack = { schemaVersion: '2.0.0', kind: 'internal-text-package', assets: [] };
+    if (!pack)
+      pack = {
+        schemaVersion: '2.0.0',
+        kind: 'internal-text-package',
+        assets: [],
+      };
     const index = pack.assets.findIndex(
       (entry) => entry.guid.toLowerCase() === opts.asset.guid.toLowerCase(),
     );
@@ -674,16 +781,27 @@ export class AssetIOFacade {
    * metadata, or DDC. The existence probe is read-only; success performs exactly
    * one candidate write through the asset gate.
    */
-  async createAuthoredPackIfAbsent(packPath: string, content: string): Promise<CreateAuthoredPackResult> {
+  async createAuthoredPackIfAbsent(
+    packPath: string,
+    content: string,
+  ): Promise<CreateAuthoredPackResult> {
     recordAssetLeaf('assetIO.writePackEntry');
     return this.runExclusivePackWrite(packPath, async () => {
       try {
         const existing = await fetch(`/api/files/raw?path=${encodeURIComponent(packPath)}`);
         if (existing.ok) {
-          return { ok: false, reason: 'collision', hint: `An authored resource already exists at ${packPath}.` };
+          return {
+            ok: false,
+            reason: 'collision',
+            hint: `An authored resource already exists at ${packPath}.`,
+          };
         }
         if (existing.status !== 404) {
-          return { ok: false, reason: 'write-failed', hint: `Could not validate target availability (HTTP ${existing.status}).` };
+          return {
+            ok: false,
+            reason: 'write-failed',
+            hint: `Could not validate target availability (HTTP ${existing.status}).`,
+          };
         }
         const written = await fetch('/api/files', {
           method: 'POST',
@@ -692,7 +810,11 @@ export class AssetIOFacade {
         });
         return written.ok
           ? { ok: true }
-          : { ok: false, reason: 'write-failed', hint: `Authored pack write failed (HTTP ${written.status}).` };
+          : {
+              ok: false,
+              reason: 'write-failed',
+              hint: `Authored pack write failed (HTTP ${written.status}).`,
+            };
       } catch (cause) {
         return {
           ok: false,
@@ -740,9 +862,12 @@ export class AssetIOFacade {
   // startup-scan callers whose source already lives on disk).
 
   /** Upload raw source bytes (base64) to disk at destPath. `POST /api/files/upload`. */
-  async uploadSourceBytes(destPath: string, base64: string, signal?: AbortSignal): Promise<AssetIoResult> {
+  async uploadSourceBytes(
+    destPath: string,
+    base64: string,
+    signal?: AbortSignal,
+  ): Promise<AssetIoResult> {
     recordAssetLeaf('assetIO.uploadSourceBytes');
-    console.info('[import-diag] uploadSourceBytes', { destPath, base64Len: base64.length });
     try {
       const r = await fetch('/api/files/upload', {
         method: 'POST',
@@ -750,20 +875,34 @@ export class AssetIOFacade {
         body: JSON.stringify({ path: destPath, data: base64 }),
         signal,
       });
-      console.info('[import-diag] uploadSourceBytes response', { status: r.status, ok: r.ok });
       return r.ok
         ? { ok: true, value: undefined }
-        : { ok: false, error: { kind: 'http', status: r.status, hint: `source upload failed (HTTP ${r.status})` } };
+        : {
+            ok: false,
+            error: {
+              kind: 'http',
+              status: r.status,
+              hint: `source upload failed (HTTP ${r.status})`,
+            },
+          };
     } catch (err) {
-      console.error('[import-diag] uploadSourceBytes THREW', err);
-      return { ok: false, error: { kind: 'network', hint: `source upload network error: ${(err as Error)?.message ?? String(err)}` } };
+      return {
+        ok: false,
+        error: {
+          kind: 'network',
+          hint: `source upload network error: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      };
     }
   }
 
   /** Write a pre-built `.meta.json` sidecar (text content) to disk. `POST /api/files`. */
-  async writeMetaSidecar(metaPath: string, content: string, signal?: AbortSignal): Promise<AssetIoResult> {
+  async writeMetaSidecar(
+    metaPath: string,
+    content: string,
+    signal?: AbortSignal,
+  ): Promise<AssetIoResult> {
     recordAssetLeaf('assetIO.writeMetaSidecar');
-    console.info('[import-diag] writeMetaSidecar', { metaPath, contentLen: content.length });
     try {
       const r = await fetch('/api/files', {
         method: 'POST',
@@ -771,13 +910,24 @@ export class AssetIOFacade {
         body: JSON.stringify({ path: metaPath, content }),
         signal,
       });
-      console.info('[import-diag] writeMetaSidecar response', { metaPath, status: r.status, ok: r.ok });
       return r.ok
         ? { ok: true, value: undefined }
-        : { ok: false, error: { kind: 'http', status: r.status, hint: `sidecar write failed (HTTP ${r.status})` } };
+        : {
+            ok: false,
+            error: {
+              kind: 'http',
+              status: r.status,
+              hint: `sidecar write failed (HTTP ${r.status})`,
+            },
+          };
     } catch (err) {
-      console.error('[import-diag] writeMetaSidecar THREW', { metaPath }, err);
-      return { ok: false, error: { kind: 'network', hint: `sidecar write network error: ${(err as Error)?.message ?? String(err)}` } };
+      return {
+        ok: false,
+        error: {
+          kind: 'network',
+          hint: `sidecar write network error: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      };
     }
   }
 
@@ -785,83 +935,33 @@ export class AssetIOFacade {
    *  The host binding supplies the only valid generation-scoped import route.
    *  Returns a structured success/failure result so the executor preserves the
    *  first decisive boundary instead of collapsing it into a generic error. */
-  /** Discover and cook a native Pack through the active Engine, without inventing an asset GUID. */
-  async importPackSource(
-    sourceKey: string,
-    signal?: AbortSignal,
-  ): Promise<AssetIoResult<readonly { guid: string; kind: string }[]>> {
-    recordAssetLeaf('assetIO.importPackSource');
-    const binding = this.runtimeBinding;
-    if (!binding) return { ok: false, error: { kind: 'network', hint: 'No active runtime asset binding' } };
-    try {
-      const response = await fetch(`${binding.importUrlBase.replace(/\/+$/, '')}/source`, {
-        method: 'POST', headers: { 'x-forgeax-import-source-key': sourceKey }, signal,
-      });
-      const body: unknown = await response.json();
-      if (!response.ok) {
-        const envelope = typeof body === 'object' && body !== null ? body as Record<string, unknown> : {};
-        const diagnostic = Array.isArray(envelope.diagnostics)
-          ? envelope.diagnostics.find(value => value && typeof value === 'object' && value.severity === 'blocking') : undefined;
-        const producer = diagnostic ? { ...envelope, ...diagnostic } : envelope;
-        const hint = typeof producer.hint === 'string' ? producer.hint : typeof producer.message === 'string'
-          ? producer.message : `Source import failed (${response.status}); inspect producer diagnostics before retrying`;
-        return { ok: false, error: { kind: 'http', status: response.status, hint,
-          producerError: {
-            code: (typeof producer.code === 'string' ? producer.code : typeof producer.error === 'string' ? producer.error : 'source-import-failed') as CommandError['code'],
-            hint, owner: 'engine', category: 'resource', retryable: false,
-            recoveryActions: ['asset.preflight'],
-            ...(producer.expected === undefined ? {} : { expected: producer.expected }),
-            ...(producer.actual === undefined ? {} : { actual: producer.actual }),
-            ...(producer.detail === undefined && producer.path === undefined ? {} : { details: {
-              ...(typeof producer.detail === 'object' && producer.detail !== null ? producer.detail : {}),
-              ...(typeof producer.path === 'string' ? { sourcePath: producer.path } : {}),
-            } }),
-            ...(producer.cause === undefined ? {} : { cause: { code: 'source-import-cause', owner: 'engine' as const, details: producer.cause } }),
-          },
-        } };
-      }
-      if (this.runtimeBinding?.scopeId !== binding.scopeId || this.runtimeBinding?.generation !== binding.generation)
-        throw new Error('Runtime changed during source import; retry in the active project');
-      if (!Array.isArray(body) || body.length === 0) throw new Error('Engine returned no source assets');
-      const assets: { guid: string; kind: string }[] = [];
-      const seen = new Set<string>();
-      for (const row of body) {
-        if (typeof row !== 'object' || row === null || typeof row.guid !== 'string'
-          || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(row.guid)
-          || typeof row.kind !== 'string' || !row.kind || row.sourcePath !== sourceKey || seen.has(row.guid)) {
-          throw new Error('Engine returned an invalid source asset identity');
-        }
-        seen.add(row.guid);
-        assets.push({ guid: row.guid, kind: row.kind });
-      }
-      return { ok: true, value: assets };
-    } catch (error) {
-      return { ok: false, error: { kind: 'network', hint: error instanceof Error ? error.message : String(error) } };
-    }
-  }
-
   async triggerCook(
     guid: string,
     signal?: AbortSignal,
     mode: 'rebuild' | 'cold-cook' = 'rebuild',
     catalogSourceKey?: string,
     onCookProgress?: (progress: TriggerCookProgress) => void,
-  ): Promise<AssetIoResult<TriggerCookStats>> {
+  ): Promise<AssetIoResult<TriggerCookStats & ImportCookTriggerResult>> {
     recordAssetLeaf('assetIO.triggerCook');
     console.info('[import-diag] triggerCook', { guid, mode, catalogSourceKey });
     const importUrlBase = this.runtimeBinding?.importUrlBase;
     if (importUrlBase === undefined) {
       const hint = 'asset cook refused: no active runtime asset binding';
-      console.warn('[import-diag] triggerCook FAILED', { guid, reason: hint });
       return { ok: false, error: { kind: 'network', hint } };
     }
-    const url = `${importUrlBase.replace(/\/+$/, '')}/${encodeURIComponent(guid)}?import-mode=${encodeURIComponent(mode)}`;
+    const url = `${importUrlBase.replace(/\/+$/, '')}/${encodeURIComponent(guid)}`;
     const maxAttempts = 24;
     const baseDelayMs = 150;
     let retryWaitMs = 0;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       if (isAbortSignalActive(signal)) {
-        return { ok: false, error: { kind: 'network', hint: 'triggerCook aborted before cook completed' } };
+        return {
+          ok: false,
+          error: {
+            kind: 'network',
+            hint: 'triggerCook aborted before cook completed',
+          },
+        };
       }
       try {
         if (attempt > 0) {
@@ -894,11 +994,22 @@ export class AssetIOFacade {
             retryWaitMs,
             ...(serverTrace === undefined ? {} : { serverTrace }),
           };
-          console.info('[import-diag] triggerCook response', { guid, status: res.status, ok: true, attempt });
-          return { ok: true, value: stats };
+          console.info('[import-diag] triggerCook response', {
+            guid,
+            status: res.status,
+            ok: true,
+            attempt,
+          });
+          return {
+            ok: true,
+            value: {
+              ...stats,
+              entries: parseImportCookCatalogEntries(await res.json().catch(() => null)),
+            },
+          };
         }
 
-        const body = await res.json().catch(() => ({})) as {
+        const body = (await res.json().catch(() => ({}))) as {
           error?: string;
           reason?: string;
           hint?: string;
@@ -909,7 +1020,16 @@ export class AssetIOFacade {
           details?: unknown;
           retryable?: boolean;
           recoveryActions?: readonly string[];
-          diagnostics?: readonly { readonly code?: string; readonly severity?: string; readonly message?: string; readonly hint?: string; readonly cause?: CommandError['cause']; readonly detail?: unknown; readonly expected?: unknown; readonly actual?: unknown }[];
+          diagnostics?: readonly {
+            readonly code?: string;
+            readonly severity?: string;
+            readonly message?: string;
+            readonly hint?: string;
+            readonly cause?: CommandError['cause'];
+            readonly detail?: unknown;
+            readonly expected?: unknown;
+            readonly actual?: unknown;
+          }[];
           detail?: { readonly reason?: string; readonly loadError?: string };
         };
         const detailReason = body.detail?.reason ?? body.detail?.loadError;
@@ -924,60 +1044,124 @@ export class AssetIOFacade {
           mode,
         });
         const diagnostic = body.diagnostics?.find((item) => item.severity === 'blocking');
-        const diagnosticHint = diagnostic && [diagnostic.code, diagnostic.message ?? diagnostic.hint].filter(Boolean).join(': ');
-        const reason = detailReason ?? diagnosticHint ?? body.reason ?? body.hint ?? body.error ?? `cook failed (${res.status})`;
+        const diagnosticHint =
+          diagnostic &&
+          [diagnostic.code, diagnostic.message ?? diagnostic.hint].filter(Boolean).join(': ');
+        const reason =
+          detailReason ??
+          diagnosticHint ??
+          body.reason ??
+          body.hint ??
+          body.error ??
+          `cook failed (${res.status})`;
         if (isRetryableCookTriggerFailure(res.status, body, mode) && attempt < maxAttempts - 1) {
           const delayMs = baseDelayMs * (attempt + 1);
           retryWaitMs += delayMs;
-          await new Promise<void>((resolve) => { setTimeout(resolve, delayMs); });
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
           continue;
         }
-        console.warn('[import-diag] triggerCook FAILED', { guid, reason, body, attempt });
+        console.warn('[import-diag] triggerCook FAILED', {
+          guid,
+          reason,
+          body,
+          attempt,
+        });
         const producer = typeof body.code === 'string' ? body : { ...body, ...diagnostic };
-        const producerCode = typeof producer.code === 'string' ? producer.code : typeof body.error === 'string' ? body.error : undefined;
-        return { ok: false, error: {
-          kind: 'http', status: res.status, hint: String(reason),
-          ...(producerCode === undefined ? {} : { producerError: {
-            code: producerCode as CommandError['code'],
-            hint: typeof producer.hint === 'string' ? producer.hint : String(reason),
-            owner: 'engine',
-            category: 'resource',
-            retryable: producer.retryable === true,
-            recoveryActions: Array.isArray(producer.recoveryActions)
-              ? producer.recoveryActions.filter((action): action is string => typeof action === 'string')
-              : ['asset.preflight'],
-            ...(producer.cause === undefined ? {} : { cause: producer.cause }),
-            ...(producer.expected === undefined ? {} : { expected: producer.expected }),
-            ...(producer.actual === undefined ? {} : { actual: producer.actual }),
-            ...(producer.detail === undefined && producer.details === undefined ? {} : { details: producer.detail ?? producer.details }),
-          } }),
-        } };
+        const producerCode =
+          typeof producer.code === 'string'
+            ? producer.code
+            : typeof body.error === 'string'
+              ? body.error
+              : undefined;
+        return {
+          ok: false,
+          error: {
+            kind: 'http',
+            status: res.status,
+            hint: String(reason),
+            ...(producerCode === undefined
+              ? {}
+              : {
+                  producerError: {
+                    code: producerCode as CommandError['code'],
+                    hint: typeof producer.hint === 'string' ? producer.hint : String(reason),
+                    owner: 'engine',
+                    category: 'resource',
+                    retryable: producer.retryable === true,
+                    recoveryActions: Array.isArray(producer.recoveryActions)
+                      ? producer.recoveryActions.filter(
+                          (action): action is string => typeof action === 'string',
+                        )
+                      : ['asset.preflight'],
+                    ...(producer.cause === undefined ? {} : { cause: producer.cause }),
+                    ...(producer.expected === undefined ? {} : { expected: producer.expected }),
+                    ...(producer.actual === undefined ? {} : { actual: producer.actual }),
+                    ...(producer.detail === undefined && producer.details === undefined
+                      ? {}
+                      : { details: producer.detail ?? producer.details }),
+                  },
+                }),
+          },
+        };
       } catch (err) {
         if (isAbortSignalActive(signal)) {
-          return { ok: false, error: { kind: 'network', hint: 'triggerCook aborted before cook completed' } };
+          return {
+            ok: false,
+            error: {
+              kind: 'network',
+              hint: 'triggerCook aborted before cook completed',
+            },
+          };
         }
         console.error('[import-diag] triggerCook THREW', { guid, attempt }, err);
-        return { ok: false, error: { kind: 'network', hint: `triggerCook network error: ${err instanceof Error ? err.message : String(err)}` } };
+        return {
+          ok: false,
+          error: {
+            kind: 'network',
+            hint: `triggerCook network error: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        };
       }
     }
-    return { ok: false, error: { kind: 'http', status: 404, hint: 'cook trigger timed out waiting for the catalog to accept the imported source' } };
+    return {
+      ok: false,
+      error: {
+        kind: 'http',
+        status: 404,
+        hint: 'cook trigger timed out waiting for the catalog to accept the imported source',
+      },
+    };
   }
 
   /** Read raw source bytes from disk (for cook when no in-memory File exists).
    *  `GET /api/files/raw`. Returns a structured failure on 404 / network error. */
   async readSourceBytes(path: string, signal?: AbortSignal): Promise<AssetIoResult<ArrayBuffer>> {
     recordAssetLeaf('assetIO.readSourceBytes');
-    console.info('[import-diag] readSourceBytes', { path });
     try {
-      const r = await fetch(`/api/files/raw?path=${encodeURIComponent(path)}`, { signal });
-      console.info('[import-diag] readSourceBytes response', { path, status: r.status, ok: r.ok });
-      if (!r.ok) return { ok: false, error: { kind: 'http', status: r.status, hint: `source read failed (HTTP ${r.status})` } };
+      const r = await fetch(`/api/files/raw?path=${encodeURIComponent(path)}`, {
+        signal,
+      });
+      if (!r.ok)
+        return {
+          ok: false,
+          error: {
+            kind: 'http',
+            status: r.status,
+            hint: `source read failed (HTTP ${r.status})`,
+          },
+        };
       const buf = await r.arrayBuffer();
-      console.info('[import-diag] readSourceBytes got', { path, byteLength: buf.byteLength });
       return { ok: true, value: buf };
     } catch (err) {
-      console.error('[import-diag] readSourceBytes THREW', { path }, err);
-      return { ok: false, error: { kind: 'network', hint: `source read network error: ${(err as Error)?.message ?? String(err)}` } };
+      return {
+        ok: false,
+        error: {
+          kind: 'network',
+          hint: `source read network error: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      };
     }
   }
 
@@ -992,7 +1176,11 @@ export class AssetIOFacade {
       const out: string[] = [];
       const walk = (n?: TreeNode): void => {
         if (!n) return;
-        if (n.type === 'dir' && (n.name === 'node_modules' || n.name === '.git' || n.name === '.forgeax')) return;
+        if (
+          n.type === 'dir' &&
+          (n.name === 'node_modules' || n.name === '.git' || n.name === '.forgeax')
+        )
+          return;
         if (n.type === 'file') out.push(n.path);
         (n as { children?: TreeNode[] }).children?.forEach(walk);
       };
@@ -1011,7 +1199,7 @@ export class AssetIOFacade {
     try {
       const r = await fetch(`/api/files?path=${encodeURIComponent(metaPath)}&optional=1`);
       if (!r.ok) return undefined;
-      const body = await r.json() as { content?: unknown };
+      const body = (await r.json()) as { content?: unknown };
       return typeof body.content === 'string' ? JSON.parse(body.content) : undefined;
     } catch {
       return undefined;
@@ -1034,35 +1222,66 @@ export class AssetIOFacade {
       try {
         return {
           ok: true,
-          value: await this.resourceTransaction.readResource({ kind: 'source-sidecar', path: metaPath }),
+          value: await this.resourceTransaction.readResource({
+            kind: 'source-sidecar',
+            path: metaPath,
+          }),
         };
       } catch (err) {
         return {
           ok: false,
-          error: { kind: 'network', hint: `sidecar snapshot failed: ${(err as Error)?.message ?? String(err)}` },
+          error: {
+            kind: 'network',
+            hint: `sidecar snapshot failed: ${(err as Error)?.message ?? String(err)}`,
+          },
         };
       }
     }
     try {
-      const response = await fetch(`/api/files/raw?path=${encodeURIComponent(metaPath)}&revision=1`);
+      const response = await fetch(
+        `/api/files/raw?path=${encodeURIComponent(metaPath)}&revision=1`,
+      );
       if (!response.ok) {
-        return { ok: false, error: { kind: 'http', status: response.status, hint: `sidecar read failed (HTTP ${response.status})` } };
+        return {
+          ok: false,
+          error: {
+            kind: 'http',
+            status: response.status,
+            hint: `sidecar read failed (HTTP ${response.status})`,
+          },
+        };
       }
       const revision = response.headers.get('etag');
       if (revision === null || revision.startsWith('W/')) {
-        return { ok: false, error: { kind: 'http', status: response.status, hint: 'sidecar read did not return a strong revision' } };
+        return {
+          ok: false,
+          error: {
+            kind: 'http',
+            status: response.status,
+            hint: 'sidecar read did not return a strong revision',
+          },
+        };
       }
       const contents = await response.text();
       return { ok: true, value: { contents, revision } };
     } catch (err) {
-      return { ok: false, error: { kind: 'network', hint: `sidecar read network error: ${(err as Error)?.message ?? String(err)}` } };
+      return {
+        ok: false,
+        error: {
+          kind: 'network',
+          hint: `sidecar read network error: ${(err as Error)?.message ?? String(err)}`,
+        },
+      };
     }
   }
 
   /** Clone an asset within the same pack (new GUID, same kind/payload).
    *  Exposed via assetIO singleton for OOS-3 compliant external consumers
    *  (CBContextMenu etc.) — pack writes stay inside the gate. */
-  async cloneAssetInPack(packPath: string, guid: string): Promise<{ ok: boolean; newGuid: string }> {
+  async cloneAssetInPack(
+    packPath: string,
+    guid: string,
+  ): Promise<{ ok: boolean; newGuid: string }> {
     recordAssetLeaf('assetIO.cloneAssetInPack');
     return this.runExclusivePackWrite(packPath, async () => {
       const pack = await readPack(packPath);

@@ -7,7 +7,7 @@ import type { AssetWorkspaceSnapshot } from '@forgeax/editor-core';
  * `refs` compatibility projection in the core read model. Nothing is
  * persisted; the graph is a pure projection of the current catalog.
  *
- * Per the content-browser data-ownership ruling (L2): keys and values are all
+ * Per the content-browser data-ownership ruling (panel tier): keys and values are all
  * engine GUIDs (36-char UUID). Folders (which have no GUID) never enter the
  * graph.
  *

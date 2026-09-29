@@ -14,7 +14,7 @@ import { createResolveGuidAdapter } from '../resolve-guid-adapter';
 const TEST_GUID = 'deadbeef-dead-beef-dead-beefdeadbeef';
 
 function scenePayload(): SceneAsset {
-  return { kind: 'scene', entities: [] };
+  return { kind: 'scene', entities: {} };
 }
 
 function mockAssetError(): AssetError {

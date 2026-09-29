@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
@@ -9,7 +10,23 @@ import {
 } from '../../../../../scripts/vite/engine-vite-preset';
 
 const EDIT_RUNTIME = resolve(import.meta.dir, '../../..');
-const GAME_TEMPLATE = resolve(EDIT_RUNTIME, '..', 'engine', 'templates', 'game-default');
+const EDITOR_ROOT = resolve(EDIT_RUNTIME, '../..');
+const GAME_TEMPLATE = resolve(EDIT_RUNTIME, '..', 'engine', 'templates', 'game-3d');
+
+/** Same search roots as `resolveGameEngineEntry` (edit-runtime then editor root). */
+function allowedEngineEntryPaths(scopeDir: string, entryRel: string): string[] {
+  return [
+    resolve(EDIT_RUNTIME, 'node_modules', scopeDir, entryRel),
+    resolve(EDITOR_ROOT, 'node_modules', scopeDir, entryRel),
+  ];
+}
+
+function expectEngineEntry(specifier: string, scopeDir: string, entryRel: string): void {
+  const resolved = resolveGameEngineEntry(specifier);
+  expect(resolved).not.toBeNull();
+  if (resolved === null) return;
+  expect(allowedEngineEntryPaths(scopeDir, entryRel)).toContain(resolved);
+}
 
 function gameTemplateEngineImports(dir: string): string[] {
   const imports = new Set<string>();
@@ -23,7 +40,8 @@ function gameTemplateEngineImports(dir: string): string[] {
     }
     if (!entry.isFile() || !/\.[cm]?[jt]sx?$/.test(entry.name) || /\.(test|spec)\./.test(entry.name)) continue;
     const source = readFileSync(path, 'utf8');
-    for (const match of source.matchAll(/\bfrom\s*['\"](@forgeax\/[^'\"]+)['\"]|\bimport\s*\(\s*['\"](@forgeax\/[^'\"]+)['\"]\s*\)/g)) {
+    for (const match of source.matchAll(/\bfrom\s*['\"](@forgeax\/[^'\"]+)['\"]|\bimport\s*\(\s*['\"](@forgeax\/[^'\"]+)['\"]\s*\)/g,
+    )) {
       imports.add(match[1] ?? match[2]!);
     }
   }
@@ -32,12 +50,12 @@ function gameTemplateEngineImports(dir: string): string[] {
 
 describe('resolveGameEngineEntry', () => {
   test('maps public root and subpath imports through Edit Runtime exports', () => {
-    expect(resolveGameEngineEntry('@forgeax/engine-assets-runtime')).toBe(
-      resolve(EDIT_RUNTIME, 'node_modules/@forgeax/engine-assets-runtime/dist/index.mjs'),
+    expectEngineEntry(
+      '@forgeax/engine-assets-runtime',
+      '@forgeax/engine-assets-runtime',
+      'dist/index.mjs',
     );
-    expect(resolveGameEngineEntry('@forgeax/engine-pack/guid')).toBe(
-      resolve(EDIT_RUNTIME, 'node_modules/@forgeax/engine-pack/dist/guid.mjs'),
-    );
+    expectEngineEntry('@forgeax/engine-pack/guid', '@forgeax/engine-pack', 'dist/guid.mjs');
     expect(resolveGameEngineEntry('@forgeax/npc-client')).toBeNull();
 
     const hostRoot = mkdtempSync(join(tmpdir(), 'forgeax-editor-host-'));
@@ -104,9 +122,9 @@ describe('resolveGameEngineEntry', () => {
           },
         }),
       );
-      expect(resolveGameEngineEntry('@forgeax/engine-dual-export', { packageRoots: [hostRoot] })).toBe(
-        resolve(packageDir, 'dist/browser.mjs'),
-      );
+      expect(
+        resolveGameEngineEntry('@forgeax/engine-dual-export', { packageRoots: [hostRoot] }),
+      ).toBe(resolve(packageDir, 'dist/browser.mjs'));
     } finally {
       rmSync(hostRoot, { recursive: true, force: true });
     }
@@ -119,7 +137,8 @@ describe('resolveGameEngineEntry', () => {
 
   test('resolves every engine import used by the new-game template', () => {
     const unresolved = gameTemplateEngineImports(GAME_TEMPLATE)
-      .filter((specifier) => resolveGameEngineEntry(specifier) === null);
+      .filter((specifier) => resolveGameEngineEntry(specifier) === null,
+    );
     expect(unresolved).toEqual([]);
   });
 });

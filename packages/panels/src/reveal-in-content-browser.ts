@@ -1,4 +1,4 @@
-import type { AppHost, ContentBrowserRevealTarget } from '@forgeax/interface/core/app-shell/types';
+import type { AppHost, ContentBrowserRevealTarget } from '@forgeax/app-shell/application';
 
 /** Locate an asset or file in the mounted Content Browser via the neutral app bus. */
 export async function revealInContentBrowser(host: AppHost, target: ContentBrowserRevealTarget): Promise<void> {

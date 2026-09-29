@@ -159,17 +159,19 @@ describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
     expectFieldType('MeshRenderer', 'materials', 'asset');
   });
 
-  it('DirectionalLight: 12 fields including shadow params', () => {
+  it('DirectionalLight: 14 fields including closed shadow quality params', () => {
     expectKeys('DirectionalLight',
       'direction', 'color', 'intensity', 'castShadow',
       'cascadeCount', 'splitLambda', 'cascadeBlend', 'mapSize',
-      'depthBias', 'normalBias', 'shadowDistance', 'pcfKernelSize',
+      'depthBias', 'normalBias', 'shadowDistance', 'shadowFilter',
+      'shadowAngularRadius', 'maxPenumbraTexels',
     );
   });
 
   it('DirectionalLight shadow fields have showWhen castShadow=true', () => {
     for (const k of ['cascadeCount', 'splitLambda', 'cascadeBlend', 'mapSize',
-      'depthBias', 'normalBias', 'shadowDistance', 'pcfKernelSize']) {
+      'depthBias', 'normalBias', 'shadowDistance', 'shadowFilter',
+      'shadowAngularRadius', 'maxPenumbraTexels']) {
       const fs = fieldSchema('DirectionalLight', k);
       expect(fs?.showWhen, `${k} missing showWhen`).toEqual({ key: 'castShadow', in: ['true'] });
       expect(fieldVisible('DirectionalLight', fs, { castShadow: false }, testWorld)).toBe(false);
@@ -190,7 +192,7 @@ describe('Reflection: render components (from @forgeax/engine-runtime)', () => {
       'projection', 'fov', 'aspect', 'near', 'far',
       'left', 'right', 'bottom', 'top',
       'tonemap', 'exposure', 'whitePoint', 'antialias',
-      'bloom', 'bloomThreshold', 'bloomIntensity', 'bloomBlurRadius',
+      'bloom', 'bloomThreshold', 'bloomIntensity', 'bloomSoftKnee', 'bloomScatter',
       'clearColor', 'autoAspect',
     );
   });

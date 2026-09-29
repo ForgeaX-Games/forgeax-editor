@@ -22,7 +22,8 @@ import type {
   World,
 } from '@forgeax/engine-ecs';
 import { componentDefinition } from '@forgeax/engine-ecs';
-import type { FieldShapeKind, SchemaFieldType } from '@forgeax/engine-ecs/internal';
+type FieldShapeKind = NonNullable<FieldReflection['shape']>;
+type SchemaFieldType = FieldReflection['type'];
 import { applyEditorComponentMeta, editorMetaOf } from './editor-component-meta';
 import type { AnimationComponentMeta, AnimationTransportDescriptor } from './editor-component-meta';
 
@@ -117,7 +118,9 @@ const EDITOR_FIELD_OVERRIDES: Record<string, Partial<FieldSchema>> = {
   'DirectionalLight.depthBias':         { showWhen: { key: 'castShadow', in: ['true'] } },
   'DirectionalLight.normalBias':        { showWhen: { key: 'castShadow', in: ['true'] } },
   'DirectionalLight.shadowDistance':    { showWhen: { key: 'castShadow', in: ['true'] } },
-  'DirectionalLight.pcfKernelSize':     { showWhen: { key: 'castShadow', in: ['true'] } },
+  'DirectionalLight.shadowFilter':      { showWhen: { key: 'castShadow', in: ['true'] } },
+  'DirectionalLight.shadowAngularRadius': { showWhen: { key: 'castShadow', in: ['true'] } },
+  'DirectionalLight.maxPenumbraTexels': { showWhen: { key: 'castShadow', in: ['true'] } },
   // SpotLight shadow fields
   'SpotLight.mapSize':        { showWhen: { key: 'castShadow', in: ['true'] } },
   'SpotLight.depthBias':      { showWhen: { key: 'castShadow', in: ['true'] } },

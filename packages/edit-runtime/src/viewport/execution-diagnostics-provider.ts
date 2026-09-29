@@ -1,5 +1,6 @@
 import {
   EXECUTION_CAPABILITY_NAMES,
+  EXECUTION_WORKERS,
   type ExecutionControl,
   type ExecutionReport,
 } from '@forgeax/engine-app';
@@ -15,14 +16,15 @@ function unavailableCapabilities(report: ExecutionReport): readonly string[] {
 }
 
 function executionDiagnostic(report: ExecutionReport): RuntimeDiagnosticFact {
-  const actualTier = report.actualTier ?? 'pending';
+  const realm = report.engine.realm;
+  const workers = EXECUTION_WORKERS.map((name) => `${name}=${report.workers[name].enabled ? 'on' : 'off'}`).join(', ');
   const faulted = report.fault !== null || report.world.health === 'poisoned' || report.engine.health === 'faulted';
   return Object.freeze({
     id: 'execution-report',
     severity: faulted ? 'error' : 'info',
-    code: report.fault?.code ?? `engine-execution-${actualTier}`,
-    title: `Engine execution: ${actualTier}`,
-    message: `Requested ${report.requestedTier}; actual ${actualTier}; engine ${report.engine.health}; world ${report.world.health}.`,
+    code: report.fault?.code ?? `engine-execution-${realm}`,
+    title: `Engine execution: ${realm}`,
+    message: `Engine ${report.engine.health}; world ${report.world.health}; workers ${workers}.`,
     retryable: report.fault?.retryable ?? false,
     recoveryActions: Object.freeze([]),
     detail: Object.freeze({

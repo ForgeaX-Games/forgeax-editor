@@ -4,7 +4,7 @@
 // standalone-editor-demo, future product surface composition) reach via
 // `import editor from '@forgeax/editor'`. Per plan-strategy §2 D-5 the
 // entry must be **zero-transitive**: it imports only `defineApp` from
-// `@forgeax/interface/app-kit` and the EDITOR_PANELS literal from
+// `@forgeax/app-shell/application` and the EDITOR_PANELS literal from
 // editor-core. It deliberately does NOT import the edit-runtime /
 // play-runtime / panels side-effect code, so the bare specifier resolves
 // cleanly under bun's file: protocol without dragging in vite-only
@@ -56,7 +56,7 @@ export const manifest = editorApp.manifest;
 // Convenience re-exports of the AppKit mount entry points so downstream
 // SDK consumers who only `import` from `@forgeax/editor` can reach
 // `mountComposition` without a second-hop import from
-// `@forgeax/interface/app-kit`. These are pure pass-throughs of the same
+// `@forgeax/app-shell/application`. These are pure pass-throughs of the same
 // symbols already in scope above (no side-effect imports added:
 // zero-transitive root entry per plan-strategy section 2 D-5).
 // The standalone iframe-mount entry was deep-removed in M3 (AC-09) —

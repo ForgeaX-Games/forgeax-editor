@@ -371,6 +371,17 @@ export async function writeReportAtomic(report, reportPath) {
   return reportPath;
 }
 
+export function shardEvidencePaths(shard) {
+  const shardName = text(shard).trim();
+  if (!shardName) return null;
+  const dir = join('.ci', 'smoke-shard-runtime', shardName);
+  return {
+    dir,
+    reportPath: join(dir, 'runtime.json'),
+    lifecyclePath: join(dir, 'lifecycle.jsonl'),
+  };
+}
+
 function identityFromEnv(env, shard) {
   return {
     runId: env.GITHUB_RUN_ID,
@@ -448,6 +459,7 @@ export async function runLockedCommand(spec, options) {
 export async function runShard(options = {}) {
   const env = options.env ?? process.env;
   const identity = options.identity ?? identityFromEnv(env, options.shard);
+  const evidence = shardEvidencePaths(options.shard ?? identity.shard);
   const ports = options.ports ?? [];
   const spec = commandSpec(options.command ?? options.commandArgs);
   const inspect = options.inspectPorts ?? inspectPorts;
@@ -456,7 +468,11 @@ export async function runShard(options = {}) {
   const portCheck = validatePorts(ports);
   const admissionValid = toolCheck.valid && identityCheck.valid && portCheck.valid && Boolean(spec);
   const common = {identity, environment: environmentSnapshot(env), command: spec ?? {file: null, args: []}, commandStarted: false, killedPids: [], evidenceRefs: ['runtime.admission', 'runtime.classification'], admission: {identity: identityCheck, tools: toolCheck, ports: portCheck}};
-  const reportPath = options.reportPath ?? env.FORGEAX_SMOKE_RUNTIME_REPORT ?? (identity.shard ? join('.ci', 'smoke-shard-runtime', `${identity.shard}.json`) : null);
+  const lifecycleLogPath = evidence?.lifecyclePath ?? env.FORGEAX_DEV_STACK_EVENT_LOG ?? null;
+  const reportPath = options.reportPath ?? evidence?.reportPath ?? env.FORGEAX_SMOKE_RUNTIME_REPORT ?? null;
+  if (evidence?.dir) {
+    await mkdir(evidence.dir, {recursive: true});
+  }
   if (!admissionValid) {
     const report = createReport({...common, admissionValid: false, commandExitCode: 1});
     if (reportPath) await writeReportAtomic(report, reportPath);
@@ -471,11 +487,16 @@ export async function runShard(options = {}) {
   }
   const resourcesBefore = readResourceSnapshot(options);
   const executeLockedCommand = options.runLockedCommand ?? runLockedCommand;
-  const lock = await executeLockedCommand(spec, {lockPath: options.lockPath ?? env.FORGEAX_SMOKE_LOCK_PATH ?? DEFAULT_LOCK_PATH, lockTimeoutMs: options.lockTimeoutMs ?? 300000, teardownGraceMs: options.teardownGraceMs ?? 250, env});
+  const lock = await executeLockedCommand(spec, {
+    lockPath: options.lockPath ?? env.FORGEAX_SMOKE_LOCK_PATH ?? DEFAULT_LOCK_PATH,
+    lockTimeoutMs: options.lockTimeoutMs ?? 300000,
+    teardownGraceMs: options.teardownGraceMs ?? 250,
+    env: lifecycleLogPath ? {FORGEAX_DEV_STACK_EVENT_LOG: lifecycleLogPath} : {},
+  });
   const commandStarted = Boolean(lock.acquiredAt);
   const resourcesAfter = readResourceSnapshot(options);
   const oomKillDelta = resourcesBefore.oomKill !== null && resourcesAfter.oomKill !== null ? resourcesAfter.oomKill - resourcesBefore.oomKill : null;
-  const lifecycleEvents = options.lifecycleEvents ?? parseLifecycle(env.FORGEAX_DEV_STACK_EVENT_LOG);
+  const lifecycleEvents = options.lifecycleEvents ?? parseLifecycle(lifecycleLogPath);
   const quiet = await waitForQuietPorts(ports, {...options, inspect: candidatePorts => inspect(candidatePorts, inspectOptions)});
   const processGroupResidue = groupMembers(lock.groupId, options);
   const input = {...common, admissionValid: true, commandStarted, commandExitCode: lock.code, lockTimedOut: lock.code === 75, busyPorts: [], oomKillDelta, lifecycleEvents, processGroupResidue, portResidue: quiet.residue, portsBefore, portsAfter: quiet.residue, resourcesBefore, resourcesAfter, lock};

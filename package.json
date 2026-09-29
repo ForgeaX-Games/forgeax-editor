@@ -1,11 +1,11 @@
 {
-  "packageManager": "bun@1.3.14",
+  "packageManager": "bun@1.4.0",
   "name": "@forgeax/editor",
   "version": "0.1.0",
   "private": false,
   "license": "Apache-2.0",
   "type": "module",
-  "description": "forgeax editor monorepo — 5 packages (core / content-browser / panels / edit-runtime / play-runtime) + thin subpath entry points (see exports map) for host embedding",
+  "description": "forgeax editor monorepo \u2014 5 packages (core / content-browser / panels / edit-runtime / play-runtime) + thin subpath entry points (see exports map) for host embedding",
   "repository": {
     "type": "git",
     "url": "https://github.com/ForgeaX-Games/forgeax-studio.git",
@@ -22,7 +22,7 @@
     "./bridge": "./packages/edit-runtime/src/bridge.ts",
     "./default-dock-layout": "./packages/edit-runtime/src/default-dock-layout.ts",
     "./keyboard-router-deps": "./packages/edit-runtime/src/keyboard-router-deps.ts",
-    "./menu-contributions": "./packages/edit-runtime/src/menu-contributions.ts",
+    "./menu-contributions": "./packages/edit-runtime/src/public/menu-contributions.ts",
     "./panels": "./packages/panels/src/manifest.ts",
     "./play": "./packages/edit-runtime/src/public/play.ts",
     "./protocol": "./packages/edit-runtime/src/public/protocol.ts",
@@ -65,12 +65,23 @@
     "./viewport-runtime": "./packages/edit-runtime/src/runtime/viewport-runtime-broadcast.ts",
     "./version-control": "./packages/edit-runtime/src/public/version-control.ts",
     "./visual-source": "./packages/edit-runtime/src/viewport/visual-source.ts",
-    "./package.json": "./package.json",
-    "./source-authoring-host": "./scripts/host/source-authoring.ts"
+    "./package.json": "./package.json"
   },
+  "files": [
+    "packages/*/src",
+    "packages/*/package.json",
+    "packages/*/tsconfig.json",
+    "packages/*/README.md",
+    "packages/*/index.html",
+    "packages/*/vite.config.ts",
+    "packages/engine/templates",
+    "scripts",
+    "engine-vite-preset.ts",
+    "tsconfig.json"
+  ],
   "workspaces": [
+    "apps/standalone",
     "packages/*",
-    "packages/interface/packages/*",
     "packages/engine/packages/*"
   ],
   "scripts": {
@@ -95,11 +106,12 @@
     "ci:full": "bun fx ci --full",
     "ci:contract": "bun scripts/ci/editor-ci-contract.mjs",
     "ci:channel-align": "node packages/engine/scripts/check-ci-channel-alignment.mjs",
-    "ci:prerequisite": "node scripts/ci/prerequisite-release.mjs",
+    "ci:prerequisite": "bun scripts/ci/prerequisite-release.mjs",
     "ci:delivery": "bun scripts/ci/editor-ci-contract.mjs --delivery",
     "ci:browser-release": "bun scripts/ci/browser-release-measurement.mjs",
     "ci:engine-prior-art-transfer": "bun scripts/ci/engine-prior-art-transfer.mjs",
     "ci:package-coverage": "bun scripts/ci/package-coverage.mjs",
+    "stage:desktop-engine-runtime": "bun scripts/stage-desktop-engine-runtime.ts",
     "bootstrap-worktree": "node scripts/bootstrap-worktree.mjs",
     "test:layout": "node scripts/check-test-layout.mjs && node scripts/check-repo-layout.mjs",
     "test:scripts": "bun test scripts/__tests__ scripts/ci/__tests__ scripts/lib/__tests__ apps/standalone/__tests__ skills/forgeax-editor-gateway/scripts/__tests__",
@@ -115,7 +127,7 @@
     "test:j5": "bun fx build --game games/sample --out /tmp/forgeax-editor-j5-ci && bun scripts/static-build-smoke.mjs /tmp/forgeax-editor-j5-ci sample host-games",
     "test:j4": "bun run test:e2e apps/standalone/e2e/__tests__/j4-runner.spec.ts",
     "test:e2e": "playwright test",
-    "test:version-control": "bun -F @forgeax/platform-io test test/files-router.test.ts test/file-backend.test.ts test/file-io.test.ts test/safe-path.test.ts test/friendly-path.test.ts test/version-control-executable.test.ts test/version-control-root.test.ts test/version-control-status.test.ts test/version-control-init.test.ts test/version-control-graph.test.ts test/version-control-recovery.test.ts test/version-control-publish.test.ts test/version-control-security.test.ts test/version-control-route.test.ts test/game-host-router.test.ts test/game-version-control.test.ts test/game-version-control-security.test.ts test/version-control-scale.test.ts && bun -F @forgeax/editor-core test && bun -F @forgeax/editor-edit-runtime test && bun -F @forgeax/interface test && bun run test:e2e apps/standalone/e2e/__tests__/version-control.spec.ts apps/standalone/e2e/__tests__/version-control-generation.spec.ts",
+    "test:version-control": "bun -F @forgeax/platform-io test test/files-router.test.ts test/file-backend.test.ts test/file-io.test.ts test/safe-path.test.ts test/friendly-path.test.ts test/version-control-executable.test.ts test/version-control-root.test.ts test/version-control-status.test.ts test/version-control-init.test.ts test/version-control-graph.test.ts test/version-control-recovery.test.ts test/version-control-publish.test.ts test/version-control-security.test.ts test/version-control-route.test.ts test/game-host-router.test.ts test/game-version-control.test.ts test/game-version-control-security.test.ts test/version-control-scale.test.ts && bun -F @forgeax/editor-core test && bun -F @forgeax/editor-edit-runtime test && bun run test:e2e apps/standalone/e2e/__tests__/version-control.spec.ts apps/standalone/e2e/__tests__/version-control-generation.spec.ts",
     "test:e2e:install": "playwright install --with-deps chromium",
     "selfcheck": "node scripts/selfcheck.mjs",
     "test:product-headless": "bun scripts/product-conformance.ts --headless",
@@ -123,7 +135,7 @@
     "test:product-evidence": "bun scripts/product-evidence-matrix.ts"
   },
   "dependencies": {
-    "@forgeax/app-shell": "0.65.1",
+    "@forgeax/app-shell": "0.103.0",
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-edit-runtime": "workspace:*",
     "@forgeax/editor-product": "workspace:*",
@@ -135,7 +147,6 @@
     "@forgeax/engine-plugin": "workspace:*",
     "@forgeax/engine-tool-runtime": "workspace:*",
     "@forgeax/engine-vfx": "workspace:*",
-    "@forgeax/interface": "workspace:*",
     "@forgeax/platform-io": "workspace:*",
     "@forgeax/types": "^0.1.2",
     "hono": "^4.6.0",
@@ -143,11 +154,14 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@happy-dom/global-registrator": "^20.10.2",
+    "@webgpu/types": "^0.1.71",
     "@forgeax/engine-audio-webaudio": "workspace:*",
     "@forgeax/engine-fbx": "workspace:*",
     "@forgeax/engine-font": "workspace:*",
     "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
+    "@forgeax/engine-shader-compiler": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-vfx-compiler": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
@@ -167,13 +181,13 @@
     "tailwindcss": "3.4.19",
     "tailwindcss-animate": "1.0.7",
     "typescript": "^5.6.3",
-    "vite": "^8.0.0",
-    "yaml": "^2.4.2",
-    "@webgpu/types": "^0.1.70"
+    "vite": "^8.0.16",
+    "yaml": "^2.4.2"
   },
   "overrides": {
+    "@forgeax/app-shell": "0.103.0",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "vite": "8.0.10"
+    "vite": "8.0.16"
   }
 }

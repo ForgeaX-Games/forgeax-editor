@@ -23,7 +23,9 @@ it('asset import writes keep the scene realm while the active scene still reload
   expect(diskChangeHint('/games/g1/kart.glb', SCENE)).toBe('pack-changed');
   expect(diskChangeHint('/games/g1/other.pack.json', SCENE)).toBe('pack-changed');
   expect(diskChangeHint(SCENE, SCENE)).toBe('scene-document-changed');
-  expect(diskChangeHint('C:\\games\\g1\\scene.pack.json', 'C:/games/g1/scene.pack.json')).toBe('scene-document-changed');
+  expect(diskChangeHint('C:\\games\\g1\\scene.pack.json', 'C:/games/g1/scene.pack.json')).toBe(
+    'scene-document-changed',
+  );
   expect(diskChangeHint(undefined, SCENE)).toBe('pack-changed');
   expect(diskChangeHint(SCENE, null)).toBe('pack-changed');
 });

@@ -1,15 +1,15 @@
 /**
- * AppKit SDK — re-export shim. The SSOT now lives in the interface layer
- * (`@forgeax/interface/app-kit`), because AppKit is a business-agnostic app
+ * AppKit SDK — public re-export facade. The SSOT lives in App Shell
+ * (`@forgeax/app-shell/application`), because AppKit is a business-agnostic app
  * framework: any independent app (Editor, Chat, or future product surface) is mounted through it.
  *
- * This shim keeps `@forgeax/editor/app-kit` working for existing consumers
+ * This facade keeps `@forgeax/editor/app-kit` working for existing consumers
  * while the implementation lives one layer down. The dependency direction is
- * editor → interface (allowed); interface no longer imports editor, so there
+ * editor → App Shell (allowed); App Shell does not import editor, so there
  * is no cycle.
  *
- * Charter F1 (single-entry indexability): the SSOT is one physical file in the
- * interface repo (packages/interface/src/app-kit.ts); editor forwards to it.
+ * Charter F1 (single-entry indexability): Editor forwards to the public
+ * `@forgeax/app-shell/application` entrypoint instead of owning a second AppKit.
  *
  * AC-09 (M3): the standalone iframe-mount entry + its options interface were
  * deep-removed in interface — the editor host mounts via React createRoot
@@ -20,7 +20,7 @@ export {
   defineApp,
   mountComposition,
   AppKitError,
-} from '@forgeax/interface/app-kit';
+} from '@forgeax/app-shell/application';
 
 export type {
   AppKitErrorInit,
@@ -28,7 +28,7 @@ export type {
   AppManifestPanel,
   DefinedApp,
   MountOptions,
-} from '@forgeax/interface/app-kit';
+} from '@forgeax/app-shell/application';
 
 /**
  * Host-side composition seam. The host supplies already-derived panel and

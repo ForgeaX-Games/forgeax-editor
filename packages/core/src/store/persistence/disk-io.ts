@@ -1,3 +1,4 @@
+import type { SceneWithLegacyMounts } from '../../scene/legacy-scene-mounts';
 // store/persistence/disk-io — the HIGH SIDE-EFFECT persistence cluster of the
 // game's authored scene: disk load / save, engine-native world<->pack
 // serialization, canonical loadByGuid -> instantiate scene-load, and the
@@ -176,7 +177,7 @@ function normalizeAndCatalogSceneAsset(
  * persistence boundary. Derived SceneInstance members are never collected here;
  * only the authored mount source and its current Catalog fence are persisted. */
 export function attachPublicationFences(scene: SceneAsset, registry: AssetRegistry, world?: WorldType): SceneAsset {
-  if (scene.mounts === undefined || scene.mounts.length === 0) return scene;
+  if ((scene as SceneWithLegacyMounts).mounts === undefined || (scene as SceneWithLegacyMounts).mounts!.length === 0) return scene;
   // The pack-index and Catalog replica are two projections of one Engine
   // publication. During a watcher/catalog handoff the replica can still carry
   // the prior tuple while loadByGuid has already refreshed packIndexCache. Use
@@ -193,7 +194,7 @@ export function attachPublicationFences(scene: SceneAsset, registry: AssetRegist
     entriesByGuid.set(guid.toLowerCase(), candidate);
   }
   const entries = [...entriesByGuid.values()];
-  const mounts = scene.mounts.map((mount) => {
+  const mounts = (scene as SceneWithLegacyMounts).mounts!.map((mount) => {
     const sourceGuid = typeof mount.source === 'string'
       ? mount.source
       : world === undefined
@@ -208,7 +209,7 @@ export function attachPublicationFences(scene: SceneAsset, registry: AssetRegist
     const fence = scenePublicationFenceFromCatalog(entries, sourceGuid);
     return fence.ok ? { ...mount, publicationFence: fence.value } : mount;
   });
-  return { ...scene, mounts };
+  return { ...scene, mounts } as SceneWithLegacyMounts;
 }
 
 function reportPackRoundtripBoundary(event: Record<string, unknown>): void {
@@ -288,17 +289,18 @@ export interface DiskIo {
  *  with the scene. SceneAsset/entities are readonly, so rebuild.
  *  Pure — no deps; exported standalone so scene-persistence re-exports it. */
 export function stripDisabledMarker(asset: unknown): unknown {
-  const a = asset as { kind: string; entities?: ReadonlyArray<{ localId: unknown; components: Record<string, unknown> }> };
-  if (!a || !Array.isArray(a.entities)) return asset;
+  const a = asset as SceneAsset;
+  if (!a || !a.entities || typeof a.entities !== 'object') return asset;
+  const strip = (e: SceneAsset['entities'][string]) => {
+    if (!e.components || !('Disabled' in e.components)) return e;
+    const { Disabled: _dropD, ...rest } = e.components;
+    return { ...e, components: rest };
+  };
   return {
     ...a,
-    entities: a.entities.map((e) => {
-      if (!e.components) return e;
-      const hasDisabled = 'Disabled' in e.components;
-      if (!hasDisabled) return e;
-      const { Disabled: _dropD, ...rest } = e.components;
-      return { ...e, components: rest };
-    }),
+    entities: Array.isArray(a.entities)
+      ? a.entities.map(strip)
+      : Object.fromEntries(Object.entries(a.entities).map(([key, entity]) => [key, strip(entity)])),
   };
 }
 
@@ -335,7 +337,7 @@ export function wouldDropAllEntities(loadedEntityFloor: number | null, newPack: 
   const scene = (newPack as { assets?: Array<{ kind?: string; payload?: { entities?: unknown[] } }> })?.assets;
   if (!Array.isArray(scene)) return false;
   const sceneEntry = scene.find((a) => a.kind === 'scene');
-  const entityCount = Array.isArray(sceneEntry?.payload?.entities) ? sceneEntry!.payload!.entities!.length : 0;
+  const entityCount = Object.keys(sceneEntry?.payload?.entities ?? {}).length;
   return entityCount === 0;
 }
 
@@ -605,7 +607,18 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
     const strippedAsset = persistPublicationFences
       ? attachPublicationFences(collectedAsset, reg, w)
       : collectedAsset;
-    const packR = serializeSceneAssetToPack(strippedAsset, w.components.entries(), sceneGuid);
+    const catalogScene = ctx.currentSceneGuid === null
+      ? undefined
+      : reg.lookup(ctx.currentSceneGuid) as SceneAsset | undefined;
+    const persistedAsset = (
+      strippedAsset.skinGuids === undefined
+      && catalogScene?.kind === 'scene'
+      && Array.isArray(catalogScene.skinGuids)
+      && catalogScene.skinGuids.length > 0
+    )
+      ? { ...strippedAsset, skinGuids: [...catalogScene.skinGuids] }
+      : strippedAsset;
+    const packR = serializeSceneAssetToPack(persistedAsset, w.components.entries(), sceneGuid);
     if (!packR.ok) {
       console.warn('[editor-core] worldToPack: serializeSceneAssetToPack failed:', packR.error);
       return null;
@@ -789,7 +802,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
         reportPackRoundtripBoundary({
           phase: 'load-or-instantiate',
           sceneGuid,
-          loadByGuid: { ok: true, entityCount: sceneAsset.entities.length },
+          loadByGuid: { ok: true, entityCount: Object.keys(sceneAsset.entities).length },
           instantiateFlat: { ok: false, error: instRes.error },
         });
         console.warn(`[editor-core] scene instantiateFlat failed guid=${sceneGuid}: ${JSON.stringify(instRes.error)}`);
@@ -811,7 +824,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
       reportPackRoundtripBoundary({
         phase: 'load-or-instantiate',
         sceneGuid,
-        loadByGuid: { ok: true, entityCount: sceneAsset.entities.length },
+        loadByGuid: { ok: true, entityCount: Object.keys(sceneAsset.entities).length },
         instantiateFlat: { ok: true, topLevelEntityCount: stagedRoots.length },
       });
       stagedRoots = [];
@@ -1164,9 +1177,7 @@ export function createDiskIo(deps: DiskIoDeps): DiskIo & DetailedDiskIo {
             // non-empty scene with an empty-entity pack.
             const sceneEntryForFloor = (parsed.assets as Array<{ kind?: string; payload?: { entities?: unknown[] } }>)
               .find((a) => a.kind === 'scene');
-            ctx.loadedEntityFloor = Array.isArray(sceneEntryForFloor?.payload?.entities)
-              ? sceneEntryForFloor!.payload!.entities!.length
-              : 0;
+            ctx.loadedEntityFloor = Object.keys(sceneEntryForFloor?.payload?.entities ?? {}).length;
             // Diagnostic: log what we loaded so we can compare against save-time
             const loadedAssets = parsed.assets as Array<{
               guid?: string;

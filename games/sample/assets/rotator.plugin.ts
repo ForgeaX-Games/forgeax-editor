@@ -44,13 +44,11 @@ const _next = quat.create();
 // incremental axis-angle rotation onto its current quat. Registered
 // `before: ['propagateTransforms']` so the new local rotation is folded into the
 // entity's world matrix in the SAME frame it is written (otherwise the visible
-// rotation lags one frame). `labels: ['transform']` groups it with the transform
-// stage for scheduler diagnostics.
+// rotation lags one frame).
 export const rotate = defineSystem({
   name: 'rotate',
   queries: [{ read: [Rotator], write: [Transform] }],
   before: ['propagateTransforms'],
-  labels: ['transform'],
   fn: (world: World, queryResults) => {
     const globalSpeed = world.hasResource(SAMPLE_ROTATOR_SPEED_KEY)
       ? world.getResource<number>(SAMPLE_ROTATOR_SPEED_KEY)
@@ -156,8 +154,9 @@ export const gameplay: GamePluginProducer = {
 };
 
 /** Native Engine entrypoint consumed by `loadGame`. */
-const plugin: Plugin = {
+const plugin: Plugin & { readonly beforeScene: true } = {
   name: 'sample.rotator',
+  beforeScene: true,
   inject: ['world'],
   apply(ctx) {
     ctx.effect(() => {

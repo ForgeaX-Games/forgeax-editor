@@ -81,6 +81,31 @@ export function awaitPostAssetWriteCatalogSync(guid: string): Promise<void> {
   return tracked;
 }
 
+/** Host-visible expectation for glTF/FBX sidecar imports (catalog replica, not pack-index). */
+export interface SourcePackageCatalogExpectation {
+  readonly destPath: string;
+  readonly sourceName: string;
+  /** Root sidecar GUID when the catalog exposes the package row before sub-assets. */
+  readonly packageGuid?: string;
+  readonly subAssetGuids: readonly string[];
+}
+
+let postSourcePackageCatalogSync: ((expectation: SourcePackageCatalogExpectation) => Promise<void>) | null = null;
+
+/** Host seam: reconcile the catalog replica until imported producer rows are visible. */
+export function registerPostSourcePackageCatalogSync(
+  fn: ((expectation: SourcePackageCatalogExpectation) => Promise<void>) | null,
+): void {
+  postSourcePackageCatalogSync = fn;
+}
+
+export function awaitPostSourcePackageCatalogSync(
+  expectation: SourcePackageCatalogExpectation,
+): Promise<void> {
+  if (!postSourcePackageCatalogSync) return Promise.resolve();
+  return postSourcePackageCatalogSync(expectation);
+}
+
 // ── Authored-asset completion contract ────────────────────────────────────────
 // "createMaterial / createMaterialInstance is DONE" is not the synchronous
 // dispatch (that only commits the undo ledger) — it is: pack write landed on

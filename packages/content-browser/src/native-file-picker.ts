@@ -15,13 +15,6 @@ interface NativePickResponse {
   files?: unknown;
 }
 
-let nativePickerAvailability: 'unknown' | 'available' | 'unavailable' = 'unknown';
-
-/** True after a host definitively lacks `/api/fs/pick-files`. */
-export function isNativeImportPickerCachedUnavailable(): boolean {
-  return nativePickerAvailability === 'unavailable';
-}
-
 function decodeBase64(data: string): ArrayBuffer {
   const binary = atob(data);
   const bytes = new Uint8Array(binary.length);
@@ -33,13 +26,34 @@ function decodeBase64(data: string): ArrayBuffer {
   return buffer;
 }
 
+/** After one failed native pick, skip repeated `/api/fs/pick-files` probes. */
+let nativeImportPickerCachedUnavailable: boolean | null = null;
+
+/** True when a prior native pick proved this host has no working picker endpoint. */
+export function isNativeImportPickerCachedUnavailable(): boolean {
+  return nativeImportPickerCachedUnavailable === true;
+}
+
+/** Test-only reset for module-scoped picker availability cache. */
+export function resetNativeImportPickerAvailabilityCacheForTests(): void {
+  nativeImportPickerCachedUnavailable = null;
+}
+
+function markNativeImportPickerAvailable(): void {
+  nativeImportPickerCachedUnavailable = false;
+}
+
+function markNativeImportPickerUnavailable(): void {
+  nativeImportPickerCachedUnavailable = true;
+}
+
 /**
  * Ask the local Studio server for a native file dialog. The server owns the
  * OS-specific picker and returns file bytes; the browser fallback remains in
  * ContentBrowser for hosts that do not expose this local endpoint.
  */
 export async function pickNativeImportFiles(initialDir: string): Promise<NativeImportPickResult> {
-  if (nativePickerAvailability === 'unavailable') {
+  if (nativeImportPickerCachedUnavailable === true) {
     return { kind: 'unavailable' };
   }
   try {
@@ -49,17 +63,19 @@ export async function pickNativeImportFiles(initialDir: string): Promise<NativeI
       body: JSON.stringify({ initialDir, multiple: true }),
     });
     if (!response.ok) {
-      nativePickerAvailability = 'unavailable';
+      markNativeImportPickerUnavailable();
       return { kind: 'unavailable' };
     }
     const body = await response.json() as NativePickResponse;
-    if (body.cancelled === true) return { kind: 'cancelled' };
+    if (body.cancelled === true) {
+      markNativeImportPickerAvailable();
+      return { kind: 'cancelled' };
+    }
     if (body.ok !== true || !Array.isArray(body.files)) {
-      nativePickerAvailability = 'unavailable';
+      markNativeImportPickerUnavailable();
       return { kind: 'unavailable' };
     }
 
-    nativePickerAvailability = 'available';
     const files: File[] = [];
     for (const candidate of body.files) {
       if (candidate === null || typeof candidate !== 'object') continue;
@@ -73,14 +89,10 @@ export async function pickNativeImportFiles(initialDir: string): Promise<NativeI
         // Ignore one malformed native entry while preserving other selections.
       }
     }
+    markNativeImportPickerAvailable();
     return { kind: 'selected', files };
   } catch {
-    nativePickerAvailability = 'unavailable';
+    markNativeImportPickerUnavailable();
     return { kind: 'unavailable' };
   }
-}
-
-/** Test hook: reset cached native picker availability between cases. */
-export function resetNativeImportPickerAvailabilityForTests(): void {
-  nativePickerAvailability = 'unknown';
 }

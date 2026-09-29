@@ -3,7 +3,9 @@ import { carrierFailureFromError } from '../feedback-health';
 
 function failureDetail(error: unknown, fullSource = false): { code?: unknown; hint: string } {
   const seen = new Set<object>();
-  const carrierDiagnostics = [...(carrierFailureFromError(error)?.payload.failure.diagnostics ?? [])];
+  const carrierDiagnostics = [
+    ...(carrierFailureFromError(error)?.payload.failure.diagnostics ?? []),
+  ];
   const maxDepth = 8 + carrierDiagnostics.length;
   let value = error;
   let hint = '';
@@ -18,12 +20,16 @@ function failureDetail(error: unknown, fullSource = false): { code?: unknown; hi
     if (typeof entry.code === 'string') code = entry.code;
     if (typeof entry.hint === 'string' && entry.hint.trim()) hint = entry.hint;
     else if (typeof entry.message === 'string' && entry.message.trim()) hint = entry.message;
-    const detail = entry.detail && typeof entry.detail === 'object' ? entry.detail as Record<string, unknown> : entry;
+    const detail = entry.detail && typeof entry.detail === 'object' ? (entry.detail as Record<string, unknown>)
+        : entry;
     if (typeof detail?.sourcePath === 'string') source = detail.sourcePath;
     if (typeof detail?.propertyPath === 'string') property = detail.propertyPath;
-    if (typeof detail?.diagnostic === 'string' && detail.diagnostic.trim()) diagnostic = detail.diagnostic;
+    if (typeof detail?.diagnostic === 'string' && detail.diagnostic.trim())
+      diagnostic = detail.diagnostic;
     if (Array.isArray(detail?.unusedDeclaredGuids)) {
-      const guids = detail.unusedDeclaredGuids.filter((guid): guid is string => typeof guid === 'string');
+      const guids = detail.unusedDeclaredGuids.filter(
+        (guid): guid is string => typeof guid === 'string',
+      );
       if (guids.length) closure = `Unused asset declarations: ${guids.join(', ')}`;
     }
     value = entry.cause ?? carrierDiagnostics.shift();
@@ -34,14 +40,21 @@ function failureDetail(error: unknown, fullSource = false): { code?: unknown; hi
   const location = [fullSource ? source : shortSource, property].filter(Boolean).join(' · ');
   const primary = diagnostic || closure || hint;
   const label = code && (diagnostic || closure || source) ? `[${code}]` : '';
-  const message = [primary, diagnostic ? closure : '', primary.includes(label) ? '' : label, primary.includes(location) ? '' : location]
-    .filter(Boolean).join(' · ');
+  const message = [
+    primary,
+    diagnostic ? closure : '',
+    primary.includes(label) ? '' : label,
+    primary.includes(location) ? '' : location,
+  ]
+    .filter(Boolean)
+    .join(' · ');
   return { code, hint: message };
 }
 
 /** Preserve structured diagnostics for Gateway runs as well as the visible notice. */
 export function normalizePlayFailure(error: unknown, fallbackCode = 'play-assemble-failed') {
-  const structured = error && typeof error === 'object' ? error as Record<string, unknown> : undefined;
+  const structured =
+    error && typeof error === 'object' ? (error as Record<string, unknown>) : undefined;
   const fields: Record<string, unknown> = { ...structured };
   // Native Error.message/cause are non-enumerable but remain useful on the wire.
   if (structured && 'cause' in structured) fields.cause = structured.cause;
@@ -57,7 +70,8 @@ export function playFailureMessage(error: unknown, language: string, fullSource 
   const detail = failureDetail(error, fullSource);
   const zh = language === 'zh';
   return detail.code === 'render-system-no-camera'
-    ? zh ? '暂时无法预览：游戏场景没有相机。请添加相机，或让 Agent 完成场景后再试。'
+    ? zh
+      ? '暂时无法预览：游戏场景没有相机。请添加相机，或让 Agent 完成场景后再试。'
       : 'Cannot preview yet: the game scene has no camera. Add one or finish authoring the scene before trying Play.'
     : `${zh ? '预览未能启动' : 'Play could not start'}${detail.hint ? `: ${detail.hint}` : '.'}`;
 }

@@ -8,7 +8,7 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
-    "types": ["bun"],
+    "types": ["bun", "@webgpu/types"],
     "noEmit": true,
     "isolatedModules": true,
     "esModuleInterop": true,
@@ -16,5 +16,5 @@
     "declaration": true,
     "declarationMap": true
   },
-  "include": ["src", "../../scripts/types/forgeax-engine-shims.d.ts"]
+  "include": ["src", "../edit-runtime/src/globals.d.ts", "../../scripts/types/forgeax-engine-shims.d.ts"]
 }

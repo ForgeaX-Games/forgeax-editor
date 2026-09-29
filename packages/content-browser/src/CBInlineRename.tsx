@@ -37,18 +37,25 @@ export function CBInlineRename({ initial, validate, onCommit, onCancel, classNam
     el.select();
   }, []);
 
+  const readValue = () => (ref.current?.value ?? initial).trim();
+
+  const runValidate = (value = readValue()) => {
+    const hint = validate?.(value) ?? null;
+    setError(hint);
+    return hint;
+  };
+
   const settle = (mode: 'commit' | 'cancel', fromBlur = false) => {
     if (settled.current) return;
     if (mode === 'cancel') { settled.current = true; onCancel(); return; }
-    const value = (ref.current?.value ?? initial).trim();
+    const value = readValue();
     // Empty or unchanged is a no-op, not a rename.
     if (value === '' || value === initial) { settled.current = true; onCancel(); return; }
-    const hint = validate?.(value) ?? null;
+    const hint = runValidate(value);
     if (hint) {
       // Keyboard-confirm on an invalid value keeps the field open with red
       // feedback; blurring away from an invalid value reverts (UE parity).
       if (fromBlur) { settled.current = true; onCancel(); return; }
-      setError(hint);
       return;
     }
     settled.current = true;
@@ -56,31 +63,37 @@ export function CBInlineRename({ initial, validate, onCommit, onCancel, classNam
   };
 
   return (
-    <input
-      ref={ref}
-      className={`cb-inline-rename${error ? ' is-invalid' : ''}${className ? ` ${className}` : ''}`}
-      defaultValue={initial}
-      spellCheck={false}
-      autoComplete="off"
-      aria-label={ariaLabel}
-      aria-invalid={error ? true : undefined}
-      title={error ?? undefined}
-      data-testid="cb-inline-rename"
-      // Stop the row/card beneath from treating the edit interaction as a
-      // select/activate, and stop keys from bubbling to the grid/tree keybinding
-      // scope (which would re-trigger rename/delete/select-all commands).
-      onClick={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
-      onPointerDown={(e) => e.stopPropagation()}
-      onChange={() => {
-        if (error) setError(validate?.((ref.current?.value ?? '').trim()) ?? null);
-      }}
-      onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
-        e.stopPropagation();
-        if (e.key === 'Enter') { e.preventDefault(); settle('commit'); }
-        else if (e.key === 'Escape') { e.preventDefault(); settle('cancel'); }
-      }}
-      onBlur={() => settle('commit', true)}
-    />
+    <div className={`cb-inline-rename-wrap${error ? ' is-invalid' : ''}`}>
+      <input
+        ref={ref}
+        className={`cb-inline-rename${error ? ' is-invalid' : ''}${className ? ` ${className}` : ''}`}
+        defaultValue={initial}
+        spellCheck={false}
+        autoComplete="off"
+        aria-label={ariaLabel}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? 'cb-inline-rename-error' : undefined}
+        data-testid="cb-inline-rename"
+        // Stop the row/card beneath from treating the edit interaction as a
+        // select/activate, and stop keys from bubbling to the grid/tree keybinding
+        // scope (which would re-trigger rename/delete/select-all commands).
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        onChange={() => { runValidate(); }}
+        onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+          e.stopPropagation();
+          if (e.key === 'Enter') { e.preventDefault(); settle('commit'); }
+          else if (e.key === 'Escape') { e.preventDefault(); settle('cancel'); }
+        }}
+        onBlur={() => settle('commit', true)}
+      />
+      {error ? (
+        <div className="cb-inline-rename-error" id="cb-inline-rename-error" role="alert">
+          <span className="cb-inline-rename-error-icon" aria-hidden>!</span>
+          <span className="cb-inline-rename-error-text">{error}</span>
+        </div>
+      ) : null}
+    </div>
   );
 }

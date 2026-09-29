@@ -10,7 +10,7 @@
 // declaratively, so they need no control.
 
 import { useEffect, useSyncExternalStore, type ReactElement } from 'react';
-import { useHost } from '@forgeax/interface/core/app-shell';
+import { useHost } from '@forgeax/app-shell/application';
 import { ForgeaxIcon } from '@forgeax/editor-ui';
 import './material-toolbar.css';
 

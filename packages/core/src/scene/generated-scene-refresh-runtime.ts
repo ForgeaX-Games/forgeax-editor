@@ -13,7 +13,7 @@ import {
   type GeneratedSceneWrapperSnapshot,
 } from './generated-scene-refresh';
 import { sceneInstanceRoots } from '../io/scene-instance-read-model';
-import { scenePublicationFenceFromCatalog } from '@forgeax/engine-assets-runtime';
+import { scenePublicationFenceFromRegistry } from '@forgeax/engine-assets-runtime';
 import type { GeneratedSceneOverride } from './spawn-asset-ref';
 
 export interface GeneratedScenePublicationRefreshInput {
@@ -117,7 +117,7 @@ function host(): GeneratedSceneRefreshHost {
     )) return undefined;
     const transform = world.get(wrapper, Transform);
     const parent = childOf(world, wrapper);
-    const fence = scenePublicationFenceFromCatalog(entries, sourceGuid);
+    const fence = scenePublicationFenceFromRegistry(registry, sourceGuid);
     return {
       root: wrapper,
       derivedRoot,
@@ -247,7 +247,7 @@ export async function refreshGeneratedSceneInstances(
     if (!model.ok) continue;
     const row = catalogRowForGuid(guid, sceneRows);
     if (row === undefined || row.sourceKey === undefined) continue;
-    const fence = scenePublicationFenceFromCatalog(entries, guid);
+    const fence = scenePublicationFenceFromRegistry(registry, guid);
     if (!fence.ok) throw fence.error;
     const overrides: GeneratedSceneOverride[] = [];
     for (const override of model.value.overrides) {

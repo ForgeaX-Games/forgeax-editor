@@ -24,10 +24,12 @@ const basePayload = {
   liveness: 'alive' as const,
   renderReadiness: 'ready' as const,
   execution: {
-    schemaVersion: 1 as const,
-    requestedTier: 'main-serial' as const,
-    actualTier: 'main-serial' as const,
-    selectionReason: 'explicit-request' as const,
+    schemaVersion: 2 as const,
+    workers: {
+      engine: { requested: false, enabled: false, reason: 'disabled' as const, missingCapabilities: [] },
+      render: { requested: false, enabled: false, reason: 'disabled' as const, missingCapabilities: [] },
+      kernels: { requested: 'auto' as const, enabled: false, reason: 'capability-unavailable' as const, missingCapabilities: ['sharedArrayBuffer'] },
+    },
     engine: { realm: 'host' as const, health: 'running' as const },
     fault: null,
   },
@@ -51,7 +53,7 @@ describe('carrier VAG protocol', () => {
       expect(result.data.payload.rendererGeneration).toBe(4);
       expect(result.data.payload.rendererIdentity).toBe('renderer-a');
       expect(result.data.payload.renderReadiness).toBe('ready');
-      expect(result.data.payload.execution?.actualTier).toBe('main-serial');
+      expect(result.data.payload.execution?.workers.kernels.reason).toBe('capability-unavailable');
     }
   });
 

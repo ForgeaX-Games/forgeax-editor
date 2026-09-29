@@ -9,7 +9,7 @@ import {
   type CBDragPayload,
   type CBDropTarget,
 } from './dnd';
-import type { CBFolder } from './types';
+import type { CBFolder, CBViewItem } from './types';
 
 interface Props {
   folder: CBFolder;
@@ -29,7 +29,7 @@ interface Props {
   /** Execute a move dropped onto this folder (validated + dispatched upstream). */
   onMoveDrop?: (payload: CBDragPayload, target: CBDropTarget) => void;
   renaming?: boolean;
-  renameValidate?: (value: string) => string | null;
+  renameValidate?: (value: string, item: CBViewItem) => string | null;
   onRenameCommit?: (item: CBFolder, value: string) => void;
   onRenameCancel?: () => void;
 }
@@ -108,7 +108,7 @@ function CBFolderItemImpl({
       {renaming ? (
         <CBInlineRename
           initial={folder.name}
-          validate={renameValidate}
+          validate={renameValidate ? (value) => renameValidate(value, folder) : undefined}
           onCommit={(value) => onRenameCommit?.(folder, value)}
           onCancel={() => onRenameCancel?.()}
           ariaLabel={t('editor.contentBrowser.contextMenu.rename')}

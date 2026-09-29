@@ -121,7 +121,7 @@ function producerRelease() {
     compatibility: {
       os: 'linux',
       architecture: 'x64',
-      bunVersion: '1.3.14',
+      bunVersion: '1.4.0',
       nodeVersion: '22.13.0',
       pnpmVersion: '11.7.0',
       rustVersion: '1.93',
@@ -178,7 +178,7 @@ function portabilityInput(stage, terminalStatus = 'failure') {
       os: 'linux',
       architecture: 'x64',
       runnerImage: 'ubuntu-24.04',
-      toolchain: {bun: '1.3.14', bunRevision: 'bun-revision', node: '22.13.0', pnpm: '11.7.0', rust: '1.93.0', wasmPack: '0.14.0', emscripten: '4.0.10'},
+      toolchain: {bun: '1.4.0', bunRevision: 'bun-revision', node: '22.13.0', pnpm: '11.7.0', rust: '1.93.0', wasmPack: '0.14.0', emscripten: '4.0.10'},
     },
     stage,
     capability: terminalStatus === 'skipped'

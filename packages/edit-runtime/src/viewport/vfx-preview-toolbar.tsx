@@ -13,7 +13,7 @@
 // operations owned by VfxPreviewViewport.
 
 import { useEffect, useSyncExternalStore, type ReactElement } from 'react';
-import { useHost } from '@forgeax/interface/core/app-shell';
+import { useHost } from '@forgeax/app-shell/application';
 import { Box, Focus, Pause, Play, RotateCcw } from 'lucide-react';
 import './vfx-preview-toolbar.css';
 

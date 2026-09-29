@@ -21,7 +21,8 @@ export type { ThumbnailData } from '@forgeax/editor-ui';
 // resolve a real image and materials render their true colour. This is the SSOT
 // enrichment shared by the grid cards (getThumbnailData) and the right-hand
 // preview aside (CBPreviewPanel). Sync cache read (registry.lookup) — safe in render.
-export function realPayload(guid: string, fallback: Record<string, unknown>): Record<string, unknown> {
+export function realPayload(guid: string, fallback: Record<string, unknown>,
+): Record<string, unknown> {
   const desc = gateway.describeAssetByGuid(guid);
   if (desc?.ok && desc.meta && typeof desc.meta === 'object') return desc.meta as Record<string, unknown>;
   return fallback;

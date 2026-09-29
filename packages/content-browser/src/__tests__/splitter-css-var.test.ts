@@ -61,7 +61,7 @@ describe('splitter: CSS-variable isolation contract', () => {
     expect(css).toContain('var(--cb-preview-w');
     expect(tsx).toContain("style.setProperty('--cb-preview-w'");
     expect(tsx).toContain("useLocalSize('cb.previewWidth'");
-    expect(preview).toContain('<ResizeHandle orientation="col"');
+    expect(preview).toMatch(/<ResizeHandle\s+orientation="col"/);
 
     const toolbarIndex = tsx.indexOf('<ContentBrowserActionBar');
     const bodyIndex = tsx.indexOf('<div className="cb-content-body">');

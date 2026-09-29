@@ -30,6 +30,8 @@ import {
   getLastSelectionDomain,
   getPathSelectionList,
   getSelectionList,
+  publishViewportRuntimeHierarchySnapshot,
+  traceHierarchyVisibility,
   type AssetBrowserRegistryEntry,
   type EditGateway,
   type MaterialPublicationInspection,
@@ -81,7 +83,7 @@ export interface ViewportRuntimeReadyMessage {
 export interface ViewportRuntimeProjectionInvalidatedMessage {
   readonly type: typeof VIEWPORT_RUNTIME_PROJECTION_INVALIDATED;
   readonly runtime: ViewportRuntimeIdentity;
-  readonly projection: 'operations' | 'capabilities' | 'assets';
+  readonly projection: 'operations' | 'capabilities' | 'assets' | 'hierarchy';
   readonly revision: number;
   readonly guid?: string;
 }
@@ -192,7 +194,8 @@ function createReferenceCreationGateway(gateway: EditGateway) {
     query: (input: { readonly with: readonly ['Name'] }) => query({ with: [...input.with] }) as never,
     dispatch: (command: Record<string, unknown>, origin: 'ai') => gateway.dispatch(command as never, origin) as never,
     getOperationRunResult: (requestId: string) => gateway.getOperationRunResult(requestId) as never,
-    waitOperationRun: async (requestId: string) => await gateway.waitOperationRun(requestId) as never,
+    waitOperationRun: async (requestId: string) =>
+      (await gateway.waitOperationRun(requestId)) as never,
     reconnect: (previousCapabilityGeneration: string) => {
       void previousCapabilityGeneration;
       gateway.reconnectCapabilitySnapshot();
@@ -206,11 +209,11 @@ function persistedVisualReview(
   creationRunId: string,
 ): ViewportVisualReviewFacts | undefined {
   const records = entry.journal(creationRunId);
-  const record = [...records].reverse().find((candidate) => (
-    candidate.creationRunId === creationRunId
+  const record = [...records].reverse().find((candidate) =>
+        candidate.creationRunId === creationRunId
       && candidate.kind === 'visual-review-committed'
-      && candidate.expectation === expectation
-  ));
+      && candidate.expectation === expectation,
+    );
   return record as ViewportVisualReviewFacts | undefined;
 }
 
@@ -218,15 +221,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-export function isViewportRuntimeOpenAssetMessage(value: unknown): value is ViewportRuntimeOpenAssetMessage {
+export function isViewportRuntimeOpenAssetMessage(value: unknown,
+): value is ViewportRuntimeOpenAssetMessage {
   if (!isRecord(value) || value.type !== VIEWPORT_RUNTIME_OPEN_ASSET || !isViewportRuntimeIdentity(value.runtime)) return false;
   const asset = value.asset;
-  return isRecord(asset)
+  return (
+    isRecord(asset)
     && typeof asset.guid === 'string'
     && typeof asset.kind === 'string'
     && typeof asset.name === 'string'
     && isRecord(asset.payload)
-    && typeof asset.packPath === 'string';
+    && typeof asset.packPath === 'string'
+  );
 }
 
 export function viewportRuntimeTransportScope(runtime: ViewportRuntimeIdentity): string {
@@ -252,17 +258,26 @@ interface ViewportRuntimeServiceLifecycle {
 
 const activeViewportRuntimeServices = new Map<string, ViewportRuntimeServiceLifecycle>();
 
-function viewportRuntimeServiceKey(runtime: ViewportRuntimeIdentity, scope: ViewportRuntimeCreationScope): string {
+function viewportRuntimeServiceKey(
+  runtime: ViewportRuntimeIdentity,
+  scope: ViewportRuntimeCreationScope,
+): string {
   return [scope.gameRoot.trim(), scope.sceneId.trim(), runtime.runtimeId].join('\u0000');
 }
 
-function pendingViewportRuntimeLifecycle(runtime: ViewportRuntimeIdentity, scope: ViewportRuntimeCreationScope): ViewportRuntimeServiceLifecycle {
+function pendingViewportRuntimeLifecycle(
+  runtime: ViewportRuntimeIdentity,
+  scope: ViewportRuntimeCreationScope,
+): ViewportRuntimeServiceLifecycle {
   const key = viewportRuntimeServiceKey(runtime, scope);
   const current = activeViewportRuntimeServices.get(key);
   return {
     key,
     runtimeGeneration: runtime.runtimeGeneration,
-    state: current !== undefined && current.runtimeGeneration >= runtime.runtimeGeneration ? 'stale' : 'active',
+    state:
+      current !== undefined && current.runtimeGeneration >= runtime.runtimeGeneration
+        ? 'stale'
+        : 'active',
   };
 }
 
@@ -277,18 +292,24 @@ function commitViewportRuntimeService(lifecycle: ViewportRuntimeServiceLifecycle
   return true;
 }
 
-function viewportRuntimeLifecycleError(lifecycle: ViewportRuntimeServiceLifecycle): NonNullable<TransportResponse['error']> {
+function viewportRuntimeLifecycleError(
+  lifecycle: ViewportRuntimeServiceLifecycle,
+): NonNullable<TransportResponse['error']> {
   return {
     code: lifecycle.state === 'disposed' ? 'transport-port-disposed' : 'host-restarted',
-    hint: lifecycle.state === 'disposed'
-      ? 'The viewport Runtime transport service has been disposed.'
-      : 'A newer viewport Runtime generation superseded this transport service.',
+    hint:
+      lifecycle.state === 'disposed'
+        ? 'The viewport Runtime transport service has been disposed.'
+        : 'A newer viewport Runtime generation superseded this transport service.',
     retryable: false,
     recoveryActions: ['transport.describe', 'scope.select'],
   };
 }
 
-function viewportRuntimeLifecycleResponse(request: Parameters<TransportService['handle']>[0], lifecycle: ViewportRuntimeServiceLifecycle): TransportResponse {
+function viewportRuntimeLifecycleResponse(
+  request: Parameters<TransportService['handle']>[0],
+  lifecycle: ViewportRuntimeServiceLifecycle,
+): TransportResponse {
   return {
     jsonrpc: '2.0',
     version: TRANSPORT_PROTOCOL_VERSION,
@@ -308,12 +329,22 @@ function viewportRuntimeLifecycleLine(lifecycle: ViewportRuntimeServiceLifecycle
   });
 }
 
-function fencedViewportRuntimeService(lifecycle: ViewportRuntimeServiceLifecycle): DisposableViewportRuntimeTransportService {
+function fencedViewportRuntimeService(
+  lifecycle: ViewportRuntimeServiceLifecycle,
+): DisposableViewportRuntimeTransportService {
   return {
     handle: async (request) => viewportRuntimeLifecycleResponse(request, lifecycle),
     handleLine: async () => viewportRuntimeLifecycleLine(lifecycle),
-    getRun: () => ({ ok: false, error: viewportRuntimeLifecycleError(lifecycle) }) as ReturnType<TransportService['getRun']>,
-    listEvents: () => Object.assign([], { ok: false, error: viewportRuntimeLifecycleError(lifecycle) }) as ReturnType<TransportService['listEvents']>,
+    getRun: () =>
+      ({
+        ok: false,
+        error: viewportRuntimeLifecycleError(lifecycle),
+      }) as ReturnType<TransportService['getRun']>,
+    listEvents: () =>
+      Object.assign([], {
+        ok: false,
+        error: viewportRuntimeLifecycleError(lifecycle),
+      }) as ReturnType<TransportService['listEvents']>,
     dispose: () => {
       if (lifecycle.state === 'active') lifecycle.state = 'disposed';
     },
@@ -337,7 +368,9 @@ export function shouldBindInProcessViewportRuntimeClient(carrierKind: string): b
  * the same typed request path as the MessagePort carrier without inventing a
  * second Gateway or projection implementation.
  */
-export function createInProcessViewportRuntimeClient(service: TransportService): MessagePortTransportClient {
+export function createInProcessViewportRuntimeClient(
+  service: TransportService,
+): MessagePortTransportClient {
   let disposed = false;
   return {
     request(request) {
@@ -359,8 +392,8 @@ export function readViewportRuntimeIdentity(
   const requestedKind = params.get('carrierKind');
   const carrierKind = isViewportCarrierKind(requestedKind) ? requestedKind : 'local';
   const requestedGeneration = Number(params.get('runtimeGeneration') ?? 1);
-  const runtimeGeneration = Number.isSafeInteger(requestedGeneration) && requestedGeneration > 0
-    ? requestedGeneration : 1;
+  const runtimeGeneration =
+    Number.isSafeInteger(requestedGeneration) && requestedGeneration > 0 ? requestedGeneration : 1;
   return {
     version: 'viewport-runtime/v1',
     runtimeId: params.get('runtimeId')?.trim() || `visible-${nonce}`,
@@ -380,72 +413,95 @@ export function readViewportRuntimeHostOrigin(search: string, ownOrigin: string)
   }
 }
 
-export function isViewportRuntimeConnectMessage(value: unknown): value is ViewportRuntimeConnectMessage {
-  return isRecord(value)
-    && value.type === VIEWPORT_RUNTIME_CONNECT
-    && typeof value.challenge === 'string'
-    && value.challenge.length > 0
-    && isViewportRuntimeIdentity(value.runtime);
+export function isViewportRuntimeConnectMessage(
+  value: unknown,
+): value is ViewportRuntimeConnectMessage {
+  return (
+    isRecord(value) &&
+    value.type === VIEWPORT_RUNTIME_CONNECT &&
+    typeof value.challenge === 'string' &&
+    value.challenge.length > 0 &&
+    isViewportRuntimeIdentity(value.runtime)
+  );
 }
 
-export function isViewportRuntimeReadyMessage(value: unknown): value is ViewportRuntimeReadyMessage {
-  return isRecord(value)
-    && value.type === VIEWPORT_RUNTIME_READY
-    && isViewportRuntimeIdentity(value.runtime);
+export function isViewportRuntimeReadyMessage(
+  value: unknown,
+): value is ViewportRuntimeReadyMessage {
+  return (
+    isRecord(value) &&
+    value.type === VIEWPORT_RUNTIME_READY &&
+    isViewportRuntimeIdentity(value.runtime)
+  );
 }
 
-export function isViewportRuntimeConnectedMessage(value: unknown): value is ViewportRuntimeConnectedMessage {
-  return isRecord(value)
-    && value.type === VIEWPORT_RUNTIME_CONNECTED
-    && typeof value.challenge === 'string'
-    && value.challenge.length > 0
-    && isViewportRuntimeIdentity(value.runtime);
+export function isViewportRuntimeConnectedMessage(
+  value: unknown,
+): value is ViewportRuntimeConnectedMessage {
+  return (
+    isRecord(value) &&
+    value.type === VIEWPORT_RUNTIME_CONNECTED &&
+    typeof value.challenge === 'string' &&
+    value.challenge.length > 0 &&
+    isViewportRuntimeIdentity(value.runtime)
+  );
 }
 
 export function isViewportRuntimeProjectionInvalidatedMessage(
   value: unknown,
 ): value is ViewportRuntimeProjectionInvalidatedMessage {
-  return isRecord(value)
-    && value.type === VIEWPORT_RUNTIME_PROJECTION_INVALIDATED
-    && isViewportRuntimeIdentity(value.runtime)
-    && (value.projection === 'operations' || value.projection === 'capabilities' || value.projection === 'assets')
-    && Number.isSafeInteger(value.revision)
-    && (value.revision as number) >= 0
-    && (value.guid === undefined || typeof value.guid === 'string')
-    && (value.projection !== 'assets' || (typeof value.guid === 'string' && value.guid.length > 0));
+  return (
+    isRecord(value) &&
+    value.type === VIEWPORT_RUNTIME_PROJECTION_INVALIDATED &&
+    isViewportRuntimeIdentity(value.runtime) &&
+    (value.projection === 'operations' ||
+      value.projection === 'capabilities' ||
+      value.projection === 'assets' ||
+      value.projection === 'hierarchy') &&
+    Number.isSafeInteger(value.revision) &&
+    (value.revision as number) >= 0 &&
+    (value.guid === undefined || typeof value.guid === 'string') &&
+    (value.projection !== 'assets' || (typeof value.guid === 'string' && value.guid.length > 0))
+  );
 }
 
 export function isViewportPreviewExecutorConnectMessage(
   value: unknown,
 ): value is ViewportPreviewExecutorConnectMessage {
-  return isRecord(value)
-    && value.type === VIEWPORT_PREVIEW_EXECUTOR_CONNECT
-    && typeof value.challenge === 'string'
-    && value.challenge.length > 0
-    && isViewportRuntimeIdentity(value.runtime)
-    && isPreviewExecutorLeaseIdentity(value.lease);
+  return (
+    isRecord(value) &&
+    value.type === VIEWPORT_PREVIEW_EXECUTOR_CONNECT &&
+    typeof value.challenge === 'string' &&
+    value.challenge.length > 0 &&
+    isViewportRuntimeIdentity(value.runtime) &&
+    isPreviewExecutorLeaseIdentity(value.lease)
+  );
 }
 
 export function isViewportPreviewExecutorConnectedMessage(
   value: unknown,
 ): value is ViewportPreviewExecutorConnectedMessage {
-  return isRecord(value)
-    && value.type === VIEWPORT_PREVIEW_EXECUTOR_CONNECTED
-    && typeof value.challenge === 'string'
-    && value.challenge.length > 0
-    && isViewportRuntimeIdentity(value.runtime)
-    && isPreviewExecutorLeaseIdentity(value.lease);
+  return (
+    isRecord(value) &&
+    value.type === VIEWPORT_PREVIEW_EXECUTOR_CONNECTED &&
+    typeof value.challenge === 'string' &&
+    value.challenge.length > 0 &&
+    isViewportRuntimeIdentity(value.runtime) &&
+    isPreviewExecutorLeaseIdentity(value.lease)
+  );
 }
 
 export function isViewportPreviewExecutorDisconnectMessage(
   value: unknown,
 ): value is ViewportPreviewExecutorDisconnectMessage {
-  return isRecord(value)
-    && value.type === VIEWPORT_PREVIEW_EXECUTOR_DISCONNECT
-    && typeof value.challenge === 'string'
-    && value.challenge.length > 0
-    && isViewportRuntimeIdentity(value.runtime)
-    && isPreviewExecutorLeaseIdentity(value.lease);
+  return (
+    isRecord(value) &&
+    value.type === VIEWPORT_PREVIEW_EXECUTOR_DISCONNECT &&
+    typeof value.challenge === 'string' &&
+    value.challenge.length > 0 &&
+    isViewportRuntimeIdentity(value.runtime) &&
+    isPreviewExecutorLeaseIdentity(value.lease)
+  );
 }
 
 /**
@@ -476,22 +532,23 @@ export function installViewportRuntimeConnectionHost(
       preview.client.dispose();
     }
   };
-  const sameRuntime = (received: ViewportRuntimeIdentity): boolean => (
-    received.runtimeId === options.runtime.runtimeId
-    && received.runtimeGeneration === options.runtime.runtimeGeneration
-    && received.carrierId === options.runtime.carrierId
-    && received.carrierKind === options.runtime.carrierKind
-  );
+  const sameRuntime = (received: ViewportRuntimeIdentity): boolean =>
+    received.runtimeId === options.runtime.runtimeId &&
+    received.runtimeGeneration === options.runtime.runtimeGeneration &&
+    received.carrierId === options.runtime.carrierId &&
+    received.carrierKind === options.runtime.carrierKind;
   const onMessage = (event: RuntimeMessageEvent): void => {
     // This window can also own nested Play carriers that publish VAG_* health
     // heartbeats. They are not attempts to connect to the Shell transport and
     // must not become an untrusted-source warning on every frame.
-    if (!isRecord(event.data) || (
-      event.data.type !== VIEWPORT_RUNTIME_CONNECT
-      && event.data.type !== VIEWPORT_RUNTIME_READY
-      && event.data.type !== VIEWPORT_PREVIEW_EXECUTOR_CONNECT
-      && event.data.type !== VIEWPORT_PREVIEW_EXECUTOR_DISCONNECT
-    )) return;
+    if (
+      !isRecord(event.data) ||
+      (event.data.type !== VIEWPORT_RUNTIME_CONNECT &&
+        event.data.type !== VIEWPORT_RUNTIME_READY &&
+        event.data.type !== VIEWPORT_PREVIEW_EXECUTOR_CONNECT &&
+        event.data.type !== VIEWPORT_PREVIEW_EXECUTOR_DISCONNECT)
+    )
+      return;
     if (event.origin !== options.expectedOrigin || event.source !== options.expectedSource) {
       reject('viewport-runtime-untrusted-source', event.data);
       return;
@@ -509,7 +566,10 @@ export function installViewportRuntimeConnectionHost(
         reject('viewport-preview-executor-generation-mismatch', event.data);
         return;
       }
-      if (activePreview !== null && samePreviewExecutorLease(activePreview.lease, event.data.lease)) {
+      if (
+        activePreview !== null &&
+        samePreviewExecutorLease(activePreview.lease, event.data.lease)
+      ) {
         disconnectPreview();
       }
       return;
@@ -545,12 +605,15 @@ export function installViewportRuntimeConnectionHost(
       }
       acceptedPreviewLeaseIds.add(event.data.lease.leaseId);
       activePreview = { lease: event.data.lease, client, disposeBinding };
-      event.source.postMessage({
-        type: VIEWPORT_PREVIEW_EXECUTOR_CONNECTED,
-        challenge: event.data.challenge,
-        runtime: options.runtime,
-        lease: event.data.lease,
-      } satisfies ViewportPreviewExecutorConnectedMessage, event.origin);
+      event.source.postMessage(
+        {
+          type: VIEWPORT_PREVIEW_EXECUTOR_CONNECTED,
+          challenge: event.data.challenge,
+          runtime: options.runtime,
+          lease: event.data.lease,
+        } satisfies ViewportPreviewExecutorConnectedMessage,
+        event.origin,
+      );
       return;
     }
     if (!isViewportRuntimeConnectMessage(event.data)) {
@@ -578,18 +641,24 @@ export function installViewportRuntimeConnectionHost(
     active?.dispose();
     active = createMessagePortCarrier(port, options.service);
     activeChallenge = message.challenge;
-    event.source.postMessage({
-      type: VIEWPORT_RUNTIME_CONNECTED,
-      challenge: message.challenge,
-      runtime: options.runtime,
-    } satisfies ViewportRuntimeConnectedMessage, event.origin);
+    event.source.postMessage(
+      {
+        type: VIEWPORT_RUNTIME_CONNECTED,
+        challenge: message.challenge,
+        runtime: options.runtime,
+      } satisfies ViewportRuntimeConnectedMessage,
+      event.origin,
+    );
   };
 
   options.target.addEventListener('message', onMessage);
-  options.expectedSource.postMessage({
-    type: VIEWPORT_RUNTIME_READY,
-    runtime: options.runtime,
-  } satisfies ViewportRuntimeReadyMessage, options.expectedOrigin);
+  options.expectedSource.postMessage(
+    {
+      type: VIEWPORT_RUNTIME_READY,
+      runtime: options.runtime,
+    } satisfies ViewportRuntimeReadyMessage,
+    options.expectedOrigin,
+  );
   return () => {
     options.target.removeEventListener('message', onMessage);
     disconnectPreview();
@@ -614,14 +683,22 @@ type ProjectionQuery =
   | { readonly kind: 'assets.payload'; readonly guid: string }
   | { readonly kind: 'operations.snapshot' }
   | { readonly kind: 'version-control.snapshot'; readonly refresh?: boolean }
-  | { readonly kind: 'reference-creation.visual-review'; readonly expectation: ViewportVisualReviewExpectation; readonly creationRunId: string }
+  | {
+      readonly kind: 'reference-creation.visual-review';
+      readonly expectation: ViewportVisualReviewExpectation;
+      readonly creationRunId: string;
+    }
   | { readonly kind: 'world.snapshot'; readonly with: readonly string[] };
 
 function parseProjectionQuery(value: unknown): ProjectionQuery | null {
   if (!isRecord(value)) return null;
   if (value.kind === 'runtime-ui.diagnostics') return { kind: value.kind };
   if (value.kind === 'diagnostics.snapshot') return { kind: value.kind };
-  if (value.kind === 'material.inspection' && typeof value.guid === 'string' && value.guid.length > 0) {
+  if (
+    value.kind === 'material.inspection' &&
+    typeof value.guid === 'string' &&
+    value.guid.length > 0
+  ) {
     return { kind: value.kind, guid: value.guid };
   }
   if (value.kind === 'engine.execution') return { kind: value.kind };
@@ -646,21 +723,35 @@ function parseProjectionQuery(value: unknown): ProjectionQuery | null {
   if (value.kind === 'version-control.snapshot') {
     return value.refresh === true ? { kind: value.kind, refresh: true } : { kind: value.kind };
   }
-  if ((value.kind === 'reference-creation.visual-review')
-    && (value.expectation === 'edit-prop-after-reopen' || value.expectation === 'play-prop-roundtrip')
-    && typeof value.creationRunId === 'string'
-    && value.creationRunId.trim() !== '') {
-    return { kind: value.kind, expectation: value.expectation, creationRunId: value.creationRunId.trim() };
+  if (
+    value.kind === 'reference-creation.visual-review' &&
+    (value.expectation === 'edit-prop-after-reopen' ||
+      value.expectation === 'play-prop-roundtrip') &&
+    typeof value.creationRunId === 'string' &&
+    value.creationRunId.trim() !== ''
+  ) {
+    return {
+      kind: value.kind,
+      expectation: value.expectation,
+      creationRunId: value.creationRunId.trim(),
+    };
   }
-  if (value.kind === 'world.snapshot'
-    && Array.isArray(value.with)
-    && value.with.every((entry) => typeof entry === 'string' && entry.length > 0)
-  ) return { kind: value.kind, with: value.with as readonly string[] };
+  if (
+    value.kind === 'world.snapshot' &&
+    Array.isArray(value.with) &&
+    value.with.every((entry) => typeof entry === 'string' && entry.length > 0)
+  )
+    return { kind: value.kind, with: value.with as readonly string[] };
   return null;
 }
 
 function projectionError(code: string, hint: string) {
-  return { code, hint, retryable: true, recoveryActions: ['query', 'transport.reconnect'] } as const;
+  return {
+    code,
+    hint,
+    retryable: true,
+    recoveryActions: ['query', 'transport.reconnect'],
+  } as const;
 }
 
 type ViewportProjectionQueryOptions = {
@@ -672,15 +763,23 @@ type ViewportProjectionQueryOptions = {
   readonly readAssetCatalog?: (compatibleWith?: string) => readonly AssetBrowserRegistryEntry[];
   readonly readRuntimeBinding?: () => RuntimeAssetBinding | undefined;
   readonly readAssetPayload?: (guid: string) => unknown | Promise<unknown>;
-  readonly readOperationRuns?: () => { readonly revision: number; readonly runs: readonly OperationRun[] };
+  readonly readOperationRuns?: () => {
+    readonly revision: number;
+    readonly runs: readonly OperationRun[];
+  };
   readonly readVersionControlSnapshot?: () => VersionControlSnapshot | undefined;
-  readonly readVisualReview?: (expectation: ViewportVisualReviewExpectation, creationRunId: string) => unknown;
+  readonly readVisualReview?: (
+    expectation: ViewportVisualReviewExpectation,
+    creationRunId: string,
+  ) => unknown;
   readonly readViewportStatus?: () => unknown;
   readonly readDiagnostics?: () => DiagnosticsSnapshot;
   readonly readMaterialInspection?: (guid: string) => MaterialPublicationInspection | undefined;
   readonly readExecutionReport?: () => ExecutionReport;
   /** Re-read the Host-owned repository status when a caller asks for a fresh snapshot. */
-  readonly refreshVersionControlSnapshot?: () => VersionControlSnapshot | Promise<VersionControlSnapshot>;
+  readonly refreshVersionControlSnapshot?: () =>
+    | VersionControlSnapshot
+    | Promise<VersionControlSnapshot>;
 };
 
 export type ViewportVisualReviewExpectation = 'edit-prop-after-reopen' | 'play-prop-roundtrip';
@@ -698,30 +797,65 @@ export interface ViewportVisualReviewFacts {
   readonly verdict: 'pass' | 'fail' | 'unproven';
   readonly confidence: number;
   readonly mismatchReason?: string;
-  readonly capture: { readonly runId: string; readonly tapePath: string; readonly reportPath: string };
-  readonly renderer: { readonly backend: string; readonly generation: number; readonly carrierGeneration: number; readonly rendererIdentity: string };
+  readonly capture: {
+    readonly runId: string;
+    readonly tapePath: string;
+    readonly reportPath: string;
+  };
+  readonly renderer: {
+    readonly backend: string;
+    readonly generation: number;
+    readonly carrierGeneration: number;
+    readonly rendererIdentity: string;
+  };
 }
 
-function validViewportVisualReviewFacts(value: unknown, expectation: ViewportVisualReviewExpectation): value is ViewportVisualReviewFacts {
+function validViewportVisualReviewFacts(
+  value: unknown,
+  expectation: ViewportVisualReviewExpectation,
+): value is ViewportVisualReviewFacts {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const facts = value as Record<string, unknown>;
   const capture = facts.capture;
   const renderer = facts.renderer;
-  if (facts.authoredBy !== 'verify' || facts.executor !== 'step-verify-visual-executor' || facts.expectation !== expectation
-    || (facts.verdict !== 'pass' && facts.verdict !== 'fail' && facts.verdict !== 'unproven')
-    || typeof facts.confidence !== 'number' || !Number.isFinite(facts.confidence) || facts.confidence < 0 || facts.confidence > 1
-    || facts.observed === null || typeof facts.observed !== 'object' || Array.isArray(facts.observed)) return false;
+  if (
+    facts.authoredBy !== 'verify' ||
+    facts.executor !== 'step-verify-visual-executor' ||
+    facts.expectation !== expectation ||
+    (facts.verdict !== 'pass' && facts.verdict !== 'fail' && facts.verdict !== 'unproven') ||
+    typeof facts.confidence !== 'number' ||
+    !Number.isFinite(facts.confidence) ||
+    facts.confidence < 0 ||
+    facts.confidence > 1 ||
+    facts.observed === null ||
+    typeof facts.observed !== 'object' ||
+    Array.isArray(facts.observed)
+  )
+    return false;
   if (capture === null || typeof capture !== 'object' || Array.isArray(capture)) return false;
   const captureFacts = capture as Record<string, unknown>;
-  if (typeof captureFacts.runId !== 'string' || captureFacts.runId.trim() === ''
-    || typeof captureFacts.tapePath !== 'string' || !/(^|[\\/])frame-0\.tape\.bin$/.test(captureFacts.tapePath)
-    || typeof captureFacts.reportPath !== 'string' || captureFacts.reportPath !== captureFacts.tapePath.replace(/frame-0\.tape\.bin$/, 'frame-0.report.json')) return false;
+  if (
+    typeof captureFacts.runId !== 'string' ||
+    captureFacts.runId.trim() === '' ||
+    typeof captureFacts.tapePath !== 'string' ||
+    !/(^|[\\/])frame-0\.tape\.bin$/.test(captureFacts.tapePath) ||
+    typeof captureFacts.reportPath !== 'string' ||
+    captureFacts.reportPath !==
+      captureFacts.tapePath.replace(/frame-0\.tape\.bin$/, 'frame-0.report.json')
+  )
+    return false;
   if (renderer === null || typeof renderer !== 'object' || Array.isArray(renderer)) return false;
   const rendererFacts = renderer as Record<string, unknown>;
-  return typeof rendererFacts.backend === 'string' && rendererFacts.backend.trim() !== ''
-    && Number.isSafeInteger(rendererFacts.generation) && (rendererFacts.generation as number) > 0
-    && Number.isSafeInteger(rendererFacts.carrierGeneration) && (rendererFacts.carrierGeneration as number) > 0
-    && typeof rendererFacts.rendererIdentity === 'string' && rendererFacts.rendererIdentity.trim() !== '';
+  return (
+    typeof rendererFacts.backend === 'string' &&
+    rendererFacts.backend.trim() !== '' &&
+    Number.isSafeInteger(rendererFacts.generation) &&
+    (rendererFacts.generation as number) > 0 &&
+    Number.isSafeInteger(rendererFacts.carrierGeneration) &&
+    (rendererFacts.carrierGeneration as number) > 0 &&
+    typeof rendererFacts.rendererIdentity === 'string' &&
+    rendererFacts.rendererIdentity.trim() !== ''
+  );
 }
 
 type SyncViewportProjectionQueryOptions = Omit<
@@ -736,21 +870,33 @@ export function createViewportProjectionQuery(
 ): (input: unknown) => ViewportProjectionEnvelope<unknown>;
 export function createViewportProjectionQuery(
   options: ViewportProjectionQueryOptions,
-): (input: unknown) => ViewportProjectionEnvelope<unknown> | Promise<ViewportProjectionEnvelope<unknown>>;
+): (
+  input: unknown,
+) => ViewportProjectionEnvelope<unknown> | Promise<ViewportProjectionEnvelope<unknown>>;
 export function createViewportProjectionQuery(
   options: ViewportProjectionQueryOptions,
-): (input: unknown) => ViewportProjectionEnvelope<unknown> | Promise<ViewportProjectionEnvelope<unknown>> {
+): (
+  input: unknown,
+) => ViewportProjectionEnvelope<unknown> | Promise<ViewportProjectionEnvelope<unknown>> {
   let revision = 0;
   const runtimeUiOperations = createRuntimeUiOperations(options.graph, 'viewport-runtime');
   return (input) => {
     revision += 1;
-    const base = { version: options.runtime.version, runtime: options.runtime, revision } as const;
+    const base = {
+      version: options.runtime.version,
+      runtime: options.runtime,
+      revision,
+    } as const;
     const query = parseProjectionQuery(input);
-    if (query === null) return {
+    if (query === null)
+      return {
         ...base,
         status: 'faulted',
         error: {
-          ...projectionError('projection-query-invalid', 'Pass the query object directly as transport params, for example {"kind":"assets.catalog"}. Do not pass a string or nest it under query. Set kind to runtime-ui.diagnostics, diagnostics.snapshot, material.inspection with a guid, engine.execution, viewport.status, hierarchy.structure, inspector.selection, selection.current, scene.readModel, assets.catalog, assets.payload with a guid, operations.snapshot, version-control.snapshot, reference-creation.visual-review, or world.snapshot with a component-name list in with. Correct params before retrying; reconnecting does not repair query arguments.'),
+          ...projectionError(
+            'projection-query-invalid',
+            'Pass the query object directly as transport params, for example {"kind":"assets.catalog"}. Do not pass a string or nest it under query. Set kind to runtime-ui.diagnostics, diagnostics.snapshot, material.inspection with a guid, engine.execution, viewport.status, hierarchy.structure, inspector.selection, selection.current, scene.readModel, assets.catalog, assets.payload with a guid, operations.snapshot, version-control.snapshot, reference-creation.visual-review, or world.snapshot with a component-name list in with. Correct params before retrying; reconnecting does not repair query arguments.',
+          ),
           retryable: false,
           recoveryActions: ['query'],
         },
@@ -758,25 +904,31 @@ export function createViewportProjectionQuery(
     // Play/Stop chrome reads viewport.status from Gateway/quadrant, not from the
     // selector graph. Gating it on graph bind left the toolbar disabled whenever
     // the packaged renderer only exposes `subscribe()` / frame-submitted.
-    if (query.kind !== 'viewport.status' && options.graph.stats().status !== 'bound') return {
-        ...base,
-        status: 'unavailable',
-        error: projectionError('runtime-unavailable', 'Reconnect after the active Runtime binds its Edit World.'),
-      };
-    if (query.kind === 'runtime-ui.diagnostics') return {
-      ...base,
-      status: 'ready',
-      value: runtimeUiOperations.diagnostics(),
-    };
-    if (query.kind === 'diagnostics.snapshot') {
-      if (options.readDiagnostics === undefined) return {
+    if (query.kind !== 'viewport.status' && options.graph.stats().status !== 'bound')
+      return {
         ...base,
         status: 'unavailable',
         error: projectionError(
-          'runtime-diagnostics-unavailable',
-          'Wait for the Runtime Gateway diagnostics provider to bind.',
+          'runtime-unavailable',
+          'Reconnect after the active Runtime binds its Edit World.',
         ),
       };
+    if (query.kind === 'runtime-ui.diagnostics')
+      return {
+        ...base,
+        status: 'ready',
+        value: runtimeUiOperations.diagnostics(),
+      };
+    if (query.kind === 'diagnostics.snapshot') {
+      if (options.readDiagnostics === undefined)
+        return {
+          ...base,
+          status: 'unavailable',
+          error: projectionError(
+            'runtime-diagnostics-unavailable',
+            'Wait for the Runtime Gateway diagnostics provider to bind.',
+          ),
+        };
       return {
         ...base,
         status: 'ready',
@@ -785,14 +937,15 @@ export function createViewportProjectionQuery(
     }
     if (query.kind === 'material.inspection') {
       const inspection = options.readMaterialInspection?.(query.guid);
-      if (inspection === undefined) return {
-        ...base,
-        status: 'unavailable',
-        error: projectionError(
-          'material-inspection-unavailable',
-          'Wait for the Runtime AssetRegistry to publish the cooked material inspection.',
-        ),
-      };
+      if (inspection === undefined)
+        return {
+          ...base,
+          status: 'unavailable',
+          error: projectionError(
+            'material-inspection-unavailable',
+            'Wait for the Runtime AssetRegistry to publish the cooked material inspection.',
+          ),
+        };
       return {
         ...base,
         status: 'ready',
@@ -800,57 +953,76 @@ export function createViewportProjectionQuery(
       };
     }
     if (query.kind === 'engine.execution') {
-      if (options.readExecutionReport === undefined) return {
-        ...base,
-        status: 'unavailable',
-        error: projectionError(
-          'engine-execution-unavailable',
-          'Wait for the Runtime App to publish its execution control report.',
-        ),
-      };
+      if (options.readExecutionReport === undefined)
+        return {
+          ...base,
+          status: 'unavailable',
+          error: projectionError(
+            'engine-execution-unavailable',
+            'Wait for the Runtime App to publish its execution control report.',
+          ),
+        };
       return {
         ...base,
         status: 'ready',
         value: options.readExecutionReport(),
       };
     }
-    if (query.kind === 'viewport.status') return {
-      ...base,
-      status: 'ready',
-      value: options.readViewportStatus?.() ?? null,
-    };
+    if (query.kind === 'viewport.status')
+      return {
+        ...base,
+        status: 'ready',
+        value: options.readViewportStatus?.() ?? null,
+      };
     if (query.kind === 'hierarchy.structure') {
       const hierarchy = options.readHierarchy?.();
-      if (hierarchy === undefined) return {
-        ...base,
-        status: 'unavailable',
-        error: projectionError('projection-pending', 'Wait for the RuntimeUiGraph to publish the hierarchy baseline.'),
-      };
+      if (hierarchy === undefined)
+        return {
+          ...base,
+          status: 'unavailable',
+          error: projectionError(
+            'projection-pending',
+            'Wait for the RuntimeUiGraph to publish the hierarchy baseline.',
+          ),
+        };
       return hierarchy.structure.rows.length === 0
         ? { ...base, status: 'empty' }
         : { ...base, status: 'ready', value: hierarchy };
     }
     if (query.kind === 'inspector.selection') {
-      const inspector = options.readInspector?.() ?? { selectionIds: [], entities: [] };
+      const inspector = options.readInspector?.() ?? {
+        selectionIds: [],
+        entities: [],
+      };
       return inspector.entity === undefined
         ? { ...base, status: 'empty' }
         : { ...base, status: 'ready', value: inspector };
     }
-    if (query.kind === 'selection.current') return {
-      ...base,
-      status: 'ready',
-      value: {
-        entityIds: [...getSelectionList()],
-        assets: getAssetSelectionList().map(({ guid, kind, name, packPath }) => ({ guid, kind, name, packPath })),
-        paths: getPathSelectionList().map(({ path, kind }) => ({ path, kind })),
-        lastDomain: getLastSelectionDomain(),
-      },
-    };
-    if (query.kind === 'scene.readModel') return {
-      ...base,
-      status: 'ready',
-      value: options.gateway.sceneReadModel(),
-    };
+    if (query.kind === 'selection.current')
+      return {
+        ...base,
+        status: 'ready',
+        value: {
+          entityIds: [...getSelectionList()],
+          assets: getAssetSelectionList().map(({ guid, kind, name, packPath }) => ({
+            guid,
+            kind,
+            name,
+            packPath,
+          })),
+          paths: getPathSelectionList().map(({ path, kind }) => ({
+            path,
+            kind,
+          })),
+          lastDomain: getLastSelectionDomain(),
+        },
+      };
+    if (query.kind === 'scene.readModel')
+      return {
+        ...base,
+        status: 'ready',
+        value: options.gateway.sceneReadModel(),
+      };
     if (query.kind === 'assets.catalog') {
       const entries = options.readAssetCatalog?.(query.compatibleWith) ?? [];
       return entries.length === 0
@@ -864,38 +1036,45 @@ export function createViewportProjectionQuery(
         : { ...base, status: 'ready', value: binding };
     }
     if (query.kind === 'assets.payload') {
-      if (options.readAssetPayload === undefined) return {
-        ...base,
-        status: 'unavailable',
-        error: projectionError(
-          'asset-payload-unavailable',
-          'The Runtime AssetRegistry payload reader is not bound.',
-        ),
-      };
-      const project = (payload: unknown): ViewportProjectionEnvelope<unknown> => (
+      if (options.readAssetPayload === undefined)
+        return {
+          ...base,
+          status: 'unavailable',
+          error: projectionError(
+            'asset-payload-unavailable',
+            'The Runtime AssetRegistry payload reader is not bound.',
+          ),
+        };
+      const project = (payload: unknown): ViewportProjectionEnvelope<unknown> =>
         payload === undefined
           ? { ...base, status: 'empty' }
-          : { ...base, status: 'ready', value: { guid: query.guid, payload } }
-      );
+          : { ...base, status: 'ready', value: { guid: query.guid, payload } };
       const payload = options.readAssetPayload(query.guid);
-      return (payload instanceof Promise
-        ? payload.then(project)
-        : project(payload));
+      return payload instanceof Promise ? payload.then(project) : project(payload);
     }
     if (query.kind === 'operations.snapshot') {
-      const snapshot = options.readOperationRuns?.() ?? { revision: 0, runs: [] };
+      const snapshot = options.readOperationRuns?.() ?? {
+        revision: 0,
+        runs: [],
+      };
       return { ...base, status: 'ready', value: snapshot };
     }
     if (query.kind === 'version-control.snapshot') {
       const snapshot = query.refresh
         ? (options.refreshVersionControlSnapshot?.() ?? options.readVersionControlSnapshot?.())
         : options.readVersionControlSnapshot?.();
-      const project = (value: VersionControlSnapshot | undefined): ViewportProjectionEnvelope<unknown> => {
-        if (value === undefined) return {
-          ...base,
-          status: 'unavailable',
-          error: projectionError('version-control-unavailable', 'The Runtime version-control provider is not bound.'),
-        };
+      const project = (
+        value: VersionControlSnapshot | undefined,
+      ): ViewportProjectionEnvelope<unknown> => {
+        if (value === undefined)
+          return {
+            ...base,
+            status: 'unavailable',
+            error: projectionError(
+              'version-control-unavailable',
+              'The Runtime version-control provider is not bound.',
+            ),
+          };
         // The version-control snapshot is already a discriminated product
         // projection. Keep its uninitialized, recovery-required, running, and
         // faulted states in the value instead of collapsing them into the
@@ -907,21 +1086,33 @@ export function createViewportProjectionQuery(
     }
     if (query.kind === 'reference-creation.visual-review') {
       const facts = options.readVisualReview?.(query.expectation, query.creationRunId);
-      if (facts === undefined) return {
-        ...base,
-        status: 'unavailable',
-        error: projectionError('visual-review-unavailable', 'Verify has not published visual review facts for this expectation.'),
-      };
+      if (facts === undefined)
+        return {
+          ...base,
+          status: 'unavailable',
+          error: projectionError(
+            'visual-review-unavailable',
+            'Verify has not published visual review facts for this expectation.',
+          ),
+        };
       return validViewportVisualReviewFacts(facts, query.expectation)
         ? { ...base, status: 'ready', value: facts }
-        : { ...base, status: 'faulted', error: projectionError('visual-review-invalid', 'Verify visual review facts do not match the requested expectation, capture artifact, or renderer provenance.') };
+        : {
+            ...base,
+            status: 'faulted',
+            error: projectionError(
+              'visual-review-invalid',
+              'Verify visual review facts do not match the requested expectation, capture artifact, or renderer provenance.',
+            ),
+          };
     }
     const snapshot = options.gateway.buildQueryFn()({ with: [...query.with] });
-    if (!snapshot.ok) return {
-      ...base,
-      status: 'faulted',
-      error: projectionError(snapshot.error.code, snapshot.error.hint),
-    };
+    if (!snapshot.ok)
+      return {
+        ...base,
+        status: 'faulted',
+        error: projectionError(snapshot.error.code, snapshot.error.hint),
+      };
     return snapshot.rows.length === 0
       ? { ...base, status: 'empty' }
       : { ...base, status: 'ready', value: snapshot };
@@ -939,11 +1130,23 @@ export function createViewportRuntimeTransportService(options: {
   readonly readViewportStatus?: () => unknown;
   readonly readExecutionReport?: () => ExecutionReport;
   readonly readVersionControlSnapshot?: () => VersionControlSnapshot | undefined;
-  readonly refreshVersionControlSnapshot?: () => VersionControlSnapshot | Promise<VersionControlSnapshot>;
-  readonly readVisualReview?: (expectation: ViewportVisualReviewExpectation, creationRunId: string) => ViewportVisualReviewFacts | undefined;
+  readonly refreshVersionControlSnapshot?: () =>
+    | VersionControlSnapshot
+    | Promise<VersionControlSnapshot>;
+  readonly readVisualReview?: (
+    expectation: ViewportVisualReviewExpectation,
+    creationRunId: string,
+  ) => ViewportVisualReviewFacts | undefined;
   readonly referenceCreationJournalStore?: ReferenceCreationJournalStore;
+  readonly notifyShellProjectionInvalidated?: (input: {
+    readonly projection: 'hierarchy';
+    readonly revision: number;
+  }) => void;
 }): DisposableViewportRuntimeTransportService {
-  const lifecycle = pendingViewportRuntimeLifecycle(options.runtime, options.referenceCreationScope);
+  const lifecycle = pendingViewportRuntimeLifecycle(
+    options.runtime,
+    options.referenceCreationScope,
+  );
   if (lifecycle.state === 'stale') return fencedViewportRuntimeService(lifecycle);
 
   const retryOperationRun = (
@@ -956,19 +1159,28 @@ export function createViewportRuntimeTransportService(options: {
       retryRequestId,
       actor.kind === 'human' ? 'human' : 'ai',
     );
-    if (!result.ok) return { ok: false, error: result.error as unknown as import('@forgeax/editor-product').CommandError };
+    if (!result.ok)
+      return {
+        ok: false,
+        error: result.error as unknown as import('@forgeax/editor-product').CommandError,
+      };
     const run = result.result?.operationRun as OperationRun | undefined;
     return run === undefined
-      ? { ok: false, error: {
-        code: 'operation-run-unavailable',
-        hint: 'The Gateway retry did not publish its canonical operation run.',
-        retryable: true,
-        recoveryActions: ['run.get', 'editor.discover'],
-      } }
+      ? {
+          ok: false,
+          error: {
+            code: 'operation-run-unavailable',
+            hint: 'The Gateway retry did not publish its canonical operation run.',
+            retryable: true,
+            recoveryActions: ['run.get', 'editor.discover'],
+          },
+        }
       : { ok: true, runId: run.runId, reused: false, run };
   };
   let adapter: ReturnType<typeof createGatewayCapabilityAdapter> | undefined;
-  let hierarchy: ReturnType<ReturnType<typeof createHierarchyStructureSelector>['mount']> | undefined;
+  let hierarchy:
+    | ReturnType<ReturnType<typeof createHierarchyStructureSelector>['mount']>
+    | undefined;
   let transportService: TransportService | undefined;
   try {
     adapter = createGatewayCapabilityAdapter({
@@ -978,63 +1190,79 @@ export function createViewportRuntimeTransportService(options: {
       operationRuns: {
         get: (requestId) => options.gateway.getOperationRunResult(requestId),
         wait: (requestId) => options.gateway.waitOperationRun(requestId),
-        subscribe: (requestId, listener) => options.gateway.subscribeOperationRun(requestId, listener),
+        subscribe: (requestId, listener) =>
+          options.gateway.subscribeOperationRun(requestId, listener),
         cancel: (requestId) => options.gateway.cancelOperationRun(requestId),
         retry: retryOperationRun,
       },
     });
-    const mountedHierarchy = hierarchy = createHierarchyStructureSelector(options.graph).mount();
+    const mountedHierarchy = (hierarchy = createHierarchyStructureSelector(options.graph).mount());
     const scope = viewportRuntimeTransportScope(options.runtime);
     const referenceCreation = createReferenceCreationEntry({
       gateway: createReferenceCreationGateway(options.gateway),
-      journalStore: options.referenceCreationJournalStore
-        ?? createViewportReferenceCreationJournalStore(options.runtime, options.referenceCreationScope),
+      journalStore:
+        options.referenceCreationJournalStore ??
+        createViewportReferenceCreationJournalStore(
+          options.runtime,
+          options.referenceCreationScope,
+        ),
     });
     const projectionQuery = createViewportProjectionQuery({
-    ...options,
-    readHierarchy: () => {
-      const structure = mountedHierarchy.getSnapshot();
-      return structure === undefined
-        ? undefined
-        : {
-            structure,
-            selectionIds: [...getSelectionList()],
-            editorWorld: getEditorWorldProjection(),
-          };
-    },
-    readInspector: () => {
-      const selectionIds = [...getSelectionList()];
-      const world = options.gateway.activeWorld;
-      const entities = world === null
-        ? []
-        : selectionIds.flatMap((id) => {
-            if (!entExists(world, id)) return [];
-            const instance = options.gateway.sceneInstanceForMember(id);
-            return [{
-              id,
-              name: entName(world, id),
-              components: entComponents(world, id),
-              ...(instance.ok ? { sceneInstance: { root: instance.value.root, member: id } } : {}),
-            }];
-          });
-      const entity = entities.at(-1);
-      return {
-        selectionIds,
-        entities,
-        ...(entity === undefined ? {} : { entity }),
-        editorWorld: getEditorWorldProjection(),
-      };
-    },
-    readAssetCatalog: (compatibleWith) => {
-      if (compatibleWith === undefined) return options.gateway.assetCatalog();
-      const compatible = options.gateway.assetCatalog({ compatibleWith });
-      return compatible.ok ? compatible.assets : [];
-    },
-    readAssetPayload: (guid) => options.gateway.lookupAsset(guid),
-    readOperationRuns: () => options.gateway.operationRunSnapshot(),
-    readVersionControlSnapshot: options.readVersionControlSnapshot,
-    readDiagnostics: () => options.gateway.diagnostics.snapshot(),
-    readVisualReview: (expectation, creationRunId) => persistedVisualReview(referenceCreation, expectation, creationRunId),
+      ...options,
+      readHierarchy: () => {
+        const structure = mountedHierarchy.getSnapshot();
+        return structure === undefined
+          ? undefined
+          : {
+              structure,
+              selectionIds: [...getSelectionList()],
+              editorWorld: getEditorWorldProjection(),
+            };
+      },
+      readInspector: () => {
+        const selectionIds = [...getSelectionList()];
+        const world = options.gateway.activeWorld;
+        const entities =
+          world === null
+            ? []
+            : selectionIds.flatMap((id) => {
+                if (!entExists(world, id)) return [];
+                const instance = options.gateway.sceneInstanceForMember(id);
+                return [
+                  {
+                    id,
+                    name: entName(world, id),
+                    components: entComponents(world, id),
+                    ...(instance.ok
+                      ? {
+                          sceneInstance: {
+                            root: instance.value.root,
+                            member: id,
+                          },
+                        }
+                      : {}),
+                  },
+                ];
+              });
+        const entity = entities.at(-1);
+        return {
+          selectionIds,
+          entities,
+          ...(entity === undefined ? {} : { entity }),
+          editorWorld: getEditorWorldProjection(),
+        };
+      },
+      readAssetCatalog: (compatibleWith) => {
+        if (compatibleWith === undefined) return options.gateway.assetCatalog();
+        const compatible = options.gateway.assetCatalog({ compatibleWith });
+        return compatible.ok ? compatible.assets : [];
+      },
+      readAssetPayload: (guid) => options.gateway.lookupAsset(guid),
+      readOperationRuns: () => options.gateway.operationRunSnapshot(),
+      readVersionControlSnapshot: options.readVersionControlSnapshot,
+      readDiagnostics: () => options.gateway.diagnostics.snapshot(),
+      readVisualReview: (expectation, creationRunId) =>
+        persistedVisualReview(referenceCreation, expectation, creationRunId),
     });
     transportService = createTransportService({
       journal: new RunJournal({ scope }),
@@ -1049,10 +1277,19 @@ export function createViewportRuntimeTransportService(options: {
       query: async (input) => {
         const parsed = parseProjectionQuery(input);
         if (parsed?.kind === 'assets.payload') {
-          const loaded = await ensureAssetCatalogedResult(options.gateway.doc.registry, parsed.guid);
+          const loaded = await ensureAssetCatalogedResult(
+            options.gateway.doc.registry,
+            parsed.guid,
+          );
           if (!loaded.ok) {
             const { version, runtime, revision } = await projectionQuery(input);
-            return { version, runtime, revision, status: 'faulted' as const, error: loaded.error };
+            return {
+              version,
+              runtime,
+              revision,
+              status: 'faulted' as const,
+              error: loaded.error,
+            };
           }
         }
         return projectionQuery(input);
@@ -1074,6 +1311,32 @@ export function createViewportRuntimeTransportService(options: {
     committedAdapter.dispose();
     return fencedViewportRuntimeService(lifecycle);
   }
+  let lastHierarchyInvalidationRevision: number | undefined;
+  const pushHierarchyProjectionToShell = (): void => {
+    const structure = committedHierarchy.getSnapshot();
+    if (structure === undefined) return;
+    const revision = structure.projectionRevision ?? structure.structureEpoch;
+    publishViewportRuntimeHierarchySnapshot({
+      structure,
+      selectionIds: [...getSelectionList()],
+      editorWorld: getEditorWorldProjection(),
+    });
+    if (revision !== lastHierarchyInvalidationRevision) {
+      lastHierarchyInvalidationRevision = revision;
+      traceHierarchyVisibility('carrier.message.out', {
+        projection: 'hierarchy',
+        revision,
+      });
+      options.notifyShellProjectionInvalidated?.({
+        projection: 'hierarchy',
+        revision,
+      });
+    }
+  };
+  committedHierarchy.subscribe(() => {
+    pushHierarchyProjectionToShell();
+  });
+  pushHierarchyProjectionToShell();
   // The runtime transport is the public owner seam for document operations.
   // Publish the callable generation only after ownership is committed, so a
   // fenced replacement cannot advertise a capability it does not serve.
@@ -1093,12 +1356,18 @@ export function createViewportRuntimeTransportService(options: {
     getRun(runId) {
       return lifecycle.state === 'active'
         ? committedTransportService.getRun(runId)
-        : ({ ok: false, error: viewportRuntimeLifecycleError(lifecycle) } as ReturnType<TransportService['getRun']>);
+        : ({
+            ok: false,
+            error: viewportRuntimeLifecycleError(lifecycle),
+          } as ReturnType<TransportService['getRun']>);
     },
     listEvents(runId) {
       return lifecycle.state === 'active'
         ? committedTransportService.listEvents(runId)
-        : Object.assign([], { ok: false, error: viewportRuntimeLifecycleError(lifecycle) }) as ReturnType<TransportService['listEvents']>;
+        : (Object.assign([], {
+            ok: false,
+            error: viewportRuntimeLifecycleError(lifecycle),
+          }) as ReturnType<TransportService['listEvents']>);
     },
     dispose() {
       if (disposed) return;

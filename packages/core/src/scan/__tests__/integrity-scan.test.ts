@@ -12,7 +12,7 @@ afterEach(() => {
 
 describe('scanAssetsIntegrity', () => {
   test('does not warn for normal source-only runtime files', async () => {
-    setPathResolver((relativePath) => relativePath ? `game/${relativePath}` : 'game');
+    setPathResolver((relativePath) => (relativePath ? `game/${relativePath}` : 'game'));
     assetIO.listSourceFiles = async () => [
       'game/assets/scene.glb',
       'game/assets/scene.glb.meta.json',
@@ -21,15 +21,19 @@ describe('scanAssetsIntegrity', () => {
     ];
     const warnings: unknown[][] = [];
     const originalWarn = console.warn;
-    console.warn = (...args: unknown[]) => { warnings.push(args); };
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args);
+    };
 
     try {
       const result = await scanAssetsIntegrity();
 
-      expect(result.needsMeta).toEqual([{
-        sourcePath: 'game/assets/hud/icon.png',
-        sourceName: 'icon.png',
-      }]);
+      expect(result.needsMeta).toEqual([
+        {
+          sourcePath: 'game/assets/hud/icon.png',
+          sourceName: 'icon.png',
+        },
+      ]);
       expect(result.diagnostics).toEqual([]);
       expect(warnings).toEqual([]);
     } finally {
@@ -38,10 +42,12 @@ describe('scanAssetsIntegrity', () => {
   });
 });
 
-
 test('native Pack sources never request a synthetic metadata sidecar', async () => {
-  setPathResolver((path) => path ? `game/${path}` : 'game');
-  assetIO.listSourceFiles = async () => ['game/assets/native.pack.ts', 'game/assets/geometry-data.ts'];
+  setPathResolver((path) => (path ? `game/${path}` : 'game'));
+  assetIO.listSourceFiles = async () => [
+    'game/assets/native.pack.ts',
+    'game/assets/geometry-data.ts',
+  ];
   const result = await scanAssetsIntegrity();
   expect(result.needsMeta).toEqual([]);
   expect(result.orphanedSidecar).toEqual([]);

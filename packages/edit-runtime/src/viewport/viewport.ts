@@ -94,18 +94,19 @@ import { createParamGizmo } from './viewport-param-gizmo';
 import { buildDragGroup, translatedMemberTarget, type DragGroupMember } from './viewport-drag-group';
 import { AXES, DEG2RAD, PLANES, type PlaneHandle } from './viewport-gizmo-geometry';
 import type { GizmoOverlayVertex } from './gizmo-overlay-geometry';
-import { readLocalTransform, readWorldTransform, readWorldQuat, worldPositionToLocal, isEntEffectivelyHidden, type EditorTransform } from './viewport-entity-read';
+import { ax, readLocalTransform, readWorldTransform, readWorldQuat, worldPositionToLocal, isEntEffectivelyHidden, type EditorTransform } from './viewport-entity-read';
+import { composeGizmoRotationDelta } from './viewport-gizmo-rotate-quat';
 import { pickMeshFallback } from './viewport-pick-fallback';
 
 import type { EditorOp, OpHandle, EngineFacade } from '@forgeax/editor-core';
-import { entExists, entComponents, resolveVisibility } from '@forgeax/editor-core';
+import { entComponent, entExists, entComponents, resolveVisibility } from '@forgeax/editor-core';
 // M3 (AC-03, plan-strategy §2 D-9): selection / field-preview / gizmo-mode go
 // through the one gateway door — gateway.dispatch({ kind, … }) — and the gizmo DRAG
 // (a document continuous op) uses the gateway lifecycle begin/update*/commit so
 // the whole multi-frame drag lands as ONE undoable command. Direct store setters
 // (setSelection/setFieldPreview/setGizmoMode) are gone. Camera orbit stays a
 // direct world.set (see the note at applyCamera).
-import { gateway, getGizmoMode, getGizmoSpace, getGizmoPivot, getSelection, getSelectionList, worldRenderableHandles, onGizmoModeChange, onGizmoSpaceChange, onGizmoPivotChange, onSelectionChange, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
+import { gateway, getGizmoMode, getGizmoSpace, getGizmoPivot, getLastVisibilityCommandEntityIds, getLastVisibilityCommandState, getSelection, getSelectionList, subscribeVisibilityRevision, worldRenderableHandles, onGizmoModeChange, onGizmoSpaceChange, onGizmoPivotChange, onSelectionChange, clearAssetSelection, clearFolderSelection } from '@forgeax/editor-core';
 // M4: EngineSync import removed — sync.ts deleted (projection layer collapse).
 import { isAuxVisible, onDisplayModeChange } from './display-bus';
 
@@ -431,20 +432,31 @@ export function createViewport({
   // stale orbit `dist`, and ortho zoom scales the gizmo by the half-height.
   const gizmoViewScaleAt = (anchor: Vec3): number =>
     gizmoViewScale(projection, camPos, anchor, orthoHalfHeight, fov);
+  /** Non-null while dragging a rotate gizmo ring (0=X, 1=Y, 2=Z). */
+  const rotateGizmoFocus = { axis: null as number | null };
   const gizmoPool = createGizmoPool({
     getAnchor: gizmoAnchor,
     getGizmoMode,
     getGizmoSpace,
     isAuxVisible,
     getViewScale: gizmoViewScaleAt,
+    getActiveRotateAxis: () => rotateGizmoFocus.axis,
   });
   const selectionOutline = createSelectionStencilOutlinePool({
     sceneWorld: () => gateway.activeWorld,
     editorEngine,
     getSelectionList,
+    // Orange stencil chrome follows selection only. Affect roots apply on *hide*
+    // so an eye toggle without viewport selection still tears down ghosts; never
+    // spawn outline when re-showing (inherited/visible command).
+    getVisibilityAffectRoots: () => (
+      getLastVisibilityCommandState() === 'hidden'
+        ? getLastVisibilityCommandEntityIds()
+        : []
+    ),
     getRenderableHandles: worldRenderableHandles,
     isAuxVisible,
-    isEditMode: () => true,
+    isEditMode: () => !inputToGame(),
   });
   const paramGizmo = createParamGizmo({
     getSelection,
@@ -464,12 +476,6 @@ export function createViewport({
   };
   const getOverlayVertexData = (): Float32Array => {
     if (previewOnly) return new Float32Array(0);
-    // #931 moved gizmo visuals to a per-frame overlay stream. Recompute placement
-    // here so world pivots/orientation track propagateTransforms even when the
-    // selected entity's authored local Transform JSON is unchanged (e.g. a
-    // parent rotated and moved this child in world space).
-    gizmoPool.update();
-    paramGizmo.update();
     const vertices: GizmoOverlayVertex[] = [
       ...gizmoPool.getOverlayVertices(),
       ...paramGizmo.getOverlayVertices(),
@@ -556,11 +562,12 @@ export function createViewport({
   }
 
   /**
-   * Walk up the ChildOf hierarchy from `handle` until we find an editor-level
-   * entity. M3 (I1): handle IS identity, so an "editor-level" entity is one the
-   * editor authors — it carries a Name (entExists). This resolves internal mesh
-   * entities (e.g. inside a GLB mount, which have no Name) to their named
-   * editor-level ancestor. Returns the handle, or null if hidden / none found.
+   * Walk up the ChildOf hierarchy from `handle` and resolve the outermost
+   * authored entity. M3 (I1): handle IS identity, so an "editor-level" entity
+   * is one the editor authors — it carries a Name (entExists). A model pick
+   * commonly lands on a named mesh/part below the actor root; stopping at the
+   * first Name would make a drag move only that part instead of the character.
+   * Returns the handle, or null if hidden / none found.
    */
   function resolveEditorEntity(world: World, handle: EntityHandle): EntityHandle | null {
     const visibility = resolveVisibility(world);
@@ -571,9 +578,7 @@ export function createViewport({
     while (cur !== undefined) {
       if (seen.has(cur as number)) break;
       seen.add(cur as number);
-      if (entExists(world, cur)) {
-        if (candidate === null) candidate = cur;
-      }
+      if (entExists(world, cur)) candidate = cur;
       // merge origin/main: main's ChildOf-walk read the raw `world`; the IoC
       // refactor removed that binding — reads go through the injected facade.
       const co = engine.get(cur, ChildOf) as { ok: true; value: { parent: number } } | { ok: false };
@@ -736,6 +741,46 @@ export function createViewport({
   // started in translate mode. Rotate/scale stay primary-only (documented gap).
   let dragGroup: DragGroupMember[] = [];
   const qd = quat.create();
+  const dragStartQuat = quat.create();
+  const qRotateOut = quat.create();
+  /** Set during gizmo rotate drag; committed as Transform.quat on release. */
+  let liveQuatPatch: [number, number, number, number] | null = null;
+
+  const readEntityLocalQuat = (handle: EntityHandle, out: ReturnType<typeof quat.create>): void => {
+    const r = entComponent(gateway.activeWorld, handle, 'Transform');
+    if (!r.ok) {
+      quat.identity(out);
+      return;
+    }
+    const raw = (r.value as Record<string, unknown>).quat;
+    out[0] = ax(raw, 0, 0);
+    out[1] = ax(raw, 1, 0);
+    out[2] = ax(raw, 2, 0);
+    out[3] = ax(raw, 3, 1);
+  };
+
+  const enginePatchFromDragPose = (
+    eulerPartial: Record<string, number>,
+    quatOverride: [number, number, number, number] | null,
+  ): Record<string, number[]> => {
+    const m = { ...dragOrig, ...eulerPartial };
+    const data: Record<string, number[]> = {
+      pos: [num(m.x, 0), num(m.y, 0), num(m.z, 0)],
+      scale: [num(m.scaleX, 1), num(m.scaleY, 1), num(m.scaleZ, 1)],
+    };
+    if (quatOverride !== null) {
+      data.quat = [...quatOverride];
+      return data;
+    }
+    const rx = num(m.rotX, 0), ry = num(m.rotY, 0), rz = num(m.rotZ, 0);
+    if (rx || ry || rz) {
+      quat.fromEuler(qd, rx * DEG2RAD, ry * DEG2RAD, rz * DEG2RAD, 'XYZ');
+      data.quat = [qd[0]!, qd[1]!, qd[2]!, qd[3]!];
+    } else {
+      data.quat = [0, 0, 0, 1];
+    }
+    return data;
+  };
 
   /** Convert an editor-shape Transform (x/y/z + rotX/rotY/rotZ + scale) into the
    *  engine-native POD (pos[3] + quat[4] + scale[3] arrays — feat-20260709). M7-a:
@@ -758,7 +803,27 @@ export function createViewport({
   /** Preview through the active engine world. The gateway lifecycle still opens
    *  once for validation/snapshot, but its synchronous revert/re-apply update
    *  is deferred until pointerup so pointermove never blocks on document work. */
+  const applyLiveQuat = (q: ReturnType<typeof quat.create>): void => {
+    liveQuatPatch = [q[0]!, q[1]!, q[2]!, q[3]!];
+    livePatch = {};
+    if (dragWorld === undefined || dragId === null) return;
+    const enginePatch = enginePatchFromDragPose({}, liveQuatPatch);
+    if (dragHandle === null) {
+      const b = gateway.begin({ kind: 'setComponent', entity: dragId, component: 'Transform', patch: toEnginePatch(dragOrig) });
+      if (b.ok) dragHandle = b.handle;
+    }
+    applyDragPreview(() => {
+      if (dragHandle !== null) {
+        const result = gateway.preview(dragHandle, { patch: enginePatch });
+        if (result.ok) return;
+        dragHandle = null;
+      }
+      engine.set(dragWorld!, Transform, enginePatch);
+    });
+  };
+
   const applyLive = (patch: Record<string, number>): void => {
+    liveQuatPatch = null;
     livePatch = patch;
     if (dragWorld === undefined || dragId === null) return;
     const enginePatch = toEnginePatch({ ...dragOrig, ...patch });
@@ -772,10 +837,14 @@ export function createViewport({
     // this pose instead of one queued behind it.
     applyDragPreview(() => {
       if (dragHandle !== null) {
-        gateway.preview(dragHandle, { patch: enginePatch });
-      } else {
-        engine.set(dragWorld!, Transform, enginePatch);
+        const result = gateway.preview(dragHandle, { patch: enginePatch });
+        if (result.ok) return;
+        // The continuous op may have been interrupted by a scene/session
+        // change between pointerdown and pointermove. Do not leave the
+        // viewport visually frozen just because the document lifecycle ended.
+        dragHandle = null;
       }
+      engine.set(dragWorld!, Transform, enginePatch);
     });
   };
   /** Multi-selection translate drag: preview directly in the active world and
@@ -814,14 +883,14 @@ export function createViewport({
     // final update is committed to document history on pointerup.
     applyDragPreview(() => {
       if (dragHandle !== null) {
-        gateway.preview(dragHandle, { commands });
-      } else {
-        for (const c of commands) engine.set(c.entity, Transform, c.patch);
+        const result = gateway.preview(dragHandle, { commands });
+        if (result.ok) return;
+        dragHandle = null;
       }
+      for (const c of commands) engine.set(c.entity, Transform, c.patch);
     });
   };
   const snap = (v: number, step: number, on: boolean): number => (on ? Math.round(v / step) * step : v);
-  const ROT_KEYS = ['rotX', 'rotY', 'rotZ'];
   const SCALE_KEYS = ['scaleX', 'scaleY', 'scaleZ'];
 
   // The viewport is a physical canvas boundary. Events outside it belong to the
@@ -889,6 +958,8 @@ export function createViewport({
       dragWorldPos = [num(worldT?.x, 0), num(worldT?.y, 0), num(worldT?.z, 0)];
       axisStart = [...dragWorldPos];
       livePatch = {};
+      liveQuatPatch = null;
+      rotateGizmoFocus.axis = null;
       liveGroupCommands = [];
       // Multi-selection translate drag (plan §4.3): build the group and re-base
       // the axis reference on the gizmo anchor (multi = average center), so the
@@ -913,11 +984,20 @@ export function createViewport({
         dragPlane = null;
         axisIdx = h;
         axisVec = gizmoPool.getAxis(h);
-        if (getGizmoMode() === 'rotate') angle0 = angleOnAxis(origin, dir, axisStart, axisVec) ?? 0;
-        else axisT0 = closestAxisT(origin, dir, axisStart, axisVec);
+        if (getGizmoMode() === 'rotate') {
+          angle0 = angleOnAxis(origin, dir, axisStart, axisVec) ?? 0;
+          liveQuatPatch = null;
+          if (dragId !== null) readEntityLocalQuat(dragId, dragStartQuat);
+          else quat.identity(dragStartQuat);
+          rotateGizmoFocus.axis = h;
+        } else {
+          axisT0 = closestAxisT(origin, dir, axisStart, axisVec);
+          rotateGizmoFocus.axis = null;
+        }
       }
       mode = 'axisDrag';
       captureEntityDrag(e);
+      if (getGizmoMode() === 'rotate' && h < 3) updateGizmo(false);
       return;
     }
     const hit = pick(e.clientX, e.clientY);
@@ -1016,9 +1096,13 @@ export function createViewport({
       } else if (gm === 'rotate') {
         const a = angleOnAxis(origin, dir, axisStart, axisVec);
         if (a !== null) {
-          const key = ROT_KEYS[axisIdx]!;
-          const deg = num(dragOrig[key], 0) + (a - angle0) / DEG2RAD;
-          applyLive({ [key]: snap(deg, 15, ctrl) });
+          composeGizmoRotationDelta(
+            [dragStartQuat[0]!, dragStartQuat[1]!, dragStartQuat[2]!, dragStartQuat[3]!],
+            axisVec,
+            a - angle0,
+            qRotateOut,
+          );
+          applyLiveQuat(qRotateOut);
         }
       } else if (gm === 'scale') {
         const delta = closestAxisT(origin, dir, axisStart, axisVec) - axisT0;
@@ -1100,9 +1184,9 @@ export function createViewport({
     if (dragHandle !== null) {
       if (dragGroup.length > 1) {
         gateway.update(dragHandle, { commands: liveGroupCommands });
-      } else if (Object.keys(livePatch).length > 0 && dragId !== null) {
+      } else if ((Object.keys(livePatch).length > 0 || liveQuatPatch !== null) && dragId !== null) {
         gateway.update(dragHandle, {
-          patch: toEnginePatch({ ...dragOrig, ...livePatch }),
+          patch: enginePatchFromDragPose(livePatch, liveQuatPatch),
         });
       }
       gateway.commit(dragHandle);
@@ -1110,16 +1194,18 @@ export function createViewport({
     } else if (
       (endedMode === 'drag' || endedMode === 'axisDrag') &&
       dragId !== null &&
-      Object.keys(livePatch).length > 0
+      (Object.keys(livePatch).length > 0 || liveQuatPatch !== null)
     ) {
       gateway.dispatch({
         kind: 'setComponent',
         entity: dragId,
         component: 'Transform',
-        patch: toEnginePatch({ ...dragOrig, ...livePatch }),
+        patch: enginePatchFromDragPose(livePatch, liveQuatPatch),
       }, 'human');
     }
-    mode = 'none'; gestureStart = null; dragId = null; dragWorld = undefined; livePatch = {}; liveGroupCommands = []; dragPlane = null; dragGroup = [];
+    mode = 'none'; gestureStart = null; dragId = null; dragWorld = undefined;
+    livePatch = {}; liveQuatPatch = null; rotateGizmoFocus.axis = null;
+    liveGroupCommands = []; dragPlane = null; dragGroup = [];
     // D-12 path A (S13 / AC-30): a completed camera-nav gesture records ONE
     // cameraOrbit session op carrying the gesture-end pose. Mid-frame poses stayed
     // on the facade direct write (applyCamera) — out of the ledger (OOS-4). A
@@ -1295,8 +1381,8 @@ export function createViewport({
   // W / E / R switch gizmo mode (move / rotate / scale); F frames the selection.
   // Skipped while typing. NOTE (keyboard-router convergence M4 T4-5): Delete /
   // Backspace / F2 / Ctrl+D / Ctrl+A / G are intentionally NOT handled here — they
-  // live in the single global-shortcuts router (interface submodule). This keeps
-  // exactly ONE global keydown listener (G-1 / AC-A1) and routes every edit gesture
+  // live in the published Interface package's single global-shortcuts router.
+  // This keeps exactly ONE global keydown listener (G-1 / AC-A1) and routes every edit gesture
   // through the one gateway door.
   function normalizedViewportKey(e: KeyboardEvent): string | null {
     if (e.isComposing || e.keyCode === 229 || e.key === 'Process') return null;
@@ -1439,6 +1525,11 @@ export function createViewport({
   const unsubMode = previewOnly ? () => {} : onGizmoModeChange(updateGizmo);
   const unsubSpace = previewOnly ? () => {} : onGizmoSpaceChange(updateGizmo);
   const unsubPivot = previewOnly ? () => {} : onGizmoPivotChange(updateGizmo);
+  const unsubVisibility = previewOnly ? () => {} : subscribeVisibilityRevision(() => {
+    selectionOutline.clear();
+    lastSelSig = selSig();
+    refreshGizmos();
+  });
   const unsubDoc = previewOnly ? () => {} : gateway.subscribe(() => {
     const sig = selSig();
     if (sig === lastSelSig) return; // selected entity unchanged → gizmos unaffected
@@ -1490,6 +1581,7 @@ export function createViewport({
       unsubSpace();
       unsubPivot();
       unsubDoc();
+      unsubVisibility();
       unsubDisplay();
       unsubPrefs();
       unregCameraAppliers();

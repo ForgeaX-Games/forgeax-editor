@@ -32,18 +32,11 @@ function fail(msg) {
 
 const ENGINE = join(ROOT, 'packages', 'engine');
 
-// Pull the vendored submodules (interface + engine + platform-io) so a fresh
-// standalone clone has DockShell/app-kit (interface), the engine build inputs,
-// and the @forgeax/platform-io backend (B2 selfcheck reuses it) present.
-sh('git', ['submodule', 'update', '--init', '--recursive', 'packages/interface', 'packages/engine', 'packages/platform-io'], {
+// Pull the engine build inputs and the @forgeax/platform-io backend (B2
+// selfcheck reuses it). Interface is installed as a published package.
+sh('git', ['submodule', 'update', '--init', '--recursive', 'packages/engine', 'packages/platform-io'], {
   quiet: true,
 });
-
-// interface is consumed as TS source via vite — no build step, just fail loudly
-// if the submodule did not populate.
-if (!existsSync(join(ROOT, 'packages', 'interface', 'src', 'app-kit.ts'))) {
-  fail('packages/interface submodule missing (run: git submodule update --init --recursive)');
-}
 
 if (!existsSync(join(ROOT, 'node_modules'))) sh('bun', ['install']);
 

@@ -5,6 +5,7 @@
     {
       "guid": "cd16a32c-0fd2-4c02-861d-a5537baaa793",
       "kind": "material",
+      "execution": "cooked",
       "sourceKey": "arc-nova-shard.wgsl",
       "payload": {
         "kind": "material",
@@ -27,11 +28,20 @@
             }
           }
         ],
+        "parameters": [
+          { "name": "baseColor", "type": "color", "colorSpace": "linear" },
+          { "name": "emissive", "type": "color", "colorSpace": "linear" },
+          { "name": "emissiveIntensity", "type": "f32" },
+          { "name": "clearcoat", "type": "f32" },
+          { "name": "metallic", "type": "f32" },
+          { "name": "roughness", "type": "f32" },
+          { "name": "clearcoatRoughness", "type": "f32" }
+        ],
         "values": {
           "baseColor": [0.58, 0.68, 0.92, 1.0],
           "metallic": 0.88,
           "roughness": 0.1,
-          "emissive": [0.06, 0.28, 0.72],
+          "emissive": [0.06, 0.28, 0.72, 1.0],
           "emissiveIntensity": 1.15,
           "clearcoat": 1.0,
           "clearcoatRoughness": 0.035

@@ -3,10 +3,10 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { RuntimeAssetBinding } from '@forgeax/engine-types';
-import type { PluginPack } from '@forgeax/engine-vite-plugin-pack';
 import {
   createRuntimeScopeController,
   type RuntimeScopeCommand,
+  type RuntimeScopePack,
   type RuntimeScopeControllerOptions,
 } from '../runtime-scope-controller';
 
@@ -118,7 +118,7 @@ describe('runtime scope controller integration', () => {
           current = { ...binding, status: 'ready', authority: 'authoritative' };
           return current;
         },
-      } as unknown as PluginPack;
+      } satisfies RuntimeScopePack;
       const { middleware } = installController({
         pack,
         base: '/preview',
@@ -163,7 +163,7 @@ describe('runtime scope controller integration', () => {
           current = { ...binding, status: 'ready', authority: 'authoritative' };
           return current;
         },
-      } as unknown as PluginPack;
+      } satisfies RuntimeScopePack;
       const { middleware } = installController({
         pack,
         base: '/preview',

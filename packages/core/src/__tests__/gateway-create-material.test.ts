@@ -215,8 +215,8 @@ describe('createMaterial applier builds a real Materials.standard() POD', () => 
     expect(payload.passes.length).toBeGreaterThanOrEqual(2);
     // The authored params survive into values (the data-loss the friction feared).
     expect(payload.values.baseColor).toEqual([1, 0.84, 0, 1]);
-    // Omission is the schema-defined sRGB default; existing numeric assets need no migration.
-    expect(payload.colorSpace).toBeUndefined();
+    // Materials.standard emits canonical linear color values.
+    expect(payload.colorSpace).toBe('linear');
     expect(payload.values.metallic).toBe(1);
     expect(payload.values.roughness).toBe(0.25);
   });

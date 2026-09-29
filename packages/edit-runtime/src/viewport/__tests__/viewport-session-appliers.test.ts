@@ -14,18 +14,30 @@ function deps() {
     runtimeId: 'runtime-test', runtimeGeneration: 1,
   };
   const world = {
-    addSystem: () => ({ unwrap: () => { calls.push('addSystem'); } }),
-    removeSystem: () => ({ unwrap: () => { calls.push('removeSystem'); } }),
+    addSystem: () => ({ unwrap: () => { calls.push('addSystem'); },
+    }),
+    removeSystem: () => ({ unwrap: () => { calls.push('removeSystem'); },
+    }),
   } as never;
   return {
     calls,
     provenance,
     value: {
-      play: (policy: PlayDirtyPolicy) => { calls.push(`play:${policy}`); return { ok: true as const }; },
-      stop: () => { calls.push('stop'); },
-      setDisplay: (display: 'scene' | 'game') => { calls.push(`display:${display}`); },
-      grantGameControl: () => { calls.push('grant'); },
-      releaseGameControl: () => { calls.push('release'); },
+      play: (policy: PlayDirtyPolicy) => { calls.push(`play:${policy}`);
+        return { ok: true as const };
+      },
+      stop: () => {
+        calls.push('stop');
+      },
+      setDisplay: (display: 'scene' | 'game') => {
+        calls.push(`display:${display}`);
+      },
+      grantGameControl: () => {
+        calls.push('grant');
+      },
+      releaseGameControl: () => {
+        calls.push('release');
+      },
       replayParticleEffect: (entity: number) => {
         if (entity !== 42) {
           return {
@@ -39,11 +51,21 @@ function deps() {
         calls.push(`replay:${entity}`);
         return { ok: true as const };
       },
-      captureFrame: async (frames: number) => { calls.push(`capture:${frames}`); return { runId: 'capture-test', tapePath: 'frame.tape.bin', reportPath: 'frame.report.json', provenance }; },
+      captureFrame: async (frames: number) => {
+        calls.push(`capture:${frames}`);
+        return {
+          runId: 'capture-test',
+          tapePath: 'frame.tape.bin',
+          reportPath: 'frame.report.json',
+          provenance,
+        };
+      },
       world,
       activeWorld: () => world,
       removeSystem: (targetWorld: unknown, name: string) => {
-        const result = (targetWorld as { removeSystem: (systemName: string) => { unwrap(): void } }).removeSystem(name);
+        const result = (
+          targetWorld as { removeSystem: (systemName: string) => { unwrap(): void } }
+        ).removeSystem(name);
         result.unwrap();
         return { ok: true as const };
       },
@@ -56,10 +78,15 @@ describe('viewport session applier registrar (M3)', () => {
   it('passes the operation request identity directly to the Play owner', () => {
     const d = deps();
     const requests: (string | undefined)[] = [];
-    registered.push(registerViewportSessionAppliers({ ...d.value, play: (_policy, _origin, requestId) => {
-      requests.push(requestId);
-      return { ok: true };
-    } }));
+    registered.push(
+      registerViewportSessionAppliers({
+        ...d.value,
+        play: (_policy, _origin, requestId) => {
+          requests.push(requestId);
+          return { ok: true };
+        },
+      }),
+    );
     gateway.dispatch({ kind: 'play', requestId: 'specific-play-request' }, 'ai');
     expect(requests).toEqual(['specific-play-request']);
   });
@@ -67,10 +94,22 @@ describe('viewport session applier registrar (M3)', () => {
   it('registers viewport operations and routes calls to runtime deps', () => {
     const d = deps();
     registered.push(registerViewportSessionAppliers(d.value));
-    expect(gateway.dispatch({ kind: 'play', dirtyPolicy: 'last-saved' })).toMatchObject({ ok: true, result: { operationRun: { status: 'running' } } });
-    expect(gateway.dispatch({ kind: 'play' }, 'ai')).toMatchObject({ ok: true, result: { operationRun: { status: 'running' } } });
-    expect(gateway.dispatch({ kind: 'play' }, 'human')).toMatchObject({ ok: true, result: { operationRun: { status: 'running' } } });
-    expect(gateway.dispatch({ kind: 'play', dirtyPolicy: 'prompt' } as never)).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
+    expect(gateway.dispatch({ kind: 'play', dirtyPolicy: 'last-saved' })).toMatchObject({
+      ok: true,
+      result: { operationRun: { status: 'running' } },
+    });
+    expect(gateway.dispatch({ kind: 'play' }, 'ai')).toMatchObject({
+      ok: true,
+      result: { operationRun: { status: 'running' } },
+    });
+    expect(gateway.dispatch({ kind: 'play' }, 'human')).toMatchObject({
+      ok: true,
+      result: { operationRun: { status: 'running' } },
+    });
+    expect(gateway.dispatch({ kind: 'play', dirtyPolicy: 'prompt' } as never)).toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_ARGS' },
+    });
     expect(gateway.dispatch({ kind: 'stop' })).toEqual({ ok: true });
     expect(gateway.dispatch({ kind: 'setDisplay', display: 'game' })).toEqual({ ok: true });
     expect(gateway.dispatch({ kind: 'grantGameControl' })).toEqual({ ok: true });
@@ -80,9 +119,19 @@ describe('viewport session applier registrar (M3)', () => {
       ok: false,
       error: { code: 'vfx-host-control-player-unavailable' },
     });
-    expect(gateway.dispatch({ kind: 'addSystem', name: '' })).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
+    expect(gateway.dispatch({ kind: 'addSystem', name: '' })).toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_ARGS' },
+    });
     expect(gateway.dispatch({ kind: 'removeSystem', name: 'test-system' })).toEqual({ ok: true });
-    expect(gateway.dispatch({ kind: 'assignAssetToEntity', entity: -1, asset: { guid: 'x', kind: 'mesh', name: 'x' }, requestId: 'assign-invalid' })).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
+    expect(
+      gateway.dispatch({
+        kind: 'assignAssetToEntity',
+        entity: -1,
+        asset: { guid: 'x', kind: 'mesh', name: 'x' },
+        requestId: 'assign-invalid',
+      }),
+    ).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
     expect(d.calls).toEqual([
       'play:last-saved',
       'play:save-then-play',
@@ -101,13 +150,20 @@ describe('viewport session applier registrar (M3)', () => {
     registered.push(registerViewportSessionAppliers(d.value));
     const requestId = 'capture-session-test';
     const accepted = gateway.dispatch({ kind: 'captureFrame', frames: 1, requestId }, 'ai');
-    expect(accepted).toMatchObject({ ok: true, result: { operationRun: { requestId, operationId: 'captureFrame', status: 'running' } } });
+    expect(accepted).toMatchObject({
+      ok: true,
+      result: { operationRun: { requestId, operationId: 'captureFrame', status: 'running' } },
+    });
     expect(await gateway.waitOperationRun(requestId)).toMatchObject({
       ok: true,
       value: {
         status: 'succeeded',
         progress: { fraction: 1, stage: 'succeeded' },
-        result: { runId: 'capture-test', tapePath: 'frame.tape.bin', reportPath: 'frame.report.json' },
+        result: {
+          runId: 'capture-test',
+          tapePath: 'frame.tape.bin',
+          reportPath: 'frame.report.json',
+        },
       },
     });
     expect(d.calls).toContain('capture:1');
@@ -115,10 +171,16 @@ describe('viewport session applier registrar (M3)', () => {
 
   it('fails a successful-looking capture closed when producer provenance is absent', async () => {
     const d = deps();
-    registered.push(registerViewportSessionAppliers({
-      ...d.value,
-      captureFrame: async () => ({ runId: 'untrusted', tapePath: 'untrusted.tape.bin', reportPath: 'untrusted.report.json' }),
-    }));
+    registered.push(
+      registerViewportSessionAppliers({
+        ...d.value,
+        captureFrame: async () => ({
+          runId: 'untrusted',
+          tapePath: 'untrusted.tape.bin',
+          reportPath: 'untrusted.report.json',
+        }),
+      }),
+    );
     gateway.dispatch({ kind: 'captureFrame', requestId: 'capture-no-provenance' }, 'ai');
     await expect(gateway.waitOperationRun('capture-no-provenance')).resolves.toMatchObject({
       ok: true,
@@ -130,9 +192,14 @@ describe('viewport session applier registrar (M3)', () => {
     const d = deps();
     const profiler = createProfiler();
     profiler.registerPhaseCatalog('app', ['frame-total']);
-    registered.push(registerViewportSessionAppliers({ ...d.value, profiler, captureTimeoutMs: 100 }));
+    registered.push(
+      registerViewportSessionAppliers({ ...d.value, profiler, captureTimeoutMs: 100 }),
+    );
     const requestId = 'profile-session-test';
-    const accepted = gateway.dispatch({ kind: 'captureCpuProfile', frames: 1, eventLimit: 8, requestId }, 'ai');
+    const accepted = gateway.dispatch(
+      { kind: 'captureCpuProfile', frames: 1, eventLimit: 8, requestId },
+      'ai',
+    );
     expect(accepted).toMatchObject({
       ok: true,
       result: { operationRun: { requestId, operationId: 'captureCpuProfile', status: 'running' } },
@@ -163,7 +230,9 @@ describe('viewport session applier registrar (M3)', () => {
   it('reports unavailable and busy CPU profiler states structurally', async () => {
     const unavailable = deps();
     registered.push(registerViewportSessionAppliers({ ...unavailable.value, profiler: undefined }));
-    expect(gateway.dispatch({ kind: 'captureCpuProfile', requestId: 'profile-unavailable' }, 'ai')).toMatchObject({
+    expect(
+      gateway.dispatch({ kind: 'captureCpuProfile', requestId: 'profile-unavailable' }, 'ai'),
+    ).toMatchObject({
       ok: false,
       error: { code: 'profiler-unavailable', retryable: true },
     });
@@ -173,8 +242,12 @@ describe('viewport session applier registrar (M3)', () => {
     const profiler = createProfiler();
     profiler.registerPhaseCatalog('app', ['frame-total']);
     profiler.startCapture({ frameLimit: 2, eventLimit: 8 });
-    registered.push(registerViewportSessionAppliers({ ...busy.value, profiler, captureTimeoutMs: 100 }));
-    expect(gateway.dispatch({ kind: 'captureCpuProfile', requestId: 'profile-busy' }, 'ai')).toMatchObject({ ok: true });
+    registered.push(
+      registerViewportSessionAppliers({ ...busy.value, profiler, captureTimeoutMs: 100 }),
+    );
+    expect(
+      gateway.dispatch({ kind: 'captureCpuProfile', requestId: 'profile-busy' }, 'ai'),
+    ).toMatchObject({ ok: true });
     expect(await gateway.waitOperationRun('profile-busy')).toMatchObject({
       ok: true,
       value: { status: 'failed', error: { code: 'profiler-busy' } },
@@ -185,31 +258,50 @@ describe('viewport session applier registrar (M3)', () => {
   it('reports missing RHI debug as a structured gateway error', () => {
     const d = deps();
     registered.push(registerViewportSessionAppliers({ ...d.value, captureFrame: undefined }));
-    expect(gateway.dispatch({ kind: 'captureFrame', requestId: 'capture-no-debug' })).toMatchObject({
-      ok: false,
-      error: { code: 'rhi-debug-unavailable', retryable: true },
-    });
+    expect(gateway.dispatch({ kind: 'captureFrame', requestId: 'capture-no-debug' })).toMatchObject(
+      {
+        ok: false,
+        error: { code: 'rhi-debug-unavailable', retryable: true },
+      },
+    );
   });
 
   it('retries a failed capture with a new request identity', async () => {
     const d = deps();
     let attempts = 0;
-    registered.push(registerViewportSessionAppliers({
-      ...d.value,
-      captureFrame: async () => {
-        attempts += 1;
-        if (attempts === 1) throw new Error('debug upload failed');
-        return { runId: 'capture-retry', tapePath: 'retry.tape.bin', reportPath: 'retry.report.json', provenance: d.provenance };
-      },
-    }));
-    expect(gateway.dispatch({ kind: 'captureFrame', requestId: 'capture-retry-source' }, 'ai')).toMatchObject({ ok: true });
+    registered.push(
+      registerViewportSessionAppliers({
+        ...d.value,
+        captureFrame: async () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error('debug upload failed');
+          return {
+            runId: 'capture-retry',
+            tapePath: 'retry.tape.bin',
+            reportPath: 'retry.report.json',
+            provenance: d.provenance,
+          };
+        },
+      }),
+    );
+    expect(
+      gateway.dispatch({ kind: 'captureFrame', requestId: 'capture-retry-source' }, 'ai'),
+    ).toMatchObject({ ok: true });
     expect(await gateway.waitOperationRun('capture-retry-source')).toMatchObject({
       ok: true,
       value: { status: 'failed', retryable: true, error: { code: 'rhi-capture-failed' } },
     });
-    expect(gateway.retryOperationRun('capture-retry-source', 'capture-retry-attempt-2', 'ai')).toMatchObject({
+    expect(
+      gateway.retryOperationRun('capture-retry-source', 'capture-retry-attempt-2', 'ai'),
+    ).toMatchObject({
       ok: true,
-      result: { operationRun: { requestId: 'capture-retry-attempt-2', parentRunId: expect.any(String), attempt: 2 } },
+      result: {
+        operationRun: {
+          requestId: 'capture-retry-attempt-2',
+          parentRunId: expect.any(String),
+          attempt: 2,
+        },
+      },
     });
     expect(await gateway.waitOperationRun('capture-retry-attempt-2')).toMatchObject({
       ok: true,
@@ -219,27 +311,31 @@ describe('viewport session applier registrar (M3)', () => {
 
   it('preserves structured RHI timeout evidence in the Gateway cause', async () => {
     const d = deps();
-    registered.push(registerViewportSessionAppliers({
-      ...d.value,
-      captureFrame: async () => {
-        throw {
-          code: 'snapshot-timeout',
-          expected: 'frame-header resource snapshot completes within 30000 ms',
-          hint: 'GPU readback did not complete',
-          detail: {
-            timeoutMs: 30000,
-            stage: 'resource-readback',
-            totalResources: 42,
-            completedResources: 17,
-            skippedResources: 3,
-            currentHandleId: 'texture:99',
-            currentKind: 'texture',
-            elapsedMs: 30001,
-          },
-        };
-      },
-    }));
-    expect(gateway.dispatch({ kind: 'captureFrame', requestId: 'capture-structured-error' }, 'ai')).toMatchObject({ ok: true });
+    registered.push(
+      registerViewportSessionAppliers({
+        ...d.value,
+        captureFrame: async () => {
+          throw {
+            code: 'snapshot-timeout',
+            expected: 'frame-header resource snapshot completes within 30000 ms',
+            hint: 'GPU readback did not complete',
+            detail: {
+              timeoutMs: 30000,
+              stage: 'resource-readback',
+              totalResources: 42,
+              completedResources: 17,
+              skippedResources: 3,
+              currentHandleId: 'texture:99',
+              currentKind: 'texture',
+              elapsedMs: 30001,
+            },
+          };
+        },
+      }),
+    );
+    expect(
+      gateway.dispatch({ kind: 'captureFrame', requestId: 'capture-structured-error' }, 'ai'),
+    ).toMatchObject({ ok: true });
     expect(await gateway.waitOperationRun('capture-structured-error')).toMatchObject({
       ok: true,
       value: {
@@ -262,16 +358,18 @@ describe('viewport session applier registrar (M3)', () => {
 
   it('keeps capture resource failures as the terminal Gateway error code', async () => {
     const d = deps();
-    registered.push(registerViewportSessionAppliers({
-      ...d.value,
-      captureFrame: async () => {
-        throw {
-          code: 'capture-disk-space-insufficient',
-          hint: 'free disk space before retrying',
-          detail: { availableBytes: 100, requiredBytes: 2048, frames: 2 },
-        };
-      },
-    }));
+    registered.push(
+      registerViewportSessionAppliers({
+        ...d.value,
+        captureFrame: async () => {
+          throw {
+            code: 'capture-disk-space-insufficient',
+            hint: 'free disk space before retrying',
+            detail: { availableBytes: 100, requiredBytes: 2048, frames: 2 },
+          };
+        },
+      }),
+    );
     gateway.dispatch({ kind: 'captureFrame', frames: 2, requestId: 'capture-low-space' }, 'ai');
     expect(await gateway.waitOperationRun('capture-low-space')).toMatchObject({
       ok: true,
@@ -288,12 +386,16 @@ describe('viewport session applier registrar (M3)', () => {
 
   it('fails a capture that never settles instead of leaving its OperationRun running forever', async () => {
     const d = deps();
-    registered.push(registerViewportSessionAppliers({
-      ...d.value,
-      captureTimeoutMs: 10,
-      captureFrame: () => new Promise<never>(() => undefined),
-    }));
-    expect(gateway.dispatch({ kind: 'captureFrame', requestId: 'capture-outer-timeout' }, 'ai')).toMatchObject({ ok: true });
+    registered.push(
+      registerViewportSessionAppliers({
+        ...d.value,
+        captureTimeoutMs: 10,
+        captureFrame: () => new Promise<never>(() => undefined),
+      }),
+    );
+    expect(
+      gateway.dispatch({ kind: 'captureFrame', requestId: 'capture-outer-timeout' }, 'ai'),
+    ).toMatchObject({ ok: true });
     expect(await gateway.waitOperationRun('capture-outer-timeout')).toMatchObject({
       ok: true,
       value: {
@@ -316,9 +418,15 @@ describe('viewport session applier registrar (M3)', () => {
   it('validates display/name, rejects duplicate registration, and disposes idempotently', () => {
     const first = registerViewportSessionAppliers(deps().value);
     expect(() => registerViewportSessionAppliers(deps().value)).toThrow();
-    expect(gateway.dispatch({ kind: 'setDisplay', display: 'bad' })).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
+    expect(gateway.dispatch({ kind: 'setDisplay', display: 'bad' })).toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_ARGS' },
+    });
     first();
     first();
-    expect(gateway.dispatch({ kind: 'play' })).toMatchObject({ ok: false, error: { code: 'UNKNOWN_OP' } });
+    expect(gateway.dispatch({ kind: 'play' })).toMatchObject({
+      ok: false,
+      error: { code: 'UNKNOWN_OP' },
+    });
   });
 });

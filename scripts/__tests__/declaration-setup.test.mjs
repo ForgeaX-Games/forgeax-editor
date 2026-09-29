@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(resolve(scriptsDir, '..', 'fx.ts'), 'utf8');
+const engineDeclarationsSource = readFileSync(
+  resolve(scriptsDir, '..', 'lib', 'engine-declarations.ts'),
+  'utf8',
+);
 const declarationStart = source.indexOf('function buildEngineDeclarations(): void {');
 const declarationEnd = source.indexOf('\n}\n\nasync function install(): Promise<void>', declarationStart);
 const declarationBuild = source.slice(declarationStart, declarationEnd);
@@ -24,8 +28,8 @@ describe('editor declaration setup gate', () => {
   it('uses a conditional clean for cold builds without a compatibility producer', () => {
     expect(declarationBuild).toContain('engineDeclarationsAreTrusted()');
     expect(declarationBuild).toContain("'--clean'");
-    expect(source).toContain("'index.d.ts'");
-    expect(source).toContain("'index.d.ts.map'");
+    expect(engineDeclarationsSource).toContain("'index.d.ts'");
+    expect(engineDeclarationsSource).toContain("'index.d.ts.map'");
     for (const producer of ['render-graph', 'vfx-render', 'vfx-compiler']) {
       expect(declarationBuild).not.toContain(producer);
     }
@@ -37,8 +41,8 @@ describe('editor declaration setup gate', () => {
     expect(source).toContain("'-C', ENGINE_DIR, 'rev-parse', 'HEAD'");
     expect(source).toContain("'status', '--porcelain', '--untracked-files=all'");
     expect(source).toContain('ENGINE_DIST_SHA_FILE');
-    expect(source).toContain('statSync');
-    expect(source).toContain('ENGINE_DECLARATION_ARTIFACTS');
-    expect(source).toContain('stat.isFile() && stat.size > 0');
+    expect(source).toContain('hasTrustedEngineDeclarations');
+    expect(engineDeclarationsSource).toContain('ENGINE_DECLARATION_ARTIFACTS');
+    expect(engineDeclarationsSource).toContain('stat.isFile() && stat.size > 0');
   });
 });

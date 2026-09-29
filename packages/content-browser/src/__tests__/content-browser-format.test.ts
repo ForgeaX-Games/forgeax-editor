@@ -111,8 +111,12 @@ describe('path helpers', () => {
   test('normalizeGameRelativePath strips root, slug, and .forgeax marker prefixes', () => {
     expect(normalizeGameRelativePath('root/assets/a.png', 'root', 'demo')).toBe('assets/a.png');
     expect(normalizeGameRelativePath('root', 'root', 'demo')).toBe('');
-    expect(normalizeGameRelativePath('\\root\\assets\\a.png', '/root/', 'demo')).toBe('assets/a.png');
-    expect(normalizeGameRelativePath('.forgeax/games/demo/scenes/x.pack.json', '', 'demo')).toBe('scenes/x.pack.json');
+    expect(normalizeGameRelativePath('\\root\\assets\\a.png', '/root/', 'demo')).toBe(
+      'assets/a.png',
+    );
+    expect(normalizeGameRelativePath('.forgeax/games/demo/scenes/x.pack.json', '', 'demo')).toBe(
+      'scenes/x.pack.json',
+    );
     expect(normalizeGameRelativePath('demo/assets/a.png', '', 'demo')).toBe('assets/a.png');
     expect(normalizeGameRelativePath('demo', '', 'demo')).toBe('');
     expect(normalizeGameRelativePath('loose/a.png', '', 'demo')).toBe('loose/a.png');
@@ -172,7 +176,12 @@ describe('isAssetPlacementAvailable', () => {
     expect(isAssetPlacementAvailable({ kind: 'texture' })).toBe(true);
     expect(isAssetPlacementAvailable({ kind: 'script' })).toBe(false);
     // An explicit authoring capability overrides the kind-derived fallback.
-    expect(isAssetPlacementAvailable({ kind: 'script', authoring: authoringCapabilityForAssetKind('texture') })).toBe(true);
+    expect(
+      isAssetPlacementAvailable({
+        kind: 'script',
+        authoring: authoringCapabilityForAssetKind('texture'),
+      }),
+    ).toBe(true);
   });
 });
 
@@ -203,7 +212,19 @@ describe('fileFamilyOf classification', () => {
 
 describe('fileKindLabel', () => {
   const families: import('../types').CBFileFamily[] = [
-    'code', 'config', 'doc', 'scene', 'pack', 'meta', 'image', 'audio', 'model', 'font', 'ui', 'data', 'other',
+    'code',
+    'config',
+    'doc',
+    'scene',
+    'pack',
+    'meta',
+    'image',
+    'audio',
+    'model',
+    'font',
+    'ui',
+    'data',
+    'other',
   ];
 
   test('translates every family through the provided t function', () => {
@@ -233,7 +254,10 @@ describe('context-menu shaping', () => {
     expect(shape).toEqual(['Header', 'Open', '—', 'Ask Forge', '—', 'Delete']);
 
     // Only a title + danger: no leading separator before danger since there are no normals.
-    const titleAndDanger = orderContextMenuEntries([{ title: 'H' }, { label: 'Del', danger: true }]);
+    const titleAndDanger = orderContextMenuEntries([
+      { title: 'H' },
+      { label: 'Del', danger: true },
+    ]);
     expect(titleAndDanger.map((e) => e.title ?? e.label)).toEqual(['H', 'Del']);
   });
 
@@ -253,8 +277,10 @@ describe('context-menu shaping', () => {
   });
 
   test('fileSpecificMenuItems returns family-specific actions for every family', () => {
-    const idsFor = (family: import('../types').CBFileFamily, firstAsset?: { sourcePath?: string }) =>
-      fileSpecificMenuItems(t, { family }, firstAsset).map((item) => item.id);
+    const idsFor = (
+      family: import('../types').CBFileFamily,
+      firstAsset?: { sourcePath?: string },
+    ) => fileSpecificMenuItems(t, { family }, firstAsset).map((item) => item.id);
 
     expect(idsFor('doc')).toContain('render-preview');
     expect(idsFor('code')).toContain('open-external-ide');
@@ -269,16 +295,19 @@ describe('context-menu shaping', () => {
     expect(idsFor('other')).toEqual([]);
 
     // reimport is disabled when the first asset carries no source path.
-    const reimport = fileSpecificMenuItems(t, { family: 'pack' }, undefined).find((i) => i.id === 'reimport');
+    const reimport = fileSpecificMenuItems(t, { family: 'pack' }, undefined).find(
+      (i) => i.id === 'reimport',
+    );
     expect(reimport?.disabled).toBe(true);
   });
 
   test('keeps ScriptablePack source files in the pack family with authoring actions', () => {
     expect(fileFamilyOf('procedural-showcase.pack.ts')).toBe('pack');
-    expect(fileSpecificMenuItems(
-      t,
-      { family: 'pack', name: 'procedural-showcase.pack.ts' },
-    ).map((item) => item.id)).toEqual([
+    expect(
+      fileSpecificMenuItems(t, { family: 'pack', name: 'procedural-showcase.pack.ts' }).map(
+        (item) => item.id,
+      ),
+    ).toEqual([
       'expand-sub-assets',
       'asset-source-inspect',
       'asset-source-rebuild',
@@ -320,25 +349,31 @@ describe('registryEntryToCBAsset', () => {
   });
 
   test('keeps ScriptablePack sources out of the imported-asset meta sidecar convention', () => {
-    const projected = registryEntryToCBAsset({
-      guid: 'effect-orb-domain-guid',
-      kind: 'scene',
-      name: '沧溟法域',
-      packageUrl: '/__forgeax-ddc/effect-orb-domain.pack.json',
-      sourcePath: 'assets/authoring/abilities/catalog/effect-orb-domain.pack.ts',
-    }, 0);
+    const projected = registryEntryToCBAsset(
+      {
+        guid: 'effect-orb-domain-guid',
+        kind: 'scene',
+        name: '沧溟法域',
+        packageUrl: '/__forgeax-ddc/effect-orb-domain.pack.json',
+        sourcePath: 'assets/authoring/abilities/catalog/effect-orb-domain.pack.ts',
+      },
+      0,
+    );
     expect(projected.packPath).toBe('assets/authoring/abilities/catalog/effect-orb-domain.pack.ts');
     expect(projected.packPath.endsWith('.meta.json')).toBe(false);
   });
 
   test('derives a browser image URL from a catalog image sidecar source', () => {
-    const projected = registryEntryToCBAsset({
-      guid: 'logo-texture-guid',
-      kind: 'texture',
-      name: 'Logo',
-      packageUrl: '/__forgeax-ddc/logo-texture.pack.json',
-      sourcePath: 'assets/ui/logo image.png.meta.json',
-    }, 0);
+    const projected = registryEntryToCBAsset(
+      {
+        guid: 'logo-texture-guid',
+        kind: 'texture',
+        name: 'Logo',
+        packageUrl: '/__forgeax-ddc/logo-texture.pack.json',
+        sourcePath: 'assets/ui/logo image.png.meta.json',
+      },
+      0,
+    );
 
     expect(projected.packPath).toBe('assets/ui/logo image.png.meta.json');
     expect(projected.thumbnailUrl).toBe('/api/files/raw?path=assets%2Fui%2Flogo%20image.png');
@@ -347,18 +382,24 @@ describe('registryEntryToCBAsset', () => {
   test('resolves a catalog image URL through the active host game path exactly once', () => {
     setPathResolver((rel) => (rel === '' ? 'sample' : `sample/${rel}`));
     try {
-      const relative = registryEntryToCBAsset({
-        guid: 'relative-logo-guid',
-        kind: 'texture',
-        packageUrl: '/__forgeax-ddc/relative-logo.pack.json',
-        sourcePath: 'assets/ui/logo.png',
-      }, 0);
-      const resolved = registryEntryToCBAsset({
-        guid: 'resolved-logo-guid',
-        kind: 'texture',
-        packageUrl: '/__forgeax-ddc/resolved-logo.pack.json',
-        sourcePath: 'sample/assets/ui/logo.png',
-      }, 1);
+      const relative = registryEntryToCBAsset(
+        {
+          guid: 'relative-logo-guid',
+          kind: 'texture',
+          packageUrl: '/__forgeax-ddc/relative-logo.pack.json',
+          sourcePath: 'assets/ui/logo.png',
+        },
+        0,
+      );
+      const resolved = registryEntryToCBAsset(
+        {
+          guid: 'resolved-logo-guid',
+          kind: 'texture',
+          packageUrl: '/__forgeax-ddc/resolved-logo.pack.json',
+          sourcePath: 'sample/assets/ui/logo.png',
+        },
+        1,
+      );
 
       expect(relative.thumbnailUrl).toBe('/api/files/raw?path=sample%2Fassets%2Fui%2Flogo.png');
       expect(resolved.thumbnailUrl).toBe('/api/files/raw?path=sample%2Fassets%2Fui%2Flogo.png');

@@ -18,6 +18,7 @@ import {
 } from '@forgeax/editor-core/protocol';
 
 import type { PlayCarrierEvent } from '../feedback-health';
+import { studioBootTrace } from './studio-boot-trace';
 
 export interface DisposablePlayFrame {
   readonly generation: number;
@@ -46,7 +47,9 @@ export interface CaptureArtifactWithProvenance {
 
 export type PlayCarrierResult =
   | { readonly ok: true }
-  | { readonly ok: false; readonly error: { readonly code: string; readonly hint: string; readonly carrierFailure?: VagCarrierFailureMessage } };
+  | { readonly ok: false; readonly error: { readonly code: string; readonly hint: string; readonly carrierFailure?: VagCarrierFailureMessage;
+      };
+    };
 
 export interface DisposablePlayCarrierDeps {
   readonly container: HTMLElement;
@@ -62,7 +65,8 @@ export interface DisposablePlayCarrierDeps {
   /** Child-owned frame cadence, accepted only from the current generation/source. */
   readonly onFps?: (fps: number, generation: number) => void;
   /** Report terminal failures after the child has reached first-frame readiness. */
-  readonly onFailure?: (failure: { readonly code: string; readonly hint: string; readonly carrierFailure?: VagCarrierFailureMessage }) => void;
+  readonly onFailure?: (failure: { readonly code: string; readonly hint: string; readonly carrierFailure?: VagCarrierFailureMessage;
+  }) => void;
   /** Disabled unless supplied by the browser host composition root. */
   readonly livenessTimeoutMs?: number | false;
   /** Consecutive unreachable probes required before declaring the runtime gone.
@@ -97,7 +101,7 @@ const GAMEPLAY_DESCRIBE_ATTEMPTS = 3;
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : undefined;
 }
 
@@ -132,16 +136,20 @@ function readCarrierMessageIdentity(url: string): CarrierMessageIdentity | undef
   }
 }
 
-function matchesCarrierMessageIdentity(value: unknown, expected: CarrierMessageIdentity | undefined): boolean {
+function matchesCarrierMessageIdentity(value: unknown, expected: CarrierMessageIdentity | undefined,
+): boolean {
   if (expected === undefined) return false;
   const payload = record(value);
-  return payload?.runtimeId === expected.runtimeId
+  return (
+    payload?.runtimeId === expected.runtimeId
     && payload.runtimeGeneration === expected.runtimeGeneration
     && payload.carrierId === expected.carrierId
-    && payload.carrierKind === expected.carrierKind;
+    && payload.carrierKind === expected.carrierKind
+  );
 }
 
-function readCaptureProvenance(source: WindowProxy, generation: number): CaptureProducerProvenance | undefined {
+function readCaptureProvenance(source: WindowProxy, generation: number,
+): CaptureProducerProvenance | undefined {
   const candidate = source as unknown as {
     __forgeaxPlayRendererProvenance?: () => unknown;
     location?: { readonly search?: string };
@@ -174,11 +182,14 @@ function readCaptureProvenance(source: WindowProxy, generation: number): Capture
   });
 }
 
-function isArtifact(value: unknown): value is { readonly runId: string; readonly tapePath: string; readonly reportPath: string } {
+function isArtifact(value: unknown): value is { readonly runId: string; readonly tapePath: string; readonly reportPath: string;
+} {
   const candidate = record(value);
-  return typeof candidate?.runId === 'string' && candidate.runId.trim() !== ''
+  return (
+    typeof candidate?.runId === 'string' && candidate.runId.trim() !== ''
     && typeof candidate.tapePath === 'string' && candidate.tapePath.trim() !== ''
-    && typeof candidate.reportPath === 'string' && candidate.reportPath.trim() !== '';
+    && typeof candidate.reportPath === 'string' && candidate.reportPath.trim() !== ''
+  );
 }
 
 const browserHost: DisposablePlayFrameHost = {
@@ -200,7 +211,8 @@ const browserHost: DisposablePlayFrameHost = {
 };
 
 /** Browser adapter for the one disposable Play child owned by Viewport Runtime. */
-export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): DisposablePlayCarrier {
+export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps,
+): DisposablePlayCarrier {
   const host = deps.host ?? browserHost;
   let phase: ReturnType<DisposablePlayCarrier['state']> = 'edit';
   let frame: DisposablePlayFrame | null = null;
@@ -233,7 +245,7 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
       id: descriptor.id,
       title: descriptor.title,
       ...(descriptor.description === undefined ? {} : { description: descriptor.description }),
-      argsSchema: descriptor.argsSchema === undefined ? null : descriptor.argsSchema as GameActionDescriptor['argsSchema'],
+      argsSchema: descriptor.argsSchema === undefined ? null : (descriptor.argsSchema as GameActionDescriptor['argsSchema']),
     }));
     const reads: GameReadDescriptor[] = parsed.data.reads.map((descriptor) => ({
       id: descriptor.id,
@@ -250,7 +262,8 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
         code: 'play-carrier-not-active',
         hint: 'remote gameplay projection requests require an active Play carrier',
         retryable: true,
-      } });
+      },
+      });
     }
     const source = current.source ?? current.element.contentWindow;
     if (source === null) {
@@ -258,7 +271,8 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
         code: 'play-carrier-window-unavailable',
         hint: 'remote Play did not expose a contentWindow for gameplay projection',
         retryable: true,
-      } });
+      },
+      });
     }
     const requestId = `play-${current.generation}-${++requestSequence}`;
     const message = {
@@ -271,21 +285,27 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
     };
     const parsed = VagGameplayRequestSchema.safeParse(message);
     if (!parsed.success) {
-      return Promise.resolve({ ok: false, error: {
-        code: 'play-gameplay-request-invalid',
-        hint: 'remote gameplay request did not satisfy the versioned projection contract',
-      } });
+      return Promise.resolve({
+        ok: false,
+        error: {
+          code: 'play-gameplay-request-invalid',
+          hint: 'remote gameplay request did not satisfy the versioned projection contract',
+        },
+      });
     }
     return new Promise<RemoteGameplayResult>((resolve) => {
       const timer = setTimeout(() => {
         const pending = pendingGameplay.get(requestId);
         if (!pending) return;
         pendingGameplay.delete(requestId);
-        pending({ ok: false, error: {
-          code: 'play-gameplay-request-timeout',
-          hint: 'remote Play did not answer the gameplay projection request before the deadline',
-          retryable: true,
-        } });
+        pending({
+          ok: false,
+          error: {
+            code: 'play-gameplay-request-timeout',
+            hint: 'remote Play did not answer the gameplay projection request before the deadline',
+            retryable: true,
+          },
+        });
       }, 5_000);
       pendingGameplay.set(requestId, (result) => {
         clearTimeout(timer);
@@ -297,11 +317,14 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
       } catch (error) {
         clearTimeout(timer);
         pendingGameplay.delete(requestId);
-        resolve({ ok: false, error: {
-          code: 'play-gameplay-request-post-failed',
-          hint: error instanceof Error ? error.message : String(error),
-          retryable: true,
-        } });
+        resolve({
+          ok: false,
+          error: {
+            code: 'play-gameplay-request-post-failed',
+            hint: error instanceof Error ? error.message : String(error),
+            retryable: true,
+          },
+        });
       }
     });
   };
@@ -332,12 +355,19 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
     const current = frame;
     if (current === null) return;
     const source = current.source ?? current.element.contentWindow;
-    try { source?.postMessage({ type }, '*'); } catch { /* child removal is authoritative */ }
+    try {
+      source?.postMessage({ type }, '*');
+    } catch {
+      /* child removal is authoritative */
+    }
   };
 
   /** Publish one terminal liveness verdict, then stop probing. Deduped by
    *  code+hint so a repeated verdict cannot raise a second card. */
-  const reportLivenessFailure = (failure: { readonly code: string; readonly hint: string }): void => {
+  const reportLivenessFailure = (failure: {
+    readonly code: string;
+    readonly hint: string;
+  }): void => {
     const key = `${failure.code}\n${failure.hint}`;
     if (reportedFailureKey === key) return;
     terminalFailureReported = true;
@@ -358,14 +388,21 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
     livenessProbeActive = false;
     consecutiveUnreachable = 0;
     terminalFailureReported = false;
-    settleGameplay({ ok: false, error: {
-      code: 'play-carrier-stopped',
-      hint: 'remote Play stopped before the gameplay projection request completed',
-      retryable: true,
-    } });
+    settleGameplay({
+      ok: false,
+      error: {
+        code: 'play-carrier-stopped',
+        hint: 'remote Play stopped before the gameplay projection request completed',
+        retryable: true,
+      },
+    });
     if (current !== null) {
       const source = current.source ?? current.element.contentWindow;
-      try { source?.postMessage({ type: 'VAG_PREVIEW_PAUSE' }, '*'); } catch { /* hard removal remains authoritative */ }
+      try {
+        source?.postMessage({ type: 'VAG_PREVIEW_PAUSE' }, '*');
+      } catch {
+        /* hard removal remains authoritative */
+      }
       host.remove(current);
     }
     if (!restore) return { ok: true };
@@ -373,9 +410,23 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
   }
 
   async function start(requestId?: string): Promise<PlayCarrierResult> {
+    studioBootTrace('carrier.start.begin', {
+      requestId: requestId ?? null,
+      phase,
+    });
     if (phase === 'play') return { ok: true };
     if (phase !== 'edit') {
-      return { ok: false, error: { code: 'play-carrier-transition-active', hint: `cannot start while carrier is ${phase}` } };
+      studioBootTrace('carrier.start.reject', {
+        reason: 'transition-active',
+        phase,
+      });
+      return {
+        ok: false,
+        error: {
+          code: 'play-carrier-transition-active',
+          hint: `cannot start while carrier is ${phase}`,
+        },
+      };
     }
     phase = 'entering-play';
     const operation = ++transition;
@@ -383,14 +434,28 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
       return await startCurrent(operation, requestId);
     } catch (error) {
       const failure = record(error);
-      const result: PlayCarrierResult = { ok: false, error: {
-        code: typeof failure?.code === 'string' ? failure.code : 'play-carrier-start-failed',
-        hint: error instanceof Error ? error.message : String(error),
-      } };
+      const result: PlayCarrierResult = {
+        ok: false,
+        error: {
+          code: typeof failure?.code === 'string' ? failure.code : 'play-carrier-start-failed',
+          hint: error instanceof Error ? error.message : String(error),
+        },
+      };
       if (operation !== transition) return result;
-      try { await stopFrame(true); } catch (cleanupError) {
-        return { ok: false, error: { ...result.error, hint: `${result.error.hint}; Edit restoration failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}` } };
-      } finally { phase = 'edit'; releasing = undefined; }
+      try {
+        await stopFrame(true);
+      } catch (cleanupError) {
+        return {
+          ok: false,
+          error: {
+            ...result.error,
+            hint: `${result.error.hint}; Edit restoration failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+          },
+        };
+      } finally {
+        phase = 'edit';
+        releasing = undefined;
+      }
       return result;
     }
   }
@@ -398,15 +463,28 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
   async function startCurrent(operation: number, requestId?: string): Promise<PlayCarrierResult> {
     releasing = deps.releaseEditSurface();
     const released = await releasing;
-    if (operation !== transition) return { ok: false, error: { code: 'play-carrier-stopped', hint: 'Play startup was cancelled' } };
+    if (operation !== transition)
+      return {
+        ok: false,
+        error: {
+          code: 'play-carrier-stopped',
+          hint: 'Play startup was cancelled',
+        },
+      };
     releasing = undefined;
     if (!released.ok) {
       phase = 'edit';
+      studioBootTrace('carrier.surface.release-failed', {
+        code: released.error.code,
+        hint: released.error.hint,
+      });
       return released;
     }
+    studioBootTrace('carrier.surface.released', {});
 
     const generation = ++nextGeneration;
     const childUrl = deps.url(generation);
+    studioBootTrace('carrier.iframe.navigate', { generation, childUrl });
     reportedFailureKey = undefined;
     terminalFailureReported = false;
     consecutiveUnreachable = 0;
@@ -414,17 +492,31 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
     const created = host.create(generation, childUrl);
     if (created === null) {
       phase = 'edit';
+      studioBootTrace('carrier.iframe.create-failed', { generation });
       await deps.restoreEditSurface();
-      return { ok: false, error: { code: 'play-carrier-window-unavailable', hint: 'Play iframe did not expose a contentWindow' } };
+      return {
+        ok: false,
+        error: {
+          code: 'play-carrier-window-unavailable',
+          hint: 'Play iframe did not expose a contentWindow',
+        },
+      };
     }
     frame = created;
+    studioBootTrace('carrier.iframe.mounted', { generation });
     descriptors = { actions: [], reads: [] };
     host.mount(created, deps.container);
     const source = created.source ?? created.element.contentWindow;
     if (source === null) {
       await stopFrame(true);
       phase = 'edit';
-      return { ok: false, error: { code: 'play-carrier-window-unavailable', hint: 'Play iframe did not expose a contentWindow after mount' } };
+      return {
+        ok: false,
+        error: {
+          code: 'play-carrier-window-unavailable',
+          hint: 'Play iframe did not expose a contentWindow after mount',
+        },
+      };
     }
 
     const isCurrentFrameSource = (eventSource: MessageEventSource | null): boolean => {
@@ -444,7 +536,11 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
       const parsed = VagCarrierFailureSchema.safeParse(data);
       const result = parsed.success ? parsed : VagCarrierHandshakeSchema.safeParse(data);
       const message = result.success ? result : VagCarrierHeartbeatSchema.safeParse(data);
-      if (!message.success || !matchesCarrierMessageIdentity(message.data.payload, expectedIdentity)) return undefined;
+      if (
+        !message.success ||
+        !matchesCarrierMessageIdentity(message.data.payload, expectedIdentity)
+      )
+        return undefined;
       if (pageNonce !== undefined && message.data.payload.pageNonce !== pageNonce) return undefined;
       pageNonce ??= message.data.payload.pageNonce;
       return message.data;
@@ -454,17 +550,26 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
       if (!isCurrentFrameSource(event.source)) return;
       const carrierData = parseCarrierMessage(event.data);
       if (carrierData !== undefined) {
-        if (carrierData.type === 'VAG_CARRIER_FAILURE' || (!publishedReady && carrierData.payload.renderReadiness === 'ready')) {
+        if (
+          carrierData.type === 'VAG_CARRIER_FAILURE' ||
+          (!publishedReady && carrierData.payload.renderReadiness === 'ready')
+        ) {
           if (carrierData.type !== 'VAG_CARRIER_FAILURE') publishedReady = true;
-          deps.onCarrierEvent?.({ ...(requestId === undefined ? {} : { requestId }), event: carrierData });
+          deps.onCarrierEvent?.({
+            ...(requestId === undefined ? {} : { requestId }),
+            event: carrierData,
+          });
         }
         if (carrierData?.type === 'VAG_CARRIER_HEARTBEAT') lastCarrierHeartbeatAt = Date.now();
         if (carrierData?.type === 'VAG_CARRIER_FAILURE' && phase === 'play') {
           const failure = record(record(carrierData.payload)?.failure);
           const code = typeof failure?.code === 'string' ? failure.code : 'renderer-error';
-          const hint = typeof failure?.message === 'string'
-            ? failure.message
-            : typeof failure?.hint === 'string' ? failure.hint : 'Play carrier reported a terminal failure';
+          const hint =
+            typeof failure?.message === 'string'
+              ? failure.message
+              : typeof failure?.hint === 'string'
+                ? failure.hint
+                : 'Play carrier reported a terminal failure';
           const key = `${code}\n${hint}`;
           if (!terminalFailureReported && reportedFailureKey !== key) {
             terminalFailureReported = true;
@@ -486,17 +591,28 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
       if (!pending) return;
       pendingGameplay.delete(gameplay.data.payload.requestId);
       if (gameplay.data.payload.ok) {
-        pending({ ok: true, ...(gameplay.data.payload.data === undefined ? {} : { data: gameplay.data.payload.data }) });
+        pending({
+          ok: true,
+          ...(gameplay.data.payload.data === undefined ? {} : { data: gameplay.data.payload.data }),
+        });
       } else {
         const error = gameplay.data.payload.error;
-        pending({ ok: false, error: {
-          code: error?.code ?? 'play-gameplay-request-failed',
-          hint: error?.hint ?? 'remote Play rejected the gameplay projection request',
-          ...(error?.retryable === undefined ? {} : { retryable: error.retryable }),
-        } });
+        pending({
+          ok: false,
+          error: {
+            code: error?.code ?? 'play-gameplay-request-failed',
+            hint: error?.hint ?? 'remote Play rejected the gameplay projection request',
+            ...(error?.retryable === undefined ? {} : { retryable: error.retryable }),
+          },
+        });
       }
     });
 
+    studioBootTrace('carrier.handshake.wait', {
+      generation,
+      readyTimeoutMs: deps.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
+      startupProbeTimeoutMs: deps.startupProbeTimeoutMs ?? null,
+    });
     const ready = await new Promise<PlayCarrierResult>((resolve) => {
       let settled = false;
       let timer: ReturnType<typeof setTimeout>;
@@ -520,29 +636,56 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
         const payload = record(data?.payload);
         if (data?.type === 'VAG_CARRIER_FAILURE') {
           const failure = record(payload?.failure);
-          finish({ ok: false, error: {
-            carrierFailure: data,
+          studioBootTrace('carrier.handshake.failure', {
+            generation,
             code: typeof failure?.code === 'string' ? failure.code : 'play-carrier-failed',
-            hint: typeof failure?.message === 'string'
-              ? failure.message
-              : typeof failure?.hint === 'string' ? failure.hint : 'Play carrier reported a failure',
-          } });
+          });
+          finish({
+            ok: false,
+            error: {
+              carrierFailure: data,
+              code: typeof failure?.code === 'string' ? failure.code : 'play-carrier-failed',
+              hint:
+                typeof failure?.message === 'string'
+                  ? failure.message
+                  : typeof failure?.hint === 'string'
+                    ? failure.hint
+                    : 'Play carrier reported a failure',
+            },
+          });
           return;
         }
-        if ((data?.type === 'VAG_CARRIER_HEARTBEAT' || data?.type === 'VAG_CARRIER_HANDSHAKE')
-          && payload?.renderReadiness === 'ready') {
+        if (
+          (data?.type === 'VAG_CARRIER_HEARTBEAT' || data?.type === 'VAG_CARRIER_HANDSHAKE') &&
+          payload?.renderReadiness === 'ready'
+        ) {
+          studioBootTrace('carrier.handshake.ready', {
+            generation,
+            messageType: data?.type,
+          });
           deps.onReady?.(payload);
           finish({ ok: true });
         }
       };
-      timer = setTimeout(() => finish({
-        ok: false,
-        error: { code: 'play-carrier-ready-timeout', hint: 'Play iframe did not publish a ready first frame before the deadline' },
-      }), deps.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS);
+      timer = setTimeout(() => {
+        studioBootTrace('carrier.handshake.timeout', { generation });
+        finish({
+          ok: false,
+          error: {
+            code: 'play-carrier-ready-timeout',
+            hint: 'Play iframe did not publish a ready first frame before the deadline',
+          },
+        });
+      }, deps.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS);
       unsubscribe = host.subscribe(onMessage);
-      cancelReady = () => finish({ ok: false, error: {
-        code: 'play-carrier-stopped', hint: 'Play was stopped before its first frame was ready',
-      } });
+      cancelReady = () =>
+        finish({
+          ok: false,
+          error: {
+            code: 'play-carrier-stopped',
+            hint: 'Play was stopped before its first frame was ready',
+          },
+        });
       if (deps.startupProbeTimeoutMs !== undefined) {
         let failedProbes = 0;
         const probe = async (): Promise<void> => {
@@ -550,31 +693,59 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
           let reachable = false;
           try {
             const response = await fetch(childUrl, {
-              method: 'GET', cache: 'no-store',
-              signal: AbortSignal.any([probeAbort.signal, AbortSignal.timeout(deps.startupProbeTimeoutMs!)]),
+              method: 'GET',
+              cache: 'no-store',
+              signal: AbortSignal.any([
+                probeAbort.signal,
+                AbortSignal.timeout(deps.startupProbeTimeoutMs!),
+              ]),
             });
             status = response.status;
             reachable = response.ok;
-            try { await response.body?.cancel(); } catch { /* best effort */ }
-          } catch { /* Network rejection or bounded timeout is an unreachable sample. */ }
+            try {
+              await response.body?.cancel();
+            } catch {
+              /* best effort */
+            }
+          } catch {
+            /* Network rejection or bounded timeout is an unreachable sample. */
+          }
           if (settled || frame !== created) return;
           failedProbes = reachable ? 0 : failedProbes + 1;
           if (failedProbes >= Math.max(1, deps.unreachableConfirmations ?? 3)) {
-            finish({ ok: false, error: {
-              code: 'play-runtime-unavailable',
-              hint: status === undefined
-                ? 'The Play preview service could not be reached. Restore the preview service and try Play again.'
-                : `The Play preview document returned HTTP ${status}. Check the preview service and its build diagnostics, then try Play again.`,
-            } });
+            studioBootTrace('carrier.iframe.unreachable', {
+              generation,
+              failedProbes,
+              httpStatus: status ?? null,
+            });
+            finish({
+              ok: false,
+              error: {
+                code: 'play-runtime-unavailable',
+                hint:
+                  status === undefined
+                    ? 'The Play preview service could not be reached. Restore the preview service and try Play again.'
+                    : `The Play preview document returned HTTP ${status}. Check the preview service and its build diagnostics, then try Play again.`,
+              },
+            });
             return;
           }
-          probeTimer = setTimeout(() => { void probe(); }, 1_000);
+          probeTimer = setTimeout(() => {
+            void probe();
+          }, 1_000);
         };
         void probe();
       }
     });
 
-    if (operation !== transition || frame !== created) return { ok: false, error: { code: 'play-carrier-stopped', hint: 'Play startup was cancelled' } };
+    if (operation !== transition || frame !== created)
+      return {
+        ok: false,
+        error: {
+          code: 'play-carrier-stopped',
+          hint: 'Play startup was cancelled',
+        },
+      };
     if (!ready.ok) {
       await stopFrame(true);
       phase = 'edit';
@@ -594,7 +765,8 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
       // countable verdict per interval instead of collapsing into one long wait.
       const probeTimeoutMs = Math.max(200, probeIntervalMs - 50);
       livenessTimer = setInterval(() => {
-        if (phase !== 'play' || desiredPaused || terminalFailureReported || livenessProbeActive) return;
+        if (phase !== 'play' || desiredPaused || terminalFailureReported || livenessProbeActive)
+          return;
         // Frame cadence and runtime reachability are independent failures: a
         // carrier renders from already-loaded modules, so it keeps publishing
         // frames long after its runtime server died (HMR, asset loads, and the
@@ -606,9 +778,17 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
         // livenessProbeActive true, silencing every later tick. Bound each probe
         // so "not answering" converges to "unreachable" — to a user, a runtime
         // that never answers is indistinguishable from a dead one.
-        void fetch(childUrl, { method: 'GET', cache: 'no-store', signal: AbortSignal.timeout(probeTimeoutMs) })
+        void fetch(childUrl, {
+          method: 'GET',
+          cache: 'no-store',
+          signal: AbortSignal.timeout(probeTimeoutMs),
+        })
           .then(async (response) => {
-            try { await response.body?.cancel(); } catch { /* response cleanup is best effort */ }
+            try {
+              await response.body?.cancel();
+            } catch {
+              /* response cleanup is best effort */
+            }
             return response.ok;
           })
           .catch(() => false)
@@ -635,7 +815,9 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
                 : 'The Play runtime URL became unreachable while the carrier was still rendering already-loaded modules.',
             });
           })
-          .finally(() => { livenessProbeActive = false; });
+          .finally(() => {
+            livenessProbeActive = false;
+          });
       }, probeIntervalMs);
     }
     void describeGameplayWithRetry();
@@ -646,7 +828,9 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
   function stop(): Promise<PlayCarrierResult> {
     if (stopping) return stopping;
     if (phase === 'edit') return Promise.resolve({ ok: true });
-    stopping = stopCurrent().finally(() => { stopping = undefined; });
+    stopping = stopCurrent().finally(() => {
+      stopping = undefined;
+    });
     return stopping;
   }
 
@@ -678,9 +862,11 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
       });
     }
     try {
-      const capture = (source as unknown as {
-        __forgeax?: { captureFrame?: (count: number) => Promise<unknown> };
-      }).__forgeax?.captureFrame;
+      const capture = (
+        source as unknown as {
+          __forgeax?: { captureFrame?: (count: number) => Promise<unknown> };
+        }
+      ).__forgeax?.captureFrame;
       if (typeof capture !== 'function') {
         return Promise.reject({
           code: 'rhi-debug-unavailable',
@@ -690,15 +876,28 @@ export function createDisposablePlayCarrier(deps: DisposablePlayCarrierDeps): Di
       const activeFrame = frame;
       return Promise.resolve().then(async () => {
         const artifact = await capture(frames);
-        if (frame !== activeFrame || phase !== 'play' || activeFrame.generation !== nextGeneration) {
-          throw { code: 'play-carrier-capture-stale', hint: 'the Play carrier changed while capture was running' };
+        if (
+          frame !== activeFrame ||
+          phase !== 'play' ||
+          activeFrame.generation !== nextGeneration
+        ) {
+          throw {
+            code: 'play-carrier-capture-stale',
+            hint: 'the Play carrier changed while capture was running',
+          };
         }
         if (!isArtifact(artifact)) {
-          throw { code: 'play-carrier-capture-invalid', hint: 'the live Play carrier returned no typed capture artifact' };
+          throw {
+            code: 'play-carrier-capture-invalid',
+            hint: 'the live Play carrier returned no typed capture artifact',
+          };
         }
         const provenance = readCaptureProvenance(source, activeFrame.generation);
         if (provenance === undefined) {
-          throw { code: 'play-carrier-provenance-unavailable', hint: 'the live Play carrier did not publish complete renderer and runtime provenance' };
+          throw {
+            code: 'play-carrier-provenance-unavailable',
+            hint: 'the live Play carrier did not publish complete renderer and runtime provenance',
+          };
         }
         return Object.freeze({ ...artifact, provenance });
       });

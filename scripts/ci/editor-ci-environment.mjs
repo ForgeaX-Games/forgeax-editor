@@ -8,7 +8,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 export const CI_ENVIRONMENT_CONTRACT = 'forgeax-editor-linux-x64-v2';
-export const DEFAULT_BUN_VERSION = '1.3.14';
+export const DEFAULT_BUN_VERSION = '1.4.0';
 
 function valueOrUnknown(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : 'unknown';

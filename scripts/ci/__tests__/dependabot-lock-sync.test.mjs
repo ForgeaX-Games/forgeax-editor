@@ -16,7 +16,7 @@ const allowed = {
   actor: "dependabot[bot]",
   repositoryFullName: "ForgeaX-Games/forgeax-editor",
   baseRef: "main",
-  headRef: "dependabot/npm_and_bun/bun-1.3.14",
+  headRef: "dependabot/npm_and_bun/bun-1.4.0",
   headRepositoryFullName: "ForgeaX-Games/forgeax-editor",
   ecosystem: "npm",
   changedPaths: ["package.json", "bun.lock"],
@@ -96,7 +96,7 @@ test('runs Bun with scripts disabled and pushes only a lock-only commit', () => 
   const { calls, spawn } = makeSpawn({ afterStatus: ' M bun.lock' });
   const result = runLockSync({
     worktree: '/tmp/pr-head',
-    ref: 'dependabot/npm_and_bun/bun-1.3.14',
+    ref: 'dependabot/npm_and_bun/bun-1.4.0',
     actor: 'dependabot[bot]',
     spawn,
   });
@@ -104,7 +104,7 @@ test('runs Bun with scripts disabled and pushes only a lock-only commit', () => 
   const install = calls.find((call) => call.cmd === 'bun');
   assert.deepEqual(install.args, ['install', '--ignore-scripts']);
   const push = calls.find((call) => call.cmd === 'git' && call.args[0] === 'push');
-  assert.deepEqual(push.args, ['push', 'origin', 'HEAD:dependabot/npm_and_bun/bun-1.3.14']);
+  assert.deepEqual(push.args, ['push', 'origin', 'HEAD:dependabot/npm_and_bun/bun-1.4.0']);
   assert.equal(push.args.includes('--force'), false);
   assert.equal(push.args.includes('--force-with-lease'), false);
 });
@@ -113,7 +113,7 @@ test('rejects an unexpected generated diff without staging, committing, or pushi
   const { calls, spawn } = makeSpawn({ afterStatus: ' M bun.lock\n M package.json' });
   const result = runLockSync({
     worktree: '/tmp/pr-head',
-    ref: 'dependabot/npm_and_bun/bun-1.3.14',
+    ref: 'dependabot/npm_and_bun/bun-1.4.0',
     actor: 'dependabot[bot]',
     spawn,
   });
@@ -125,7 +125,7 @@ test('a non-Dependabot sync invocation is a no-op and cannot execute a write', (
   const { calls, spawn } = makeSpawn({ afterStatus: ' M bun.lock' });
   const result = runLockSync({
     worktree: '/tmp/pr-head',
-    ref: 'dependabot/npm_and_bun/bun-1.3.14',
+    ref: 'dependabot/npm_and_bun/bun-1.4.0',
     actor: 'octocat',
     spawn,
   });
@@ -137,13 +137,13 @@ test('a rerun with no generated diff performs no commit or push', () => {
   const { calls, spawn } = makeSpawn({ afterStatus: '' });
   const first = runLockSync({
     worktree: '/tmp/pr-head',
-    ref: 'dependabot/npm_and_bun/bun-1.3.14',
+    ref: 'dependabot/npm_and_bun/bun-1.4.0',
     actor: 'dependabot[bot]',
     spawn,
   });
   const second = runLockSync({
     worktree: '/tmp/pr-head',
-    ref: 'dependabot/npm_and_bun/bun-1.3.14',
+    ref: 'dependabot/npm_and_bun/bun-1.4.0',
     actor: 'dependabot[bot]',
     spawn,
   });
@@ -200,7 +200,7 @@ test('relative trusted-base CLI invocation executes authorization and writes its
         pull_request: {
           base: { ref: 'main', repo: { full_name: 'ForgeaX-Games/forgeax-editor' } },
           head: {
-            ref: 'dependabot/npm_and_bun/bun-1.3.14',
+            ref: 'dependabot/npm_and_bun/bun-1.4.0',
             repo: { full_name: 'ForgeaX-Games/forgeax-editor', fork: false },
           },
         },

@@ -73,7 +73,7 @@ import { bus, dispatch, useSelection } from '@forgeax/editor-core';
 
 ## VFX 生命周期合同
 
-Edit 侧由 `ViewportComponent` 创建且只创建一个 `VfxRuntimeHost`。host 的 `feature` 在 `createApp` 前注入；成功后先绑定持久 Edit World 与共享 `AssetRegistry`，再在每次 Play 中绑定全新的 Play World。GPU 模拟、资源 registry 和实体身份仍由 engine 所有，编辑器只读取 camera、委托生命周期，并把 Renderer 的 `renderFeatureDiagnostics()` 投影到既有 diagnostics gateway。
+Edit 侧由 `ViewportComponent` 创建且只创建一个 `VfxRuntimeHost`。host 的 `feature` 在 `createApp` 前注入；成功后先绑定持久 Edit World 与共享 `AssetRegistry`，再在每次 Play 中绑定全新的 Play World。GPU 模拟、资源 registry 和实体身份仍由 engine 所有，编辑器只读取 camera、委托生命周期，并把 Renderer `inspect().featureDiagnostics` 投影到既有 diagnostics gateway。
 
 ### World 与身份边界
 

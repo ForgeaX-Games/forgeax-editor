@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Full-tree keyboard gate (M5). Editor command execution has one global entry:
-// interface/src/lib/global-shortcuts.ts. JSX onKeyDown remains valid because it
+// the published Interface router. JSX onKeyDown remains valid because it
 // is scoped to a focused modal/control. The two shortcut-forwarder files are
 // exact iframe transport exceptions; they forward events and must not mutate
 // gateway/store state.
@@ -11,13 +11,8 @@ import { resolve } from 'node:path';
 const root = resolve(new URL('..', import.meta.url).pathname);
 const label = '[lint-single-keydown-router]';
 const allowed = new Set([
-  'packages/interface/src/lib/global-shortcuts.ts',
   'packages/core/src/shortcut-forwarder.ts',
   'packages/play-runtime/src/shortcut-forwarder.ts',
-  // The UE dock drag controller captures Escape only while a pointer drag is
-  // active to cancel that transient gesture; it never dispatches an editor
-  // command or mutates authored state.
-  'packages/interface/src/components/DockShell/ueDrag/controller.ts',
 ]);
 const globalKeydown = /\b(?:window|document)\s*\.addEventListener\(\s*['"]keydown['"]/;
 const files = (await new Promise((resolveFiles) => {
@@ -39,7 +34,7 @@ for (const file of files) {
 if (offenders.length) {
   console.error(`${label} G-1 violation: found ${offenders.length} global keydown executor(s).`);
   for (const offender of offenders) console.error(`  ${offender}`);
-  console.error(`${label} Move editor commands to packages/interface/src/lib/global-shortcuts.ts; move modal Escape/Enter to the modal root onKeyDown. Only exact shortcut-forwarder.ts files and transient gesture-capture owners may remain as exceptions.`);
+  console.error(`${label} Register editor commands and keybindings through the public host APIs; move modal Escape/Enter to the modal root onKeyDown. Only exact shortcut-forwarder.ts transport files may remain as exceptions.`);
   process.exit(1);
 }
 console.log(`${label} AC-A1 OK -- one command executor and only exact transport exceptions`);

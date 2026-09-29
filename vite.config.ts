@@ -12,11 +12,8 @@
 // without engine serve the in-process boot's fetch('/shaders/manifest.json')
 // 404s and createApp fails).
 //
-// Aliases mirror packages/interface/vite.config.ts so that DockShell's deep
-// import chain (@forgeax/design/*, @forgeax/types, @/components/ui/*) all
-// resolve identically here. Bun monorepo workspaces handle the workspace:*
-// package imports (@forgeax/editor, @forgeax/editor-shared, dockview, react,
-// react-dom, etc.) automatically.
+// Interface resolves through its published package exports. Editor
+// and engine source workspaces retain the host-owned identity aliases below.
 //
 // Anchors: AC-04, AC-05, AC-07, AC-08, plan-strategy S2 D4/D7, S3.1 host bundler
 // layer, S4 R7, S5.6 selfcheck:b2 (9/9 held: --game /api proxy branch preserved).
@@ -24,13 +21,11 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { dirname, resolve, basename, join } from 'node:path';
 import { existsSync, realpathSync, readFileSync } from 'node:fs';
-import {
-  ENGINE_EXECUTION_ISOLATION_HEADERS,
-  engineVitePreset,
-  resolveBrowserPackageExportPath,
-} from './scripts/vite/engine-vite-preset';
+import { ENGINE_EXECUTION_ISOLATION_HEADERS, engineVitePreset, resolveGameEngineEntry } from './scripts/vite/engine-vite-preset';
+import { resolveViteFsAllowRoots } from './scripts/vite/vite-fs-allow';
 import { runtimeScopePath, type RuntimeAssetBinding } from '@forgeax/engine-types';
 import { resolveWorktreePorts } from './scripts/lib/worktree-ports.ts';
 import tailwindcss from 'tailwindcss';
@@ -51,7 +46,7 @@ const WORKTREE_PORTS = resolveWorktreePorts(PACKAGE_DIR);
 // Before R3 this shipped a SECOND, hand-written READ-ONLY file backend inline in
 // this config (a §5 violation: "为启动自写一个独立后端"). Now `bun fx start --game`
 // starts apps/standalone/game-backend.ts — a tiny bun process mounting the REAL
-// @forgeax/platform-io createFilesRouter (the exact 后L1 router cli/server use),
+// @forgeax/platform-io createFilesRouter (the shared file router used by cli/server),
 // confined to one game via singleGameFileBackend — and this config simply PROXIES
 // /api → that process. (It can't be a vite middleware: vite 8 loads its config
 // through Node's ESM loader, which can't resolve platform-io's extensionless `.ts`
@@ -99,10 +94,8 @@ const STANDALONE_PORT = Number(process.env.FORGEAX_STANDALONE_PORT ?? WORKTREE_P
 // shader/pack routes arrive un-prefixed, no base-strip needed); gameDirAbs =
 // GAME_DIR so the in-process engine self-hosts the game's pack catalog
 // (pack-index / __import / __forgeax-ddc) the SAME way edit-runtime did.
-// preserveSymlinks:false — this host bundle pulls dockview + @radix-ui through
-// packages/interface/node_modules; under preserveSymlinks vite resolves the
-// symlinked interface to its realpath and then can't find those NESTED transitive
-// deps, 500-ing the whole shell. The host relies on realpath dedupe instead
+// preserveSymlinks:false — published packages and their nested dependencies
+// resolve through their real paths. The host relies on realpath dedupe
 // (resolve.dedupe still collapses the @forgeax family to one instance). null
 // (no --game) -> demo seed, shader plugin alone serves the manifest.
 const enginePreset = engineVitePreset({
@@ -111,6 +104,9 @@ const enginePreset = engineVitePreset({
   preserveSymlinks: false,
   ...(STANDALONE_RUNTIME_BINDING === undefined ? {} : { runtimeBinding: STANDALONE_RUNTIME_BINDING }),
 });
+const CLIENT_RUNTIME_BINDING = STANDALONE_RUNTIME_BINDING === undefined
+  ? undefined
+  : { ...STANDALONE_RUNTIME_BINDING, catalogRoots: enginePreset.catalogRoots };
 
 // Keep the standalone host on one engine checkout. The host root lives above
 // the workspace packages and does not have a direct node_modules link for every
@@ -118,75 +114,38 @@ const enginePreset = engineVitePreset({
 // install for packages such as engine-app and engine-render-graph, while the
 // game-entry resolver correctly anchors its imports to this worktree. That
 // split creates two ECS/component-token realms: a SceneInstance written by one
-// World is invisible to the other. Derive aliases from edit-runtime's complete
-// engine workspace link set so every engine package resolves to this checkout.
-const ENGINE_LINK_DIR = resolve(PACKAGE_DIR, 'packages/edit-runtime/node_modules/@forgeax');
+// World is invisible to the other. Use the game-entry resolver's producer roots
+// so both hoisted and isolated installs stay on this checkout.
+const editRuntimeRequire = createRequire(resolve(PACKAGE_DIR, 'packages/edit-runtime/package.json'));
 // The standalone host executes engine-ui's CSS authoring path in the browser.
 // Anchor its third-party parser to the exact dependency owned by engine-ui so
 // Vite does not pick a second copy from Bun's root store.
-const CSS_TREE_DIR = realpathSync(resolve(ENGINE_LINK_DIR, 'engine-ui/node_modules/css-tree'));
-const SOURCE_MAP_JS_DIR = realpathSync(resolve(CSS_TREE_DIR, '../source-map-js'));
+const engineUiRequire = createRequire(editRuntimeRequire.resolve('@forgeax/engine-ui/package.json'));
+const CSS_TREE_DIR = dirname(realpathSync(engineUiRequire.resolve('css-tree/package.json')));
+const SOURCE_MAP_JS_DIR = dirname(realpathSync(createRequire(join(CSS_TREE_DIR, 'package.json')).resolve('source-map-js/package.json')));
 // The standalone host is rooted at apps/standalone, so Node/Vite cannot walk
 // into the Engine package that owns @noble/hashes. The shared Engine preset
 // still pre-bundles Noble subpaths for the animation/pack importers; anchor the
 // host-side resolver to that producer-owned copy so the optimizer never serves
 // a 504 for an unresolved deep import on a cold Bun checkout.
-const NOBLE_HASHES_DIR = realpathSync(
-  resolve(ENGINE_LINK_DIR, 'engine-animation/node_modules/@noble/hashes'),
-);
-const engineWorktreeSubpathAliases: Record<string, string> = {};
-const engineWorktreeRootAliases: Record<string, string> = {};
-for (const id of enginePreset.resolve.dedupe) {
-  if (!id.startsWith('@forgeax/engine-')) continue;
-  const packageName = id.slice('@forgeax/'.length);
-  try {
-    const packageDir = realpathSync(resolve(ENGINE_LINK_DIR, packageName));
-    const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
-      exports?: Record<string, string | { browser?: string; import?: string } | null>;
-    };
-    for (const [subpath, entry] of Object.entries(manifest.exports ?? {})) {
-      if (subpath.includes('*')) continue;
-      const importPath = resolveBrowserPackageExportPath(entry);
-      if (typeof importPath !== 'string') continue;
-      const specifier = subpath === '.'
-        ? id
-        : `${id}/${subpath.slice(2)}`;
-      const target = resolve(packageDir, importPath);
-      if (subpath === '.') engineWorktreeRootAliases[specifier] = target;
-      else engineWorktreeSubpathAliases[specifier] = target;
-    }
-  } catch {
-    // Transitive-only engine packages are intentionally not in the link set;
-    // Vite may resolve those normally without creating a second engine realm.
-  }
-}
-const engineWorktreeTargets = {
-  ...engineWorktreeSubpathAliases,
-  ...engineWorktreeRootAliases,
-  '@forgeax/engine-plugin': resolve(PACKAGE_DIR, 'scripts/vite/engine-plugin-browser.ts'),
-};
+const engineAnimationRequire = createRequire(editRuntimeRequire.resolve('@forgeax/engine-animation/package.json'));
+const NOBLE_HASHES_DIR = dirname(realpathSync(engineAnimationRequire.resolve('@noble/hashes')));
 const engineWorktreeResolve = {
   name: 'forgeax:standalone-engine-worktree-resolve',
   enforce: 'pre' as const,
   resolveId(id: string): string | null {
-    return engineWorktreeTargets[id] ?? null;
+    if (id === '@forgeax/engine-plugin') {
+      return resolve(PACKAGE_DIR, 'scripts/vite/engine-plugin-browser.ts');
+    }
+    if (!id.startsWith('@forgeax/engine-')) return null;
+    // The dedupe roster contains only direct host dependencies in an isolated
+    // install. Resolve transitive imports through the same browser export map
+    // used by game sources, then collapse workspace links to one Engine identity.
+    const entry = resolveGameEngineEntry(id);
+    return entry === null ? null : realpathSync(entry);
   },
 };
 
-// INTERFACE_DIR resolution — embedded vs standalone:
-//   - Embedded in studio: the parent studio tree's packages/interface (../../
-//     interface) is the canonical single copy; prefer it so editor shares the
-//     same interface instance studio uses.
-//   - Standalone clone: editor vendors interface as its own submodule at
-//     packages/interface; use that.
-const STUDIO_INTERFACE = resolve(PACKAGE_DIR, '../interface');
-const VENDORED_INTERFACE = resolve(PACKAGE_DIR, 'packages/interface');
-const INTERFACE_DIR = existsSync(resolve(STUDIO_INTERFACE, 'src/app-kit.ts'))
-  ? STUDIO_INTERFACE
-  : VENDORED_INTERFACE;
-// @forgeax/design now lives inside the interface repo (packages/design), so it
-// travels with whichever interface checkout we resolved above.
-const DESIGN_DIR = resolve(INTERFACE_DIR, 'packages/design');
 // Types are supplied by Studio when embedded and vendored for standalone use.
 const STUDIO_ROOT = resolve(PACKAGE_DIR, '../..');
 const STUDIO_MANIFEST = resolve(STUDIO_ROOT, 'package.json');
@@ -206,15 +165,15 @@ if (HAS_STUDIO_LAYER && existsSync(TYPES_SRC)) {
   studioLayerAlias['@forgeax/types'] = VENDORED_TYPES_SRC;
 }
 
-// Keep the standalone host's optimizer boundary limited to dependencies that
-// are installed from this checkout's root. Interface dependencies are owned by
-// the vendored interface submodule and resolve from their importing source
-// files; listing them here makes Vite resolve from apps/standalone/ and fails on a
-// fresh clone before the host can bind its port.
+// Keep the standalone host's optimizer boundary limited to direct published
+// dependencies and the host's existing parser inputs. Pre-bundle the public
+// Interface entrypoints so their transitive imports are discovered up front.
 const STANDALONE_OPTIMIZE_DEPS = [
   'react',
   'react-dom',
   'react-dom/client',
+  '@forgeax/interface/ApplicationShell',
+  '@forgeax/interface/application',
   // engine-ui is served as native workspace ESM, but css-tree's browser ESM
   // imports source-map-js through a CommonJS file. Pre-bundle the parser at
   // the host boundary so the browser never receives raw CommonJS code.
@@ -245,7 +204,7 @@ export default defineConfig({
   define: {
     __FORGEAX_GAME_SLUG__: JSON.stringify(GAME_SLUG),
     __FORGEAX_GAME_DIR_ABS__: JSON.stringify(GAME_DIR),
-    __FORGEAX_RUNTIME_BINDING__: JSON.stringify(STANDALONE_RUNTIME_BINDING ?? null),
+    __FORGEAX_RUNTIME_BINDING__: JSON.stringify(CLIENT_RUNTIME_BINDING ?? null),
     // The Vite preset derives this from the same package.json roots it passes to
     // pluginPack. Content Browser uses the projection to classify catalog
     // sourcePath values without knowing where @shared roots live on disk.
@@ -262,7 +221,7 @@ export default defineConfig({
     // @forgeax family (preset.resolve.dedupe) so the in-process engine + editor
     // packages resolve to one realpath. preserveSymlinks stays false here (the
     // preset default is overridden to false for this host — see the preset call)
-    // because dockview/@radix nested deps live under the interface symlink target.
+    // so published packages and their nested dependencies resolve by real path.
     dedupe: enginePreset.resolve.dedupe,
     preserveSymlinks: enginePreset.resolve.preserveSymlinks,
     alias: {
@@ -274,13 +233,6 @@ export default defineConfig({
       'css-tree': CSS_TREE_DIR,
       'source-map-js': SOURCE_MAP_JS_DIR,
       '@noble/hashes': NOBLE_HASHES_DIR,
-      '@/': `${resolve(INTERFACE_DIR, 'src')}/`,
-      // @forgeax/interface package.json's exports map covers `./*: ./src/*.ts`
-      // and `./styles/*.css`, but does NOT cover the `.tsx` files we deep-
-      // import (DockShell.tsx etc.). Alias the package root to the source
-      // directory so vite resolves any subpath, .ts/.tsx/.css alike.
-      '@forgeax/interface/styles/global.css': resolve(INTERFACE_DIR, 'src/styles/global.css'),
-      '@forgeax/interface/components': resolve(INTERFACE_DIR, 'src/components'),
       // The editor-family root aliases below intentionally bypass package
       // exports to keep one Vite module identity. Keep this concrete runtime
       // subpath ahead of the root alias so the diagnostics projection remains
@@ -296,10 +248,6 @@ export default defineConfig({
       '@forgeax/editor-content-browser': resolve(PACKAGE_DIR, 'packages/content-browser/src'),
       '@forgeax/editor-panels': resolve(PACKAGE_DIR, 'packages/panels/src'),
       '@forgeax/editor-product': resolve(PACKAGE_DIR, 'packages/product/src'),
-      '@forgeax/design/preset': resolve(DESIGN_DIR, 'preset.ts'),
-      '@forgeax/design/theme': resolve(DESIGN_DIR, 'theme.ts'),
-      '@forgeax/design/tokens.css': resolve(DESIGN_DIR, 'tokens.css'),
-      '@forgeax/design': resolve(DESIGN_DIR, 'index.ts'),
       // Shared contracts only when the Studio tree is present (embedded mode).
       ...studioLayerAlias,
     },
@@ -312,13 +260,8 @@ export default defineConfig({
     // whole family, and pre-bundling any of it under preserveSymlinks OOMs on
     // the nested symlink graph (see preset comment).
     exclude: enginePreset.optimizeDeps.exclude,
-    // Pre-bundle react so the single-instance dedupe holds. dockview /
-    // @forgeax/interface are NOT listed: optimizeDeps.include resolves from the
-    // vite ROOT (apps/standalone/), but those packages live in the vendored
-    // interface's own node_modules (resolvable from DockShell.tsx's location,
-    // not from the root). Vite auto-discovers and optimizes them on first
-    // crawl from the actual import sites, so listing them here only produced a
-    // spurious "Failed to resolve dependency" warning.
+    // Published Interface entrypoints and React are direct root dependencies;
+    // their optimizer identities stay stable alongside the engine parser inputs.
     include: [...enginePreset.optimizeDeps.include, ...STANDALONE_OPTIMIZE_DEPS],
     // Never mutate the optimizer manifest in response to a late lazy import.
     // The include list above is the host's dependency boundary; native ESM
@@ -331,18 +274,12 @@ export default defineConfig({
     host: '127.0.0.1',
     headers: ENGINE_EXECUTION_ISOLATION_HEADERS,
     fs: {
-      // DockShell/EditorPanelFrame + design live under INTERFACE_DIR (the
-      // vendored submodule when standalone, or the studio sibling when
-      // embedded). Allow the editor root (covers packages/interface) and, when
-      // embedded, the studio root so the shared interface copy is served too.
-      // --game: the game dir is a SIBLING of the editor (outside PACKAGE_DIR),
-      // so it must be allowed explicitly or Play's @fs import of the game entry
-      // (main.ts) 403s ("outside of Vite serving allow list") and the bootstrap
-      // never runs (→ no camera spawned).
-      allow: [
-        ...(HAS_STUDIO_LAYER ? [PACKAGE_DIR, STUDIO_ROOT] : [PACKAGE_DIR]),
-        ...(GAME_DIR ? [GAME_DIR] : []),
-      ],
+      allow: resolveViteFsAllowRoots({
+        packageDir: PACKAGE_DIR,
+        gameDir: GAME_DIR,
+        extra: HAS_STUDIO_LAYER ? [STUDIO_ROOT] : [],
+      }),
+      strict: false,
     },
     proxy: {
       // The persistent shell owns chrome/panels; the replaceable Viewport Runtime

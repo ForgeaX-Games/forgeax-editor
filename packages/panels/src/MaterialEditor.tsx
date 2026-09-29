@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
-import { useAssetRefDrop } from './use-asset-ref-drop';
+import { DROPPABLE_TEXTURE_KINDS } from './asset-ref-drop';
 import {
   ensureAssetCataloged,
   gateway,
@@ -8,8 +8,9 @@ import {
   panelBridge,
 } from '@forgeax/editor-core';
 import type { SelectedAsset } from '@forgeax/editor-core';
-import { AssetPicker, anchorFromElement, type AssetPickerAnchor } from './AssetPicker';
+import { AssetPicker, type AssetPickerAnchor } from './AssetPicker';
 import { PropertyRow } from './asset-inspector/PropertyRow';
+import { TextureSlotRow } from './texture-slot-row';
 import './inspector.css';
 
 interface PassDesc {
@@ -23,76 +24,10 @@ const TEXTURE_FIELD_NAMES: ReadonlySet<string> = new Set([
   'normalTexture',
 ]);
 
-const DROPPABLE_TEXTURE_KINDS: ReadonlySet<string> = new Set(['texture', 'image']);
-
 function resolveTextureGuid(value: unknown, refs: readonly string[]): string | null {
   if (typeof value === 'string' && value.length > 0) return value;
   if (typeof value === 'number' && refs[value]) return refs[value]!;
   return null;
-}
-
-interface TextureSlotProps {
-  label: string;
-  guid: string | null;
-  canEdit: boolean;
-  onAssign: (textureGuid: string) => void;
-  onClear: () => void;
-  onBrowse: (anchor: AssetPickerAnchor) => void;
-}
-
-function TextureSlot({ label, guid, canEdit, onAssign, onClear, onBrowse }: TextureSlotProps) {
-  const {
-    dropClassName,
-    onDragEnter,
-    onDragLeave,
-    onDragOver,
-    onDrop,
-  } = useAssetRefDrop({
-    assetType: 'TextureAsset',
-    readOnly: !canEdit,
-    acceptKinds: DROPPABLE_TEXTURE_KINDS,
-    onBind: onAssign,
-  });
-
-  const shortGuid = guid && guid.length > 18 ? `${guid.slice(0, 18)}…` : guid;
-
-  return (
-    <div
-      className={`mat-tex-slot${dropClassName ? ` ${dropClassName}` : ''}`}
-      data-testid={`mat-${label}`}
-      onDragEnter={onDragEnter}
-      onDragLeave={onDragLeave}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
-    >
-      <div className="mat-tex-slot-header">
-        <span className="mat-tex-slot-label">{label}</span>
-      </div>
-      {guid ? (
-        <div className="mat-tex-slot-bound">
-          <span className="mat-tex-slot-icon">🖼</span>
-          <span className="mat-tex-slot-guid" title={`Texture GUID: ${guid}`}>{shortGuid}</span>
-          {canEdit && (
-            <button className="mat-clear-btn" title="Clear texture" onClick={onClear}>✕</button>
-          )}
-        </div>
-      ) : (
-        <div className="mat-tex-empty">Drop or browse TextureAsset</div>
-      )}
-      {canEdit && (
-        <button
-          className="mat-browse-btn"
-          onClick={(event) => {
-            const rect = anchorFromElement(event.currentTarget);
-            if (rect) onBrowse(rect);
-          }}
-          title={`Browse ${label}`}
-        >
-          📁 Browse
-        </button>
-      )}
-    </div>
-  );
 }
 
 interface CatalogRow {
@@ -243,7 +178,7 @@ export function MaterialEditorPanel(): ReactElement {
   }
 
   return (
-    <div className="panel" data-testid="panel-material-editor">
+    <div className="panel fx-inspector" data-testid="panel-material-editor">
       <div className="compname">Material Editor</div>
 
       {/* Asset selector */}
@@ -331,24 +266,26 @@ export function MaterialEditorPanel(): ReactElement {
           {parent && <PropertyRow label="Parent" value={parent} />}
 
           {/* Textures */}
-          <div className="mat-tex-section">
-            <div className="mat-tex-section-title">Textures</div>
-            {textureFields.map(({ key, guid }) => (
-              <TextureSlot
-                key={key}
-                label={key}
-                guid={guid}
-                canEdit={canEdit}
-                onAssign={(textureGuid) => handleAssignTexture(key, textureGuid)}
-                onClear={() => handleClearTexture(key)}
-                onBrowse={(anchor) => setPickerTarget({ key, anchor })}
-              />
-            ))}
+          <div className="cat dim-type" style={{ marginTop: 8 }}>
+            <div className="cat-fields">
+              {textureFields.map(({ key, guid }) => (
+                <TextureSlotRow
+                  key={key}
+                  label={key}
+                  guid={guid}
+                  canEdit={canEdit}
+                  onAssign={(textureGuid) => handleAssignTexture(key, textureGuid)}
+                  onClear={() => handleClearTexture(key)}
+                  onBrowse={(anchor) => setPickerTarget({ key, anchor })}
+                />
+              ))}
+            </div>
           </div>
 
           {pickerTarget && (
             <AssetPicker
               assetType="TextureAsset"
+              acceptKinds={DROPPABLE_TEXTURE_KINDS}
               anchor={pickerTarget.anchor}
               currentGuid={textureFields.find((f) => f.key === pickerTarget.key)?.guid ?? undefined}
               onPick={(guid) => { handleAssignTexture(pickerTarget.key, guid); setPickerTarget(null); }}

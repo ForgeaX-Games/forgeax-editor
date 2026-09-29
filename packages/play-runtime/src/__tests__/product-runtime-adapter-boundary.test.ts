@@ -3,8 +3,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dir, '..', '..', '..', '..');
-const adapterSource = readFileSync(resolve(root, 'packages/play-runtime/src/product-runtime-adapter.ts'), 'utf8');
-const carrierSource = readFileSync(resolve(root, 'packages/product/src/transport/stdio-carrier.ts'), 'utf8');
+const adapterSource = readFileSync(resolve(root, 'packages/play-runtime/src/product-runtime-adapter.ts'), 'utf8',
+);
+const carrierSource = readFileSync(resolve(root, 'packages/product/src/transport/stdio-carrier.ts'), 'utf8',
+);
 
 test('Play product adapter consumes only the typed core protocol boundary', () => {
   expect(adapterSource).toContain("from '@forgeax/editor-core/protocol'");
@@ -21,17 +23,18 @@ test('production carriers do not expose raw evaluation or hidden browser transpo
   }
 });
 
-
-test('Play entry consumes the browser-only gameplay input subpath without the Editor UI barrel', async () => {
+test('Play entry consumes gameplay input through the browser-safe protocol facade', async () => {
   const entrySource = readFileSync(resolve(root, 'packages/play-runtime/src/main.ts'), 'utf8');
   expect(entrySource).not.toMatch(/from ['"]@forgeax\/editor-core['"]/);
-  expect(entrySource).toContain("from '@forgeax/editor-core/gameplay-input'");
-  const entry = Bun.resolveSync('@forgeax/editor-core/gameplay-input', resolve(root, 'packages/play-runtime'));
+  expect(entrySource).toContain("from '@forgeax/editor-core/protocol'");
+  const entry = Bun.resolveSync(
+    '@forgeax/editor-core/protocol',
+    resolve(root, 'packages/play-runtime'),
+  );
   const result = await Bun.build({
     entrypoints: [entry],
     target: 'browser',
     external: ['react', 'react-dom', 'react/jsx-runtime'],
-    write: false,
   });
   expect(result.success).toBe(true);
   const bundled = await result.outputs[0]!.text();

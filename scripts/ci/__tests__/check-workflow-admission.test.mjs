@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { tmpdir } from 'node:os';
@@ -19,6 +19,12 @@ const smokePlayEnvironmentPath = join(actionRoot, 'smoke-play-environment/action
 const malformedFixture = resolve('scripts/ci/fixtures/malformed-actions.yml');
 const admissionFixture = resolve('scripts/ci/fixtures/workflow-admission-contract.yml');
 const measurementWorkflowPath = join(workflowRoot, 'browser-release-measurement.yml');
+
+function assertSafePrHeadScriptReferences(text) {
+  assert.doesNotMatch(text, /pr-head\/(?:package\.json|node_modules)/);
+  assert.doesNotMatch(text, /working-directory:\s*pr-head/);
+  assert.doesNotMatch(text, /pr-head\/scripts\//);
+}
 
 test('enumerates every supported workflow suffix in stable order', () => {
   const root = mkdtempSync(join(tmpdir(), 'forgeax-workflow-enumeration-'));
@@ -49,7 +55,7 @@ test('trusted carrier retrieves only the fork head workflow directory from its i
   assert.match(text, /sparse-checkout:\s*\|\s*\n\s+\.github\/workflows/);
   assert.equal((text.match(/persist-credentials:\s*false/g) ?? []).length, 2);
   assert.match(text, /permissions:\s*\n\s+contents:\s+read/);
-  assert.doesNotMatch(text, /pr-head\/(?:scripts|package\.json|node_modules)/);
+  assertSafePrHeadScriptReferences(text);
   assert.match(text, /actionlint_1\.7\.12_linux_amd64\.tar\.gz/);
   assert.ok(
     text.indexOf('Validate PR-head workflow definitions') <
@@ -64,6 +70,120 @@ test('trusted carrier retrieves only the fork head workflow directory from its i
       text.indexOf('Validate PR-head contract bindings'),
   );
 });
+
+test('workflow YAML staging retains the trusted-base optional-file contract', () => {
+  const text = readFileSync(carrierPath, 'utf8');
+  const start = text.indexOf('name: Stage PR-head workflow definitions for contract tests');
+  const end = text.indexOf('name: Setup Node.js', start);
+  assert.ok(start >= 0, 'runner-pool-contract must stage PR-head contract files');
+  assert.ok(end > start, 'staging step must end before setup');
+  const staging = text.slice(start, end);
+  assert.match(staging, /for script in/);
+  assert.match(staging, /rm -f -- "\$script"/);
+  assert.match(staging, /if test -f "pr-head\/\$script"; then/);
+  assert.match(staging, /cp -- "pr-head\/\$script" "\$script"/);
+  assert.doesNotMatch(staging, /cp pr-head\/scripts\/ci\//);
+});
+
+function withStagingFixture(run) {
+  const root = mkdtempSync(join(tmpdir(), 'forgeax-workflow-staging-'));
+  try {
+    for (const directory of [
+      '.github/workflows', 'pr-head/.github/workflows',
+      'scripts/ci/__tests__', 'pr-head/scripts/ci/__tests__',
+      '.github/actions/probe', 'pr-head/.github/actions/probe',
+      'node_modules', 'pr-head/node_modules', 'outside',
+    ]) mkdirSync(join(root, directory), { recursive: true });
+    writeFileSync(join(root, '.github/workflows/removed.yml'), 'trusted old workflow\n');
+    writeFileSync(join(root, 'pr-head/.github/workflows/added.yaml'), 'name: added\n');
+    for (const file of [
+      'scripts/ci/__tests__/check-workflow-admission.test.mjs',
+      '.github/actions/probe/action.yml', 'node_modules/trusted.mjs', 'package.json',
+    ]) {
+      writeFileSync(join(root, file), 'trusted base\n');
+      writeFileSync(join(root, 'pr-head', file), 'untrusted PR payload\n');
+    }
+    const workflow = parseYaml(readFileSync(carrierPath, 'utf8'));
+    const staging = workflow.jobs['runner-pool-contract'].steps.find(
+      (step) => step.name === 'Stage PR-head workflow definitions for contract tests',
+    );
+    assert.equal(typeof staging?.run, 'string');
+    run(root, () => spawnSync('bash', ['-c', staging.run], {
+      cwd: root, encoding: 'utf8', timeout: 5_000,
+    }));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('staging synchronizes direct YAML additions/deletions without changing trusted executable inputs', () => {
+  withStagingFixture((root, stage) => {
+    const literalName = 'space $(touch escaped).yml';
+    writeFileSync(join(root, 'pr-head/.github/workflows', literalName), 'name: literal\n');
+    writeFileSync(join(root, 'pr-head/.github/workflows/.hidden.yaml'), 'name: hidden\n');
+    writeFileSync(join(root, '.github/workflows/keep.txt'), 'trusted non-workflow\n');
+    writeFileSync(join(root, 'pr-head/.github/workflows/executable.mjs'), 'throw new Error("untrusted")\n');
+    mkdirSync(join(root, 'pr-head/.github/workflows/nested'));
+    writeFileSync(join(root, 'pr-head/.github/workflows/nested/ignored.yml'), 'name: nested\n');
+    const result = stage();
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(readdirSync(join(root, '.github/workflows')).sort(), [
+      '.hidden.yaml', 'added.yaml', 'keep.txt', literalName,
+    ].sort());
+    assert.equal(readFileSync(join(root, '.github/workflows', literalName), 'utf8'), 'name: literal\n');
+    assert.equal(existsSync(join(root, 'escaped')), false);
+    for (const file of [
+      'scripts/ci/__tests__/check-workflow-admission.test.mjs',
+      '.github/actions/probe/action.yml', 'node_modules/trusted.mjs', 'package.json',
+    ]) assert.equal(readFileSync(join(root, file), 'utf8'), 'trusted base\n', file);
+  });
+});
+
+test('staging removes deleted workflows when the incoming workflow set is empty', () => {
+  withStagingFixture((root, stage) => {
+    rmSync(join(root, 'pr-head/.github/workflows/added.yaml'));
+    const result = stage();
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(readdirSync(join(root, '.github/workflows')), []);
+  });
+});
+
+for (const parent of ['.github', '.github/workflows', 'pr-head', 'pr-head/.github', 'pr-head/.github/workflows']) {
+  test(`staging rejects a symlinked ${parent} directory before changing external files`, () => {
+    withStagingFixture((root, stage) => {
+      const external = join(root, 'outside');
+      writeFileSync(join(external, 'sentinel.yml'), 'outside must remain unchanged\n');
+      rmSync(join(root, parent), { recursive: true, force: true });
+      symlinkSync(external, join(root, parent), 'dir');
+      const result = stage();
+      assert.notEqual(result.status, 0);
+      assert.equal(readFileSync(join(external, 'sentinel.yml'), 'utf8'), 'outside must remain unchanged\n');
+      assert.deepEqual(readdirSync(external), ['sentinel.yml']);
+    });
+  });
+}
+
+for (const directory of ['.github/workflows', 'pr-head/.github/workflows']) {
+  for (const kind of ['symlink', 'dangling symlink', 'directory', 'fifo']) {
+    test(`staging rejects a ${kind} YAML entry in ${directory} before synchronizing`, () => {
+      withStagingFixture((root, stage) => {
+        const external = join(root, 'outside/sentinel.yml');
+        writeFileSync(external, 'outside must remain unchanged\n');
+        const entry = join(root, directory, 'hostile.yml');
+        if (kind === 'directory') mkdirSync(entry);
+        else if (kind === 'fifo') {
+          const fifo = spawnSync('mkfifo', [entry], { encoding: 'utf8' });
+          assert.equal(fifo.status, 0, fifo.stderr);
+        } else symlinkSync(kind === 'symlink' ? external : join(root, 'outside/missing'), entry);
+        const result = stage();
+        assert.notEqual(result.status, 0);
+        assert.equal(readFileSync(external, 'utf8'), 'outside must remain unchanged\n');
+        assert.equal(readFileSync(join(root, '.github/workflows/removed.yml'), 'utf8'), 'trusted old workflow\n');
+        assert.equal(existsSync(join(root, '.github/workflows/added.yaml')), false);
+      });
+    });
+  }
+}
 
 test('parser invocation passes the complete derived file list and pinned options', () => {
   const root = mkdtempSync(join(tmpdir(), 'forgeax-workflow-parser-'));
@@ -105,31 +225,22 @@ test('generic lint provisions the pinned parser before its admission tests run',
 
 test('prerequisite producer keeps an explicit Engine build contract', () => {
   const text = readFileSync(ciWorkflowPath, 'utf8');
-  if (text.includes('scripts/ci/hydrate-engine-artifact.mjs')) {
-    const start = text.indexOf('  prerequisite-release:');
-    const end = text.indexOf('\n  docs-policy:', start);
-    assert.ok(start >= 0, 'CI must declare the prerequisite producer');
-    assert.ok(end > start, 'producer block must end before docs-policy');
-    const block = text.slice(start, end);
-    assert.match(block, /Hydrate Engine core artifact for the exact submodule SHA/);
-    assert.match(block, /scripts\/ci\/hydrate-engine-artifact\.mjs/);
-    assert.match(block, /ENGINE_REPOSITORY:\s+ForgeaX-Games\/forgeax-engine/);
-    assert.match(block, /Checkout direct submodules \(Engine assets are not needed by this producer\)/);
-    assert.match(block, /submodules:\s+true/);
-    assert.doesNotMatch(block, /submodules:\s+recursive/);
-    assert.doesNotMatch(block, /Setup Rust|wasm-pack|Setup pnpm|Build wgpu-wasm|Build engine library|fetch-wasm/);
-    assert.doesNotMatch(block, /install --frozen-lockfile/);
-    return;
-  }
-  const start = text.indexOf('name: Setup wasm-pack (self-hosted Linux)');
-  const end = text.indexOf('name: Setup pnpm', start);
-  assert.ok(start >= 0, 'CI must provision wasm-pack for the pre-artifact producer');
-  assert.ok(end > start, 'wasm-pack setup must precede pnpm setup');
+  const start = text.indexOf('  prerequisite-release:');
+  const end = text.indexOf('\n  docs-policy:', start);
+  assert.ok(start >= 0, 'CI must declare the prerequisite producer');
+  assert.ok(end > start, 'producer block must end before docs-policy');
   const block = text.slice(start, end);
-  assert.match(block, /CI_TRUSTED_WASM_PACK_PATH/);
-  assert.match(block, /wasm-pack \$CI_WASM_PACK_VERSION/);
-  assert.match(block, /cp -- "\$trusted_wasm_pack_path" "\$dir\/wasm-pack"/);
-  assert.match(block, /curl --fail --location --retry 3/);
+  assert.match(block, /Build Engine prerequisite from the exact pinned source/);
+  assert.match(block, /Resolve exact Engine gitlink/);
+  assert.match(block, /uses:\s+\.\/packages\/engine\/\.github\/actions\/editor-prerequisite-build/);
+  assert.match(block, /engine-sha:\s+\$\{\{ steps\.engine_identity\.outputs\.sha \}\}/);
+  assert.match(block, /payload-classes:\s+engine-dist,wgpu-wasm,fbx-wasm/);
+  assert.match(block, /output:\s+\$\{\{ runner\.temp \}\}\/forgeax-engine-prerequisite-build/);
+  assert.match(block, /submodules:\s+recursive/);
+  assert.doesNotMatch(block, /hydrate-engine-artifact|ENGINE_REPOSITORY|ENGINE_WORKFLOW_PATH/);
+  assert.doesNotMatch(block, /actions:\s+write/);
+  assert.doesNotMatch(block, /gh\s+(api|run)/);
+  assert.doesNotMatch(block, /pnpm\s+-r|tsc\s+-b|wasm-pack\s+build|emcc\b|build-editor-prerequisite\.mjs/);
 });
 
 test('CI concurrency cancels superseded pull-request runs only', () => {
@@ -169,18 +280,15 @@ test('submodule pin waits for every Editor validation job', () => {
   }
 });
 
-test('submodule pin rejects a PR tested against a stale main base', () => {
+test('submodule pin does not require a current PR base', () => {
   const workflow = parseYaml(readFileSync(ciWorkflowPath, 'utf8'));
   const pin = workflow.jobs['submodule-pin'];
-  const freshnessStep = pin.steps.find((step) => step.name === 'Require PR base to be current main');
-  assert.ok(freshnessStep, 'submodule-pin must admit only a current PR base');
-  assert.equal(freshnessStep.if, "${{ github.event_name == 'pull_request' }}");
-  assert.equal(
-    freshnessStep.env.CI_PR_BASE_SHA,
-    '${{ github.event.pull_request.base.sha }}',
-  );
-  assert.match(freshnessStep.run, /git ls-remote origin refs\/heads\/main/);
-  assert.match(freshnessStep.run, /check-pr-base-freshness\.mjs/);
+  assert.ok(pin, 'submodule-pin must be present');
+  const pinBlock = JSON.stringify(pin);
+  assert.doesNotMatch(pinBlock, /Require PR base to be current main/);
+  assert.doesNotMatch(pinBlock, /CI_PR_BASE_SHA|CI_REMOTE_MAIN_SHA/);
+  assert.doesNotMatch(pinBlock, /check-pr-base-freshness\.mjs/);
+  assert.doesNotMatch(pinBlock, /git ls-remote origin refs\/heads\/main/);
 });
 
 test('the admission gate uses the pinned actionlint executable, not a skipped parser path', () => {
@@ -233,14 +341,84 @@ test('cloud producer and requesting consumers use an always-run producer edge', 
     assert.match(block, /download-artifact@v5/, `${jobId} must consume the immutable release`);
   }
   const smokeShard = blockFor('smoke-play-shard');
-  assert.match(smokeShard, /needs:\s+prerequisite-release/, 'smoke-play shards must wait for producer publication');
-  assert.match(smokeShard, /always\(\)/, 'smoke-play shards must inspect producer failure explicitly');
+  assert.match(smokeShard, /needs:\s*\[prerequisite-release\]/, 'smoke-play bundles must start as soon as the producer publishes');
+  assert.doesNotMatch(smokeShard, /needs\.(typecheck|b2-self-boot)/, 'browser work must overlap independent standard gates');
+  assert.match(smokeShard, /fail-fast:\s*true/, 'smoke-play bundles must cancel siblings on first failure');
   const smokeEnvironment = readFileSync(smokePlayEnvironmentPath, 'utf8');
   assert.match(smokeEnvironment, /actions\/download-artifact@v5/, 'smoke-play must consume the immutable release');
   const smokeAggregate = blockFor('smoke-play');
   assert.match(smokeAggregate, /needs:\s*\[prerequisite-release,\s*smoke-play-shard\]/);
   assert.match(smokeAggregate, /always\(\)/);
-  assert.match(smokeAggregate, /Require every smoke shard to pass/);
+  assert.match(smokeAggregate, /Require every smoke bundle to pass/);
+});
+
+test('browser-smoke reuses only immutable downloads with content-addressed cache keys', () => {
+  const action = parseYaml(readFileSync(smokePlayEnvironmentPath, 'utf8'));
+  const steps = action.runs.steps;
+  const dependencyRestore = steps.find((step) => step.name === 'Restore dependency download caches');
+  const browserRestore = steps.find((step) => step.name === 'Restore Playwright browser cache');
+  const dependencySave = steps.find((step) => step.name === 'Save dependency download caches');
+  const browserSave = steps.find((step) => step.name === 'Save Playwright browser cache');
+  const report = steps.find((step) => step.name === 'Report browser-smoke environment preparation');
+
+  assert.equal(dependencyRestore?.uses, 'actions/cache/restore@v4');
+  assert.match(dependencyRestore?.with?.path ?? '', /BUN_INSTALL_CACHE_DIR/);
+  assert.match(dependencyRestore?.with?.path ?? '', /pnpm_config_store_dir/);
+  assert.doesNotMatch(dependencyRestore?.with?.path ?? '', /node_modules|GITHUB_WORKSPACE|HOME/);
+  assert.match(dependencyRestore?.with?.key ?? '', /forgeax-editor-smoke-deps-v1/);
+  assert.match(dependencyRestore?.with?.key ?? '', /inputs\.bun-version/);
+  assert.match(dependencyRestore?.with?.key ?? '', /env\.CI_PNPM_VERSION/);
+  assert.match(
+    dependencyRestore?.with?.key ?? '',
+    /hashFiles\('bun\.lock', 'packages\/engine\/pnpm-lock\.yaml'\)/,
+  );
+
+  assert.equal(browserRestore?.uses, 'actions/cache/restore@v4');
+  assert.match(browserRestore?.with?.path ?? '', /PLAYWRIGHT_BROWSERS_PATH/);
+  assert.doesNotMatch(browserRestore?.with?.path ?? '', /node_modules|GITHUB_WORKSPACE|HOME/);
+  assert.match(browserRestore?.with?.key ?? '', /forgeax-editor-smoke-playwright-v1/);
+  assert.match(browserRestore?.with?.key ?? '', /hashFiles\('bun\.lock'\)/);
+
+  for (const [save, restoreId] of [
+    [dependencySave, 'dependency_cache'],
+    [browserSave, 'browser_cache'],
+  ]) {
+    assert.equal(save?.uses, 'actions/cache/save@v4');
+    assert.match(save?.if ?? '', /inputs\.isolation-key == 'core'/);
+    assert.match(save?.if ?? '', /github\.event_name == 'push'/);
+    assert.match(save?.if ?? '', /github\.ref == 'refs\/heads\/main'/);
+    assert.match(save?.if ?? '', new RegExp(`steps\\.${restoreId}\\.outputs\\.cache-hit != 'true'`));
+    assert.match(save?.with?.key ?? '', new RegExp(`steps\\.${restoreId}\\.outputs\\.cache-primary-key`));
+  }
+
+  assert.equal(action.outputs?.['dependency-cache-hit']?.value, '${{ steps.dependency_cache.outputs.cache-hit }}');
+  assert.equal(action.outputs?.['browser-cache-hit']?.value, '${{ steps.browser_cache.outputs.cache-hit }}');
+  assert.match(action.outputs?.['prepare-seconds']?.value ?? '', /steps\.preparation_report\.outputs\.seconds/);
+  assert.match(report?.if ?? '', /always\(\)/);
+  assert.match(report?.run ?? '', /GITHUB_STEP_SUMMARY/);
+  assert.match(report?.run ?? '', /dependency_cache/);
+  assert.match(report?.run ?? '', /browser_cache/);
+});
+
+test('browser-smoke validates persistent system tools before provisioning them again', () => {
+  const action = parseYaml(readFileSync(smokePlayEnvironmentPath, 'utf8'));
+  const steps = action.runs.steps;
+  const chromiumInstallIndex = steps.findIndex((step) => step.name === 'Install Playwright chromium');
+  const dependencyIndex = steps.findIndex(
+    (step) => step.name === 'Ensure Playwright Chromium system dependencies',
+  );
+  const dependencyStep = steps[dependencyIndex];
+  const chromeBetaStep = steps.find((step) => step.name === 'Ensure Playwright Chrome Beta');
+
+  assert.ok(chromiumInstallIndex >= 0, 'Playwright chromium must be materialized');
+  assert.ok(dependencyIndex > chromiumInstallIndex, 'the installed or restored browser must be inspected before apt provisioning');
+  assert.match(dependencyStep?.run ?? '', /ldd/);
+  assert.match(dependencyStep?.run ?? '', /not found/);
+  assert.match(dependencyStep?.run ?? '', /system dependencies already resolve/);
+  assert.match(dependencyStep?.run ?? '', /playwright install-deps chromium/);
+  assert.match(chromeBetaStep?.run ?? '', /if \[ -x \/opt\/google\/chrome-beta\/chrome \]/);
+  assert.match(chromeBetaStep?.run ?? '', /Chrome Beta already present/);
+  assert.match(chromeBetaStep?.run ?? '', /playwright install chrome-beta/);
 });
 
 test('prerequisite consumers use the producer artifact identity across failed-job reruns', () => {
@@ -406,10 +584,9 @@ test('request-scoped release validation precedes every consumer body', () => {
     smokeBlockStart,
   );
   const smokeBodyStarts = [
-    'name: Broad core smoke (games/sample)',
-    'name: New-game template smoke (fresh canonical template)',
-    'name: Broad Play runtime smoke (games/sample)',
-    'name: Broad asset smoke (games/sample)',
+    'name: Smoke bundle (core)',
+    'name: Smoke bundle (breadth)',
+    'name: Smoke bundle (editor)',
   ].map((name) => text.indexOf(name, smokeBlockStart));
   assert.ok(smokeBlockStart >= 0, 'smoke-play-shard job is present');
   assert.ok(smokeActionStart >= 0, 'smoke-play-shard uses the browser-smoke environment action');
@@ -418,10 +595,10 @@ test('request-scoped release validation precedes every consumer body', () => {
     /submodules:\s+recursive/,
     'smoke-play must recursively materialize nested pins before admission',
   );
-  assert.ok(smokeBodyStarts.every((start) => start >= 0), 'every broad smoke shard body is present');
+  assert.ok(smokeBodyStarts.every((start) => start >= 0), 'every smoke bundle body is present');
   assert.ok(
     smokeBodyStarts.every((start) => smokeActionStart < start),
-    'smoke-play environment setup precedes every broad check body',
+    'smoke-play environment setup precedes every bundle check body',
   );
 
   const smokeActionText = readFileSync(smokePlayEnvironmentPath, 'utf8');
@@ -434,8 +611,8 @@ test('request-scoped release validation precedes every consumer body', () => {
     'smoke-play must install Node before prerequisite validation',
   );
   assert.match(smokeActionText, /--manifest\s+\.ci\/prerequisite-release\/manifest\.json/);
-  assert.match(smokeActionText, /FORGEAX_SMOKE_RUNTIME_REPORT/);
-  assert.match(smokeActionText, /FORGEAX_DEV_STACK_EVENT_LOG/);
+  assert.match(smokeActionText, /Establish smoke runtime evidence root/);
+  assert.match(smokeActionText, /\.ci\/smoke-shard-runtime/);
 
   const smokeAggregateStart = text.indexOf('  smoke-play:');
   const smokeAggregateEnd = text.indexOf('  editor-portability:', smokeAggregateStart);
@@ -466,8 +643,7 @@ test('trusted admission assertions reject an unsafe PR-head execution boundary',
   assert.match(text, /Checkout trusted base revision/);
   assert.match(text, /Checkout PR-head workflow definitions/);
   assert.match(text, /sparse-checkout:\s*\|\s*\n\s+\.github\/workflows/);
-  assert.doesNotMatch(text, /working-directory:\s*pr-head/);
-  assert.doesNotMatch(text, /working-directory:\s*pr-head|pr-head\/(?:scripts|package\.json|node_modules)/);
+  assertSafePrHeadScriptReferences(text);
 });
 
 test('measurement workflow binds every shell variable before invoking the CLI', () => {
@@ -487,12 +663,36 @@ test('measurement workflow binds every shell variable before invoking the CLI', 
   assert.match(secondMeasure, /--admission admission\.json/);
 });
 
-test('every heavy smoke shard binds its identity and command to one runtime wrapper', () => {
+test('every heavy smoke bundle shares one environment and binds all shard commands to the runtime wrapper', () => {
   const workflow = parseYaml(readFileSync(ciWorkflowPath, 'utf8'));
   const smokeShard = workflow.jobs['smoke-play-shard'];
   assert.ok(smokeShard, 'smoke-play shard job must be present');
-  assert.equal(smokeShard.strategy?.matrix?.shard?.length, 9);
-  assert.deepEqual(smokeShard.strategy.matrix.shard, [
+  assert.deepEqual(smokeShard.needs, ['prerequisite-release']);
+  assert.deepEqual(smokeShard.strategy.matrix.bundle, ['core', 'breadth', 'editor']);
+  assert.equal(smokeShard.strategy['fail-fast'], true);
+  assert.equal(
+    smokeShard.strategy['max-parallel'],
+    smokeShard.strategy.matrix.bundle.length,
+    'every isolated smoke bundle must be independently schedulable',
+  );
+
+  const environmentStep = smokeShard.steps.find(
+    (step) => step.uses === './.github/actions/smoke-play-environment',
+  );
+  assert.ok(environmentStep, 'smoke-play must prepare the shared environment');
+  assert.equal(
+    environmentStep.with?.['isolation-key'],
+    '${{ matrix.bundle }}',
+    'each matrix member must pass its bundle identity explicitly',
+  );
+
+  const bundleSteps = smokeShard.steps.filter(
+    (step) => typeof step.if === 'string' && step.if.includes('matrix.bundle'),
+  );
+  assert.equal(bundleSteps.length, 3, 'each bundle must have one command step');
+  const combinedRuns = bundleSteps.map((step) => step.run ?? '').join('\n');
+  const shardMatches = [...combinedRuns.matchAll(/--shard\s+([a-z-]+)/g)].map((match) => match[1]);
+  assert.deepEqual(shardMatches, [
     'scriptable',
     'broad-core',
     'template',
@@ -503,31 +703,14 @@ test('every heavy smoke shard binds its identity and command to one runtime wrap
     'create',
     'repro',
   ]);
-  assert.equal(smokeShard.strategy['max-parallel'], 2);
-
-  const environmentStep = smokeShard.steps.find(
-    (step) => step.uses === './.github/actions/smoke-play-environment',
-  );
-  assert.ok(environmentStep, 'smoke-play must prepare the shared environment');
-  assert.equal(
-    environmentStep.with?.['isolation-key'],
-    '${{ matrix.shard }}',
-    'each matrix member must pass its shard identity explicitly',
-  );
-
-  const shardSteps = smokeShard.steps.filter(
-    (step) => typeof step.if === 'string' && step.if.includes('matrix.shard'),
-  );
-  assert.equal(shardSteps.length, 9, 'each matrix member must have one command step');
-  for (const step of shardSteps) {
+  for (const step of bundleSteps) {
     assert.match(
       step.run ?? '',
       /smoke-shard-runtime\.mjs/,
-      `${step.name ?? 'unnamed shard step'} must invoke the runtime wrapper`,
+      `${step.name ?? 'unnamed bundle step'} must invoke the runtime wrapper`,
     );
-    assert.match(step.run ?? '', /--shard\s+[a-z-]+/, `${step.name ?? 'unnamed shard step'} must declare its shard identity`);
-    assert.match(step.run ?? '', /--ports\s+[0-9,]+/, `${step.name ?? 'unnamed shard step'} must declare its ports`);
-    assert.match(step.run ?? '', /--\s+/, `${step.name ?? 'unnamed shard step'} must pass the original command after the wrapper boundary`);
+    assert.match(step.run ?? '', /--ports\s+[0-9,]+/, `${step.name ?? 'unnamed bundle step'} must declare ports`);
+    assert.match(step.run ?? '', /--\s+/, `${step.name ?? 'unnamed bundle step'} must pass the original command after the wrapper boundary`);
   }
 
   const runtimeEvidence = smokeShard.steps.find((step) => step.name === 'Upload runtime evidence');
@@ -535,18 +718,18 @@ test('every heavy smoke shard binds its identity and command to one runtime wrap
   assert.match(runtimeEvidence.if, /always\(\)/);
   assert.match(runtimeEvidence.with.path, /smoke-shard-runtime/);
   assert.equal(runtimeEvidence.with['if-no-files-found'], 'error');
-  const runtimeRequired = smokeShard.steps.find((step) => step.name === 'Require runtime evidence file');
+  const runtimeRequired = smokeShard.steps.find((step) => step.name === 'Require runtime evidence files');
   assert.ok(runtimeRequired, 'smoke-play must validate runtime.json before upload');
   assert.match(runtimeRequired.if, /always\(\)/);
-  assert.match(runtimeRequired.run, /runtime_path=.*runtime\.json/);
-  assert.match(runtimeRequired.run, /-s \"\$runtime_path\"/);
-  const lifecycleRequired = smokeShard.steps.find((step) => step.name === 'Require lifecycle evidence after failed shard');
-  assert.ok(lifecycleRequired, 'failed smoke-play shards must validate lifecycle.jsonl independently');
+  assert.match(runtimeRequired.run, /smoke-bundle-run\.mjs/);
+  assert.match(runtimeRequired.run, /--require-runtime-evidence/);
+  const lifecycleRequired = smokeShard.steps.find((step) => step.name === 'Require lifecycle evidence after failed bundle shard');
+  assert.ok(lifecycleRequired, 'failed smoke-play bundles must validate lifecycle.jsonl independently');
   assert.match(lifecycleRequired.if, /failure\(\)/);
   assert.match(lifecycleRequired.run, /lifecycle_path=.*lifecycle\.jsonl/);
   assert.match(lifecycleRequired.run, /-s \"\$lifecycle_path\"/);
   const testResultsRequired = smokeShard.steps.find((step) => step.name === 'Require Playwright test-results after failed shard');
-  assert.ok(testResultsRequired, 'failed smoke-play shards must validate Playwright test-results independently');
+  assert.ok(testResultsRequired, 'failed smoke-play bundles must validate Playwright test-results independently');
   assert.match(testResultsRequired.if, /failure\(\)/);
   assert.match(testResultsRequired.run, /-d test-results/);
   assert.match(testResultsRequired.run, /find test-results -type f/);
@@ -557,7 +740,7 @@ test('every heavy smoke shard binds its identity and command to one runtime wrap
   const failureEvidence = smokeShard.steps.find((step) => step.name === 'Upload smoke failure diagnostics');
   assert.ok(failureEvidence, 'smoke-play must upload failure diagnostics');
   assert.match(failureEvidence.if, /failure\(\)/);
-  assert.match(failureEvidence.with.path, /lifecycle\.jsonl/);
+  assert.match(failureEvidence.with.path, /smoke-shard-runtime/);
   assert.match(failureEvidence.with.path, /test-results/);
   assert.equal(failureEvidence.with['if-no-files-found'], 'error');
   assert.ok(

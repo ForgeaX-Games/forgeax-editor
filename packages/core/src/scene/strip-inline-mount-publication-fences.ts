@@ -1,3 +1,4 @@
+import type { SceneWithLegacyMounts } from './legacy-scene-mounts';
 /**
  * Remove catalog-derived publication fences from inline scene-pack mounts before
  * beacon/unload writes. Fences belong to the post-load catalog projection (P1),
@@ -27,13 +28,13 @@ function resolveMountSourceGuid(
 
 /** Strip publicationFence from every mount on a SceneAsset (pre-catalog / pre-instantiate). */
 export function stripSceneAssetMountPublicationFences(scene: SceneAsset): SceneAsset {
-  if (scene.mounts === undefined || scene.mounts.length === 0) return scene;
-  const mounts = scene.mounts.map((mount) => {
+  if ((scene as SceneWithLegacyMounts).mounts === undefined || (scene as SceneWithLegacyMounts).mounts!.length === 0) return scene;
+  const mounts = (scene as SceneWithLegacyMounts).mounts!.map((mount) => {
     if (mount.publicationFence === undefined) return mount;
     const { publicationFence: _drop, ...rest } = mount;
     return rest;
   });
-  return { ...scene, mounts };
+  return { ...scene, mounts } as SceneWithLegacyMounts;
 }
 
 /** Strip publicationFence from mounts whose source is another asset in the same pack. */

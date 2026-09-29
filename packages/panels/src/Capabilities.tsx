@@ -13,6 +13,7 @@ import {
 } from '@forgeax/editor-core';
 import {
   EXECUTION_CAPABILITY_NAMES,
+  EXECUTION_WORKERS,
   isExecutionReport,
   type ExecutionReport,
 } from '@forgeax/engine-app';
@@ -281,22 +282,25 @@ function EngineExecutionPanel({ report }: { readonly report: ExecutionReport | u
     <section
       className="cap-diagnostics"
       data-testid="cap-engine-execution"
-      data-requested-tier={report.requestedTier}
-      data-actual-tier={report.actualTier ?? 'pending'}
+      data-engine-realm={report.engine.realm}
+      data-engine-worker={report.workers.engine.enabled}
+      data-render-worker={report.workers.render.enabled}
+      data-kernel-worker={report.workers.kernels.enabled}
       data-engine-health={report.engine.health}
       data-world-health={report.world.health}
     >
       <div className="cap-diagnostics-header">
         <div>
           <h3>Engine execution</h3>
-          <span className="muted">requested {report.requestedTier} · actual {report.actualTier ?? 'pending'}</span>
+          <span className="muted">engine {report.engine.realm} · render {report.workers.render.enabled ? 'worker' : 'local'} · kernels {report.workers.kernels.enabled ? 'workers' : 'local'}</span>
         </div>
-        <span className="cap-diagnostics-policy">{report.selectionReason ?? 'selecting'}</span>
+        <span className="cap-diagnostics-policy">{report.workers.engine.reason}</span>
       </div>
       <div className="cap-diagnostic-meta">
         <span>engine {report.engine.health} ({report.engine.realm})</span>
         <span>world {report.world.health}</span>
-        <span>shared evidence {report.sharedEvidencePassed ? 'passed' : 'not passed'}</span>
+        <span>kernel dispatch {report.kernelDispatch.usedShared ? 'shared' : 'local'} · {report.kernelDispatch.dispatched} dispatched</span>
+        <span>worker policies {EXECUTION_WORKERS.map((name) => `${name}: ${String(report.workers[name].requested)}`).join(' · ')}</span>
       </div>
       {unavailable.length > 0 && (
         <details className="cap-diagnostic-details">

@@ -1,4 +1,4 @@
-import { validateAuthoredImport, validatePack, type AuthoredImportAsset } from '@forgeax/engine-pack';
+import { parsePackSourceJson, projectDirectPackJson } from '@forgeax/engine-pack/source';
 import { createCatalogSource } from '@forgeax/engine-assets-runtime';
 // session/import-ops — asset import executor + `importAsset` session op.
 //
@@ -29,27 +29,57 @@ import { createCatalogSource } from '@forgeax/engine-assets-runtime';
 
 import { assetIO, type AssetIoResult, type TriggerCookStats } from '../io/asset-io-facade';
 import { getImportFormat } from '../scan/ext-importer-map';
-import { produceSourceMetadata, type SourceMetadataResult } from '../assets/source-metadata-producer';
+import {
+  produceSourceMetadata,
+  type SourceMetadataResult,
+} from '../assets/source-metadata-producer';
 import { storagePathToCatalogSourceKey } from '../assets/catalog-storage-path';
 import { generateAssetGuid } from './pack-ops';
-import { awaitPostAssetWriteCatalogSync } from './authored-asset-write';
+import { awaitPostAssetWriteCatalogSync, awaitPostSourcePackageCatalogSync,
+} from './authored-asset-write';
+import {
+  applyImportCookResult,
+  primeCatalogBeforeCook } from './import-cook-catalog-apply';
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
+
+async function activeImportRegistry(): Promise<AssetRegistry | undefined> {
+  const { gateway } = await import('../store/gateway.js');
+  return gateway.doc.registry;
+}
+
+async function awaitPackSourceAnchor(
+  sourceKey: string,
+  binding: NonNullable<ReturnType<typeof assetIO.getRuntimeBinding>>,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  const catalog = createCatalogSource({ url: binding.catalogUrl, expectedScope: binding });
+  for (let attempt = 0; attempt < 24 && !signal?.aborted; attempt += 1) {
+    const snapshot = await catalog.enumerate();
+    if (snapshot.ok) {
+      const asset = snapshot.value.find((row) => row.sourcePath === sourceKey);
+      if (asset) return asset.guid;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 150));
+  }
+  return undefined;
+}
 import { registerApplier } from '../io/appliers';
 import { broadcastAssetsChanged } from '../store/assets-changed';
 import { resolveGamePath } from '../util/path-resolver';
 import {
   validateImportDestinationPath,
-  validateImportSourceRelativePath,
-} from './asset-basename';
+  validateImportSourceRelativePath } from './asset-basename';
 import type { EditorOp } from '../types';
-import { createRuntimeReadiness, type RuntimeReadiness, type RuntimeRevision } from '../io/vfx-runtime-readiness';
+import { createRuntimeReadiness, type RuntimeReadiness, type RuntimeRevision,
+} from '../io/vfx-runtime-readiness';
 
 /** Terminal status of a single-file import (shared with the content-browser UI). */
-export type ImportFileStatus = 'pending' | 'uploading' | 'sidecar' | 'cooking' | 'done' | 'cancelled' | 'error';
+export type ImportFileStatus =
+  | 'pending' | 'uploading' | 'sidecar' | 'cooking' | 'done' | 'cancelled' | 'error';
 export type ImportProgressStage =
   | 'uploading'
   | 'sourceCook'
-  | 'sidecar'
-  | 'engineCookWait'
+  | 'sidecar' | 'engineCookWait'
   | 'engineCook'
   | 'indexing';
 
@@ -105,7 +135,9 @@ interface EngineCookTriggerSpec {
 }
 
 /** POST play-engine import/rebuild and wait for the scoped production route to finish. */
-async function awaitEngineCookTrigger(spec: EngineCookTriggerSpec): Promise<AssetIoResult<TriggerCookStats>> {
+async function awaitEngineCookTrigger(
+  spec: EngineCookTriggerSpec,
+): ReturnType<typeof assetIO.triggerCook> {
   const catalogSourceKey = storagePathToCatalogSourceKey(
     spec.metaPath,
     assetIO.getRuntimeBinding()?.catalogRoots ?? [],
@@ -120,10 +152,13 @@ async function awaitEngineCookTrigger(spec: EngineCookTriggerSpec): Promise<Asse
   const pulseTimer = setInterval(() => {
     if (waitingCatalog) return;
     pulseFraction = Math.min(pulseFraction + 0.006, IMPORT_FRACTION.engineCookEnd - 0.01);
-    progressReporter.report({
-      stage: 'engineCook',
-      fraction: pulseFraction,
-    }, { pulse: true });
+    progressReporter.report(
+      {
+        stage: 'engineCook',
+        fraction: pulseFraction,
+      },
+      { pulse: true },
+    );
   }, 2000);
   let result: Awaited<ReturnType<typeof assetIO.triggerCook>>;
   try {
@@ -135,30 +170,39 @@ async function awaitEngineCookTrigger(spec: EngineCookTriggerSpec): Promise<Asse
       (cookProgress) => {
         if (cookProgress.phase === 'wait-catalog') {
           waitingCatalog = true;
-          progressReporter.report({
-            stage: 'engineCookWait',
-            fraction: Math.min(
-              IMPORT_FRACTION.engineCookWait + cookProgress.attempt * 0.008,
-              IMPORT_FRACTION.engineCookStart - 0.01,
-            ),
-          }, { attempt: cookProgress.attempt, reason: 'catalog-not-ready' });
+          progressReporter.report(
+            {
+              stage: 'engineCookWait',
+              fraction: Math.min(
+                IMPORT_FRACTION.engineCookWait + cookProgress.attempt * 0.008,
+                IMPORT_FRACTION.engineCookStart - 0.01,
+              ),
+            },
+            { attempt: cookProgress.attempt, reason: 'catalog-not-ready' },
+          );
           return;
         }
         waitingCatalog = false;
-        progressReporter.report({
-          stage: 'engineCook',
-          fraction: Math.max(pulseFraction, IMPORT_FRACTION.engineCookStart),
-        }, { attempt: cookProgress.attempt, phase: 'engine-active' });
+        progressReporter.report(
+          {
+            stage: 'engineCook',
+            fraction: Math.max(pulseFraction, IMPORT_FRACTION.engineCookStart),
+          },
+          { attempt: cookProgress.attempt, phase: 'engine-active' },
+        );
       },
     );
   } finally {
     clearInterval(pulseTimer);
   }
   if (result.ok) {
-    progressReporter.report({
-      stage: 'engineCook',
-      fraction: IMPORT_FRACTION.engineCookEnd,
-    }, { phase: 'engine-cook-complete' });
+    progressReporter.report(
+      {
+        stage: 'engineCook',
+        fraction: IMPORT_FRACTION.engineCookEnd,
+      },
+      { phase: 'engine-cook-complete' },
+    );
   }
   return result;
 }
@@ -292,22 +336,34 @@ export interface SourceReimportSpec {
 export async function executeSourceReimport(spec: SourceReimportSpec): Promise<ImportFileResult> {
   const snapshot = await assetIO.readMetaSidecar(spec.metaPath);
   if (!snapshot.ok) {
-    return failedImport(spec.guid, spec.metaPath, 'IMPORT_REIMPORT_META_MISSING', snapshot.error.hint, { retryable: true, guid: spec.guid });
+    return failedImport(spec.guid, spec.metaPath, 'IMPORT_REIMPORT_META_MISSING', snapshot.error.hint, { retryable: true, guid: spec.guid },
+    );
   }
   try {
     const meta = JSON.parse(snapshot.value.contents) as { subAssets?: unknown };
     if (!Array.isArray(meta.subAssets) || meta.subAssets.length === 0) {
-      return failedImport(spec.guid, spec.metaPath, 'IMPORT_REIMPORT_IDENTITY_MISSING', 'Reimport Meta has no producer-owned sub-asset identities.', { retryable: false, guid: spec.guid });
+      return failedImport(spec.guid, spec.metaPath, 'IMPORT_REIMPORT_IDENTITY_MISSING', 'Reimport Meta has no producer-owned sub-asset identities.', { retryable: false, guid: spec.guid },
+      );
     }
+    const registry = await activeImportRegistry();
+    await primeCatalogBeforeCook(registry);
     const cooked = await assetIO.triggerCook(spec.guid, spec.signal);
     if (!cooked.ok) {
-      return failedImport(spec.guid, spec.metaPath, 'IMPORT_COOK_TRIGGER_FAILED', cooked.error.hint, { guid: spec.guid, producerError: cooked.error.producerError });
+      return failedImport(spec.guid, spec.metaPath, 'IMPORT_COOK_TRIGGER_FAILED', cooked.error.hint, { guid: spec.guid, producerError: cooked.error.producerError },
+      );
     }
-    await awaitPostAssetWriteCatalogSync(spec.guid);
-    broadcastAssetsChanged();
-    return { filename: spec.guid, status: 'done', guid: spec.guid, subAssets: subAssetsFromMetaJson(snapshot.value.contents) };
+    await applyImportCookResult(registry, cooked.value.entries);
+    try {
+      await awaitPostAssetWriteCatalogSync(spec.guid);
+    } catch {
+      // Best-effort visibility; disk + cook response are authoritative for terminal success.
+    }
+    broadcastAssetsChanged('pack-changed', 'local-op');
+    return { filename: spec.guid, status: 'done', guid: spec.guid, subAssets: subAssetsFromMetaJson(snapshot.value.contents),
+    };
   } catch (error) {
-    return failedImport(spec.guid, spec.metaPath, 'IMPORT_EXECUTION_FAILED', error instanceof Error ? error.message : String(error), { guid: spec.guid });
+    return failedImport(spec.guid, spec.metaPath, 'IMPORT_EXECUTION_FAILED', error instanceof Error ? error.message : String(error), { guid: spec.guid },
+    );
   }
 }
 
@@ -322,7 +378,9 @@ export function createImportFailure(
   path: string,
   code: ImportFailureCode,
   hint: string,
-  options: { readonly retryable?: boolean; readonly producerError?: ImportFailure['producerError'] } = {},
+  options: { readonly retryable?: boolean;
+    readonly producerError?: ImportFailure['producerError'];
+  } = {},
 ): ImportFailure {
   const retryable = options.retryable ?? true;
   return {
@@ -330,7 +388,9 @@ export function createImportFailure(
     path,
     hint,
     retryable,
-    recoveryActions: options.producerError?.recoveryActions ?? (retryable ? ['operation.retry'] : ['import.verifySource']),
+    recoveryActions:
+      options.producerError?.recoveryActions ??
+      (retryable ? ['operation.retry'] : ['import.verifySource']),
     ...(options.producerError === undefined ? {} : { producerError: options.producerError }),
   };
 }
@@ -340,7 +400,9 @@ function failedImport(
   path: string,
   code: ImportFailureCode,
   hint: string,
-  options: { readonly retryable?: boolean; readonly guid?: string; readonly producerError?: ImportFailure['producerError'] } = {},
+  options: { readonly retryable?: boolean; readonly guid?: string;
+    readonly producerError?: ImportFailure['producerError'];
+  } = {},
 ): ImportFileResult {
   const errorDetail = createImportFailure(path, code, hint, options);
   return {
@@ -353,7 +415,8 @@ function failedImport(
 }
 
 function cancelledImport(filename: string, path: string, hint: string): ImportFileResult {
-  const errorDetail = createImportFailure(path, 'IMPORT_CANCELLED', hint, { retryable: false });
+  const errorDetail = createImportFailure(path, 'IMPORT_CANCELLED', hint, { retryable: false,
+  });
   return {
     filename,
     status: 'cancelled',
@@ -362,53 +425,22 @@ function cancelledImport(filename: string, path: string, hint: string): ImportFi
   };
 }
 
-function producedCatalogEntries(result: ImportFileResult): readonly ImportSubAsset[] {
-  if (result.subAssets !== undefined && result.subAssets.length > 0) {
-    return result.subAssets;
-  }
-  if (result.guid !== undefined) {
-    return [{ guid: result.guid, kind: 'asset' }];
-  }
-  return [];
-}
-
-/** Wait for pack-index visibility while advancing the import progress bar. */
-async function awaitProducedCatalogSync(
-  entries: readonly ImportSubAsset[],
-  onProgress?: (progress: ImportProgressEvent) => void,
-): Promise<void> {
-  if (entries.length === 0) {
-    reportImportProgress(onProgress, { stage: 'indexing', fraction: IMPORT_FRACTION.done });
-    return;
-  }
-  reportImportProgress(onProgress, { stage: 'indexing', fraction: IMPORT_FRACTION.indexStart });
-  let completed = 0;
-  for (const entry of entries) {
-    try {
-      await awaitPostAssetWriteCatalogSync(entry.guid);
-    } catch (err) {
-      const hint = err instanceof Error ? err.message : String(err);
-      throw err;
-    }
-    completed += 1;
-    const span = IMPORT_FRACTION.indexEnd - IMPORT_FRACTION.indexStart;
-    reportImportProgress(onProgress, {
-      stage: 'indexing',
-      fraction: IMPORT_FRACTION.indexStart + (completed / entries.length) * span,
-    }, { catalogIndex: completed + 1, catalogTotal: entries.length });
-  }
+/** glTF/FBX imports publish a disk sidecar; sub-assets cook lazily on first use. */
+function isSourcePackageImport(sourceName: string): boolean {
+  const ext = sourceName.slice(sourceName.lastIndexOf('.')).toLowerCase();
+  return ext === '.glb' || ext === '.gltf' || ext === '.fbx';
 }
 
 function subAssetsFromMetaJson(metaJson: string): readonly ImportSubAsset[] {
   try {
     const value = JSON.parse(metaJson) as { readonly subAssets?: unknown };
     if (!Array.isArray(value.subAssets)) return [];
-    return value.subAssets.filter((entry): entry is ImportSubAsset => (
-      entry !== null
+    return value.subAssets.filter((entry): entry is ImportSubAsset =>
+          entry !== null
       && typeof entry === 'object'
       && typeof (entry as { guid?: unknown }).guid === 'string'
-      && typeof (entry as { kind?: unknown }).kind === 'string'
-    )).map((entry) => ({ guid: entry.guid, kind: entry.kind }));
+      && typeof (entry as { kind?: unknown }).kind === 'string',
+      ).map((entry) => ({ guid: entry.guid, kind: entry.kind }));
   } catch {
     return [];
   }
@@ -433,13 +465,14 @@ export function mergeSourceReimportMeta(
   rebuiltValue: unknown,
 ): Record<string, unknown> {
   const existing = existingValue !== null && typeof existingValue === 'object' && !Array.isArray(existingValue)
-    ? existingValue as Record<string, unknown>
-    : {};
+    ? (existingValue as Record<string, unknown>)
+      : {};
   const rebuilt = rebuiltValue !== null && typeof rebuiltValue === 'object' && !Array.isArray(rebuiltValue)
-    ? rebuiltValue as Record<string, unknown>
-    : {};
+    ? (rebuiltValue as Record<string, unknown>)
+      : {};
   const merged = { ...rebuilt };
-  for (const field of ['guid', 'sourceOverrides', 'importSettings', 'subAssets', 'instances', 'promote'] as const) {
+  for (const field of ['guid', 'sourceOverrides', 'importSettings', 'subAssets', 'instances', 'promote',
+  ] as const) {
     if (existing[field] !== undefined) merged[field] = existing[field];
   }
   return merged;
@@ -447,11 +480,13 @@ export function mergeSourceReimportMeta(
 
 function existingImportMeta(value: unknown): ExistingImportMeta | undefined {
   if (value === null || typeof value !== 'object') return undefined;
-  const record = value as { subAssets?: unknown; importSettings?: unknown; sourceOverrides?: unknown };
+  const record = value as { subAssets?: unknown; importSettings?: unknown; sourceOverrides?: unknown;
+  };
   if (!Array.isArray(record.subAssets)) return undefined;
   const subAssets = record.subAssets.flatMap((entry): ExistingSubAsset[] => {
     if (entry === null || typeof entry !== 'object') return [];
-    const item = entry as { guid?: unknown; kind?: unknown; sourceIndex?: unknown };
+    const item = entry as { guid?: unknown; kind?: unknown; sourceIndex?: unknown;
+    };
     if (typeof item.guid !== 'string' || typeof item.kind !== 'string') return [];
     return [{
       guid: item.guid,
@@ -460,16 +495,17 @@ function existingImportMeta(value: unknown): ExistingImportMeta | undefined {
       ...(typeof (item as { sourceKey?: unknown }).sourceKey === 'string'
         ? { sourceKey: (item as { sourceKey: string }).sourceKey }
         : {}),
-    }];
+    },
+    ];
   });
   const importSettings = record.importSettings !== null && typeof record.importSettings === 'object'
-    ? record.importSettings as Readonly<Record<string, unknown>>
-    : undefined;
+    ? (record.importSettings as Readonly<Record<string, unknown>>)
+      : undefined;
   const sourceOverrides = record.sourceOverrides !== null
     && typeof record.sourceOverrides === 'object'
     && !Array.isArray(record.sourceOverrides)
-    ? record.sourceOverrides as Readonly<Record<string, Readonly<Record<string, unknown>>>>
-    : undefined;
+    ? (record.sourceOverrides as Readonly<Record<string, Readonly<Record<string, unknown>>>>)
+      : undefined;
   return {
     subAssets,
     ...(importSettings === undefined ? {} : { importSettings }),
@@ -477,7 +513,8 @@ function existingImportMeta(value: unknown): ExistingImportMeta | undefined {
   };
 }
 
-function existingFbxCandidatePaths(existing: ExistingImportMeta | undefined): readonly string[] | undefined {
+function existingFbxCandidatePaths(existing: ExistingImportMeta | undefined,
+): readonly string[] | undefined {
   const candidates = existing?.importSettings?.fbxCandidatePaths;
   return Array.isArray(candidates) && candidates.every((candidate): candidate is string => typeof candidate === 'string')
     ? candidates
@@ -519,18 +556,28 @@ async function prepareImportSourceTransaction(input: {
   readonly destPath: string;
   readonly base64: string;
   readonly companionSources: readonly { destPath: string; base64: string }[];
-  readonly sourceFiles: readonly { destPath: string; relativePath: string; base64: string }[];
+  readonly sourceFiles: readonly {
+    destPath: string;
+    relativePath: string;
+    base64: string;
+  }[];
   readonly metaPath: string;
   readonly authoredPack?: boolean;
   readonly requestId?: string;
   readonly signal?: AbortSignal;
-}): Promise<{ readonly ok: true; readonly transaction: ImportSourceTransaction } | { readonly ok: false; readonly failure: ImportTransactionFailure }> {
+}): Promise<
+  | { readonly ok: true; readonly transaction: ImportSourceTransaction }
+  | { readonly ok: false; readonly failure: ImportTransactionFailure }
+> {
   const sources = [
     { destPath: input.destPath, base64: input.base64 },
     ...input.companionSources,
     ...input.sourceFiles,
   ];
-  const targetPaths = [...sources.map((source) => source.destPath), ...(input.authoredPack ? [] : [input.metaPath])];
+  const targetPaths = [
+    ...sources.map((source) => source.destPath),
+    ...(input.authoredPack ? [] : [input.metaPath]),
+  ];
   const uniqueTargets = new Set(targetPaths);
   if (uniqueTargets.size !== targetPaths.length) {
     return {
@@ -587,11 +634,19 @@ async function prepareImportSourceTransaction(input: {
       ...promotedSources,
       ...(metaPromoted ? [input.metaPath] : []),
     ];
-    await Promise.all(paths.map(async (path) => { await assetIO.deleteSourceFile(path); }));
+    await Promise.all(
+      paths.map(async (path) => {
+        await assetIO.deleteSourceFile(path);
+      }),
+    );
   };
 
   for (const source of stagedSources) {
-    const uploaded = await assetIO.uploadSourceBytes(source.stagedPath, source.base64, input.signal);
+    const uploaded = await assetIO.uploadSourceBytes(
+      source.stagedPath,
+      source.base64,
+      input.signal,
+    );
     if (!uploaded.ok) {
       await cleanup();
       return {
@@ -630,7 +685,10 @@ async function prepareImportSourceTransaction(input: {
       if (!movedMeta.ok) {
         await cleanup();
         return {
-          code: movedMeta.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_SIDECAR_WRITE_FAILED',
+          code:
+            movedMeta.error.kind === 'network'
+              ? 'IMPORT_NETWORK_ERROR'
+              : 'IMPORT_SIDECAR_WRITE_FAILED',
           path: input.metaPath,
           hint: movedMeta.error.hint,
           retryable: movedMeta.error.kind === 'network',
@@ -672,21 +730,29 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
     onCancellationPolicy?.(policy);
   };
   const isCancelled = (): boolean => signal?.aborted === true && cancellationPolicy.cancellable;
-  const cancelledHint = 'Import cancelled before its next write boundary; no temporary sidecar was created.';
+  const cancelledHint =
+    'Import cancelled before its next write boundary; no temporary sidecar was created.';
   // Metadata resolves its source relative to the sidecar, not the caller's working directory.
   const sourceFileName = destPath.replace(/\\/g, '/').split('/').at(-1) || sourceName;
   const ext = sourceName.slice(sourceName.lastIndexOf('.')).toLowerCase();
   const format = getImportFormat(sourceName);
 
   if (!format) {
-    return failedImport(sourceName, destPath, 'IMPORT_UNSUPPORTED_FORMAT', `Unsupported format: ${ext}`, { retryable: false });
+    return failedImport(
+      sourceName,
+      destPath,
+      'IMPORT_UNSUPPORTED_FORMAT',
+      `Unsupported format: ${ext}`,
+      { retryable: false },
+    );
   }
 
   if (signal?.aborted === true) return cancelledImport(sourceName, destPath, cancelledHint);
 
-  const metaPath = format.importer === 'ui'
-    ? destPath.replace(/\.ui\.html$/i, '.meta.json')
-    : `${destPath}.meta.json`;
+  const metaPath =
+    format.importer === 'ui'
+      ? destPath.replace(/\.ui\.html$/i, '.meta.json')
+      : `${destPath}.meta.json`;
   const dependencyFiles = sourceFiles ?? [];
   let sourceTransaction: ImportSourceTransaction | undefined;
   let importCommitted = false;
@@ -701,9 +767,18 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
         hint: 'Import is uploading the source; cancellation is unavailable until the write completes.',
       });
       if (base64 === undefined) {
-        return failedImport(sourceName, destPath, 'IMPORT_SOURCE_BYTES_MISSING', 'No source bytes to upload', { retryable: false });
+        return failedImport(
+          sourceName,
+          destPath,
+          'IMPORT_SOURCE_BYTES_MISSING',
+          'No source bytes to upload',
+          { retryable: false },
+        );
       }
-      reportImportProgress(onProgress, { stage: 'uploading', fraction: IMPORT_FRACTION.upload });
+      reportImportProgress(onProgress, {
+        stage: 'uploading',
+        fraction: IMPORT_FRACTION.upload,
+      });
       const prepared = await prepareImportSourceTransaction({
         destPath,
         base64,
@@ -717,7 +792,11 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
       if (!prepared.ok) {
         if (prepared.failure.code === 'IMPORT_SOURCE_TARGET_CONFLICT') {
           const priorMeta = existingImportMeta(await assetIO.readExistingMeta(metaPath));
-          if (format.importer !== 'pack' && priorMeta !== undefined && priorMeta.subAssets.length > 0) {
+          if (
+            format.importer !== 'pack' &&
+            priorMeta !== undefined &&
+            priorMeta.subAssets.length > 0
+          ) {
             const replaced = await assetIO.uploadSourceBytes(destPath, base64, signal);
             if (!replaced.ok) {
               return failedImport(
@@ -730,14 +809,26 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
             }
             effectiveMode = 'reimport';
           } else {
-            return failedImport(sourceName, prepared.failure.path, prepared.failure.code, prepared.failure.hint, {
-              retryable: prepared.failure.retryable,
-            });
+            return failedImport(
+              sourceName,
+              prepared.failure.path,
+              prepared.failure.code,
+              prepared.failure.hint,
+              {
+                retryable: prepared.failure.retryable,
+              },
+            );
           }
         } else {
-          return failedImport(sourceName, prepared.failure.path, prepared.failure.code, prepared.failure.hint, {
-            retryable: prepared.failure.retryable,
-          });
+          return failedImport(
+            sourceName,
+            prepared.failure.path,
+            prepared.failure.code,
+            prepared.failure.hint,
+            {
+              retryable: prepared.failure.retryable,
+            },
+          );
         }
       } else {
         sourceTransaction = prepared.transaction;
@@ -754,120 +845,47 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
           'A bound Engine catalog is required to import an authored Pack.',
           { retryable: true },
         );
-      if (destPath.toLowerCase().endsWith('.pack.ts')) {
-        const sourceKey = storagePathToCatalogSourceKey(destPath, binding.catalogRoots ?? []);
-        if (!sourceKey) return failedImport(sourceName, destPath, 'IMPORT_COOK_FAILED',
-          'The Pack destination is outside the active runtime catalog roots.', { retryable: false });
-        if (signal?.aborted) return cancelledImport(sourceName, destPath, cancelledHint);
-        const committed = await sourceTransaction?.commit();
-        if (committed) return failedImport(sourceName, committed.path, committed.code, committed.hint,
-          { retryable: committed.retryable });
-        const cooked = await assetIO.importPackSource(sourceKey, signal);
-        if (!cooked.ok) return failedImport(sourceName, destPath, 'IMPORT_COOK_TRIGGER_FAILED', cooked.error.hint, { producerError: cooked.error.producerError });
-        if (signal?.aborted) return cancelledImport(sourceName, destPath, cancelledHint);
-        const guid = (cooked.value.find((asset) => asset.kind === 'scene') ?? cooked.value[0])!.guid;
-        importCommitted = true;
-        return { filename: sourceName, status: 'done', guid, subAssets: cooked.value };
-      }
-      const catalog = await createCatalogSource({ url: binding.catalogUrl, expectedScope: binding }).enumerate();
-      if (!catalog.ok)
-        return failedImport(sourceName, destPath, 'IMPORT_COOK_FAILED', String(catalog.error), {
-          retryable: true,
-        });
-      const source =
-        base64 !== undefined
-          ? { ok: true as const, value: base64ToArrayBuffer(base64) }
-          : await assetIO.readSourceBytes(destPath, signal);
-      if (!source.ok)
-        return failedImport(sourceName, destPath, 'IMPORT_SOURCE_READ_FAILED', source.error.hint, {
-          retryable: false,
-        });
-      // Validate the entire supplied Pack batch before publishing any source. Companion
-      // Packs may reference one another, but may not claim another source's identity.
       const packs = [
-        { path: destPath, value: JSON.parse(new TextDecoder().decode(source.value)) },
+        { path: destPath, base64 },
         ...[...dependencyFiles, ...companionSources]
           .filter((file) => file.destPath.toLowerCase().endsWith('.pack.json'))
-          .map((file) => ({
-            path: file.destPath,
-            value: JSON.parse(new TextDecoder().decode(base64ToArrayBuffer(file.base64))),
-          })),
+          .map((file) => ({ path: file.destPath, base64: file.base64 })),
       ];
-      const incoming = new Map<string, string>();
+      const sources: { path: string; sourceKey: string; anchorGuid?: string }[] = [];
       for (const pack of packs) {
-        if (!validatePack(pack.value))
-          return failedImport(
-            sourceName,
-            pack.path,
-            'IMPORT_COOK_FAILED',
-            'pack-import-invalid: supply valid authored Pack source.',
-            { retryable: false },
-          );
         const sourceKey = storagePathToCatalogSourceKey(pack.path, binding.catalogRoots ?? []);
-        for (const asset of pack.value.assets as AuthoredImportAsset[]) {
-          const guid = asset.guid.toLowerCase();
-          if (
-            incoming.has(guid) ||
-            catalog.value.some((row) => row.guid.toLowerCase() === guid && row.sourcePath !== sourceKey)
-          ) {
-            return failedImport(
-              sourceName,
-              pack.path,
-              'IMPORT_COOK_FAILED',
-              'pack-guid-collision: an authored GUID already belongs to another source.',
-              { retryable: false },
-            );
-          }
-          incoming.set(guid, pack.path);
-        }
-      }
-      const available = new Set([...catalog.value.map((row) => row.guid), ...incoming.keys()]);
-      const imported: AuthoredImportAsset[] = [];
-      for (const pack of packs) {
-        const checked = validateAuthoredImport(pack.value, available);
-        if (!checked.ok)
-          return failedImport(sourceName, pack.path, 'IMPORT_COOK_FAILED', `${checked.code}: ${checked.hint}`, {
-            retryable: false,
-          });
-        imported.push(...checked.assets);
-        const directory = pack.path.slice(0, pack.path.lastIndexOf('/') + 1);
-        for (const path of checked.artifacts) {
-          const supplied = [...dependencyFiles, ...companionSources].find(
-            (file) => file.destPath === directory + path,
-          );
-          const bytes = supplied
-            ? { ok: true as const, value: base64ToArrayBuffer(supplied.base64) }
-            : await assetIO.readSourceBytes(directory + path, signal);
+        if (!sourceKey)
+          return failedImport(sourceName, pack.path, 'IMPORT_COOK_FAILED',
+            'The Pack destination is outside the active runtime catalog roots.',
+            { retryable: false });
+        if (pack.path.toLowerCase().endsWith('.pack.json')) {
+          const bytes = pack.base64 !== undefined
+            ? { ok: true as const, value: base64ToArrayBuffer(pack.base64) }
+            : await assetIO.readSourceBytes(pack.path, signal);
           if (!bytes.ok)
-            return failedImport(
-              sourceName,
-              pack.path,
-              'IMPORT_SOURCE_READ_FAILED',
-              `Missing Pack dependency: ${path}`,
-              { retryable: false },
-            );
-          const descriptors = checked.assets
-            .flatMap((asset) => Object.values(asset.artifacts ?? {}))
-            .filter((entry) => entry.path === path);
-          const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.value))]
-            .map((byte) => byte.toString(16).padStart(2, '0'))
-            .join('');
-          if (
-            descriptors.some(
-              (entry) =>
-                (entry.byteLength !== undefined && entry.byteLength !== bytes.value.byteLength) ||
-                (entry.integrity !== undefined && entry.integrity.digest !== digest),
-            )
-          ) {
-            return failedImport(
-              sourceName,
-              pack.path,
-              'IMPORT_COOK_FAILED',
-              `Pack dependency integrity mismatch: ${path}`,
-              { retryable: false },
-            );
+            return failedImport(sourceName, pack.path, 'IMPORT_SOURCE_READ_FAILED', bytes.error.hint,
+              { retryable: false });
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(new TextDecoder().decode(bytes.value));
+          } catch {
+            return failedImport(sourceName, pack.path, 'IMPORT_COOK_FAILED',
+              'Pack source is not valid JSON.', { retryable: false });
+          }
+          const authored = parsePackSourceJson(parsed);
+          if (!authored.ok)
+            return failedImport(sourceName, pack.path, 'IMPORT_COOK_FAILED',
+              `${authored.error.code}: ${authored.error.hint}`, { retryable: false });
+          if (authored.value.format === 'direct') {
+            const projected = projectDirectPackJson(authored.value);
+            if (!projected.ok)
+              return failedImport(sourceName, pack.path, 'IMPORT_COOK_FAILED',
+                `${projected.error.code}: ${projected.error.hint}`, { retryable: false });
+            sources.push({ path: pack.path, sourceKey, anchorGuid: projected.value.assets[0]?.guid });
+            continue;
           }
         }
+        sources.push({ path: pack.path, sourceKey });
       }
       if (signal?.aborted) return cancelledImport(sourceName, destPath, cancelledHint);
       const committed = await sourceTransaction?.commit();
@@ -875,20 +893,34 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
         return failedImport(sourceName, committed.path, committed.code, committed.hint, {
           retryable: committed.retryable,
         });
-      const subAssets = imported.map(({ guid, kind }) => ({ guid, kind }));
-      const guid = subAssets[0]!.guid;
-      const cooked = await awaitEngineCookTrigger({
-        cookAnchorGuid: guid,
-        destPath,
-        sourceName,
-        metaPath: destPath,
-        importer: 'pack',
-        subAssetCount: subAssets.length,
-        signal,
-        onProgress,
-      });
-      if (!cooked.ok)
-        return failedImport(sourceName, destPath, 'IMPORT_COOK_TRIGGER_FAILED', cooked.error.hint, { guid, producerError: cooked.error.producerError });
+      const subAssets: { guid: string; kind: string }[] = [];
+      for (const source of sources) {
+        const anchorGuid = source.anchorGuid ?? await awaitPackSourceAnchor(source.sourceKey, binding, signal);
+        if (!anchorGuid)
+          return failedImport(sourceName, source.path, 'IMPORT_COOK_TRIGGER_FAILED',
+            'Engine did not publish a Pack source identity in the active catalog.',
+            { retryable: true });
+        const cooked = await awaitEngineCookTrigger({
+          cookAnchorGuid: anchorGuid,
+          destPath: source.path,
+          sourceName,
+          metaPath: source.path,
+          importer: 'pack',
+          subAssetCount: 1,
+          signal,
+          onProgress,
+        });
+        if (!cooked.ok)
+          return failedImport(sourceName, source.path, 'IMPORT_COOK_TRIGGER_FAILED', cooked.error.hint,
+            { producerError: cooked.error.producerError });
+        const rows = cooked.value.entries.filter((row) => row.sourcePath === source.sourceKey);
+        if (rows.length === 0 || rows.some((row) => !row.kind))
+          return failedImport(sourceName, source.path, 'IMPORT_COOK_TRIGGER_FAILED',
+            'Engine returned no source assets for the imported Pack.', { retryable: true });
+        subAssets.push(...rows.map((row) => ({ guid: row.guid, kind: row.kind! })));
+      }
+      if (signal?.aborted) return cancelledImport(sourceName, destPath, cancelledHint);
+      const guid = (subAssets.find((asset) => asset.kind === 'scene') ?? subAssets[0])!.guid;
       importCommitted = true;
       return { filename: sourceName, status: 'done', guid, subAssets };
     }
@@ -933,47 +965,67 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
         cancellable: true,
         hint: 'Import can be cancelled while reading and cooking the source; no sidecar write has started.',
       });
-      reportImportProgress(onProgress, { stage: 'sourceCook', fraction: IMPORT_FRACTION.sourceCook });
-      const sourceBytes = base64 !== undefined
-        ? { ok: true as const, value: base64ToArrayBuffer(base64) }
-        : await assetIO.readSourceBytes(destPath, signal);
+      reportImportProgress(onProgress, {
+        stage: 'sourceCook',
+        fraction: IMPORT_FRACTION.sourceCook,
+      });
+      const sourceBytes =
+        base64 !== undefined
+          ? { ok: true as const, value: base64ToArrayBuffer(base64) }
+          : await assetIO.readSourceBytes(destPath, signal);
       if (isCancelled()) return cancelledImport(sourceName, destPath, cancelledHint);
       if (!sourceBytes.ok) {
         return failedImport(
           sourceName,
           destPath,
-          sourceBytes.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_SOURCE_READ_FAILED',
+          sourceBytes.error.kind === 'network'
+            ? 'IMPORT_NETWORK_ERROR'
+            : 'IMPORT_SOURCE_READ_FAILED',
           sourceBytes.error.hint,
           { retryable: sourceBytes.error.kind === 'network' },
         );
       }
       const bytes = sourceBytes.value;
-      if (existing === undefined) existing = existingImportMeta(await assetIO.readExistingMeta(metaPath));
+      if (existing === undefined)
+        existing = existingImportMeta(await assetIO.readExistingMeta(metaPath));
       if (isCancelled()) return cancelledImport(sourceName, destPath, cancelledHint);
       let cooked: SourceMetadataResult;
       try {
-        const fbxCandidatePaths = sourceFiles === undefined
-          ? existingFbxCandidatePaths(existing)
-          : dependencyFiles.map((sourceFile) => sourceFile.relativePath);
-        cooked = await produceSourceMetadata({ bytes, sourceName: sourceFileName, existing,
-          ...(fbxCandidatePaths === undefined ? {} : { fbxCandidatePaths }) });
+        const fbxCandidatePaths =
+          sourceFiles === undefined
+            ? existingFbxCandidatePaths(existing)
+            : dependencyFiles.map((sourceFile) => sourceFile.relativePath);
+        cooked = await produceSourceMetadata({
+          bytes,
+          sourceName: sourceFileName,
+          existing,
+          ...(fbxCandidatePaths === undefined ? {} : { fbxCandidatePaths }),
+        });
       } catch (err) {
         if (isCancelled()) return cancelledImport(sourceName, destPath, cancelledHint);
         const hint = err instanceof Error ? err.message : String(err);
-        return failedImport(sourceName, destPath, 'IMPORT_COOK_FAILED', hint, { retryable: false });
+        return failedImport(sourceName, destPath, 'IMPORT_COOK_FAILED', hint, {
+          retryable: false,
+        });
       }
       if (!cooked.ok) {
-        return failedImport(sourceName, destPath, cooked.code, cooked.error, { retryable: false });
+        return failedImport(sourceName, destPath, cooked.code, cooked.error, {
+          retryable: false,
+        });
       }
       if (isCancelled()) return cancelledImport(sourceName, destPath, cancelledHint);
       setCancellationPolicy({
         cancellable: false,
         hint: 'Import is writing the metadata sidecar; cancellation is unavailable until the write completes.',
       });
-      reportImportProgress(onProgress, { stage: 'sidecar', fraction: IMPORT_FRACTION.sidecar });
-      const wrote = sourceTransaction === undefined
-        ? await assetIO.writeMetaSidecar(metaPath, cooked.metaJson, signal)
-        : await sourceTransaction.writeMeta(cooked.metaJson, signal);
+      reportImportProgress(onProgress, {
+        stage: 'sidecar',
+        fraction: IMPORT_FRACTION.sidecar,
+      });
+      const wrote =
+        sourceTransaction === undefined
+          ? await assetIO.writeMetaSidecar(metaPath, cooked.metaJson, signal)
+          : await sourceTransaction.writeMeta(cooked.metaJson, signal);
       if (!wrote.ok) {
         return failedImport(
           sourceName,
@@ -993,46 +1045,35 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
         }
       }
       const subAssets = subAssetsFromMetaJson(cooked.metaJson);
-      const cookAnchorGuid = subAssets[0]?.guid ?? guid;
+      const publicationGuid =
+        subAssets.find((entry) => entry.kind === 'scene')?.guid ?? subAssets[0]?.guid ?? guid;
       setCancellationPolicy({
         cancellable: false,
-        hint: 'Import is triggering the engine cook; cancellation is unavailable after the sidecar write.',
+        hint: 'Import is publishing the source package to the catalog; cancellation is unavailable after the sidecar write.',
       });
-      const engineCooked = await awaitEngineCookTrigger({
-        cookAnchorGuid,
-        destPath,
-        sourceName,
-        metaPath,
-        importer: format.importer,
-        subAssetCount: subAssets.length,
-        signal,
-        onProgress,
-      });
-      if (!engineCooked.ok) {
+      const registry = await activeImportRegistry();
+      await primeCatalogBeforeCook(registry);
+      const published = await awaitEngineCookTrigger({ cookAnchorGuid: publicationGuid, destPath, sourceName, metaPath, importer: format.importer, subAssetCount: subAssets.length, signal, onProgress });
+      if (!published.ok) {
         return failedImport(
           sourceName,
           destPath,
-          engineCooked.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_COOK_TRIGGER_FAILED',
-          engineCooked.error.hint,
-          { guid: cookAnchorGuid },
+          published.error.kind === 'network'
+            ? 'IMPORT_NETWORK_ERROR'
+            : 'IMPORT_COOK_TRIGGER_FAILED',
+          published.error.hint,
+          { guid: publicationGuid },
         );
       }
+      reportImportProgress(onProgress, { stage: 'indexing', fraction: IMPORT_FRACTION.indexStart });
+      await applyImportCookResult(registry, published.value.entries);
       importCommitted = true;
-      return { filename: sourceName, status: 'done', guid, subAssets };
-    }
-
-    // A source-only import must prove the destination exists before publishing metadata.
-    if (skipUpload) {
-      const source = await assetIO.readSourceBytes(destPath, signal);
-      if (!source.ok) {
-        return failedImport(
-          sourceName,
-          destPath,
-          source.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_SOURCE_READ_FAILED',
-          source.error.hint,
-          { retryable: source.error.kind === 'network' },
-        );
-      }
+      return {
+        filename: sourceName,
+        status: 'done',
+        guid: publicationGuid,
+        subAssets,
+      };
     }
 
     // 3. Other importers (image/audio/font/pack): write a simple sidecar + cook.
@@ -1040,8 +1081,22 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
     // (texture atlas, sampler, font glyph metrics) declared in the sidecar so
     // it can resolve each by kind. All other importers produce a single
     // sub-asset of their declared kind.
-    const produced = await produceSourceMetadata({ bytes: new ArrayBuffer(0), sourceName: sourceFileName, existing, firstGuid: guid });
-    if (!produced.ok) return failedImport(sourceName, destPath, produced.code, produced.error, { retryable: false });
+    const source = base64 !== undefined
+      ? { ok: true as const, value: base64ToArrayBuffer(base64) }
+      : await assetIO.readSourceBytes(destPath, signal);
+    if (!source.ok) return failedImport(sourceName, destPath, 'IMPORT_SOURCE_READ_FAILED', source.error.hint, { retryable: false });
+    if (isCancelled()) return cancelledImport(sourceName, destPath, cancelledHint);
+    reportImportProgress(onProgress, { stage: 'sourceCook', fraction: IMPORT_FRACTION.sourceCook });
+    const produced = await produceSourceMetadata({
+      bytes: source.value,
+      sourceName: sourceFileName,
+      existing,
+      firstGuid: guid,
+    });
+    if (!produced.ok)
+      return failedImport(sourceName, destPath, produced.code, produced.error, {
+        retryable: false,
+      });
     const subAssets = subAssetsFromMetaJson(produced.metaJson);
     setCancellationPolicy({
       cancellable: false,
@@ -1051,9 +1106,10 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
       stage: 'sidecar',
       fraction: format.importer === 'audio' ? IMPORT_FRACTION.done : IMPORT_FRACTION.sidecar,
     });
-    const wrote = sourceTransaction === undefined
-      ? await assetIO.writeMetaSidecar(metaPath, produced.metaJson, signal)
-      : await sourceTransaction.writeMeta(produced.metaJson, signal);
+    const wrote =
+      sourceTransaction === undefined
+        ? await assetIO.writeMetaSidecar(metaPath, produced.metaJson, signal)
+        : await sourceTransaction.writeMeta(produced.metaJson, signal);
     if (!wrote.ok) {
       return failedImport(
         sourceName,
@@ -1080,37 +1136,39 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
         cancellable: false,
         hint: 'Import is triggering the engine cook; cancellation is unavailable after the sidecar write.',
       });
-      const engineCooked = await awaitEngineCookTrigger({
-        cookAnchorGuid: guid,
-        destPath,
-        sourceName,
-        metaPath,
-        importer: format.importer,
-        subAssetCount: subAssets.length,
-        signal,
-        onProgress,
-      });
-      if (!engineCooked.ok) {
+      const registry = await activeImportRegistry();
+      await primeCatalogBeforeCook(registry);
+      const cooked = await awaitEngineCookTrigger({ cookAnchorGuid: guid, destPath, sourceName, metaPath, importer: format.importer, subAssetCount: subAssets.length, signal, onProgress });
+      if (!cooked.ok) {
         return failedImport(
           sourceName,
           destPath,
-          engineCooked.error.kind === 'network' ? 'IMPORT_NETWORK_ERROR' : 'IMPORT_COOK_TRIGGER_FAILED',
-          engineCooked.error.hint,
+          cooked.error.kind === 'network'
+            ? 'IMPORT_NETWORK_ERROR'
+            : 'IMPORT_COOK_TRIGGER_FAILED',
+          cooked.error.hint,
           { guid },
         );
       }
+      reportImportProgress(onProgress, { stage: 'indexing', fraction: IMPORT_FRACTION.indexStart });
+      await applyImportCookResult(registry, cooked.value.entries);
     }
     importCommitted = true;
     return {
       filename: sourceName,
       status: 'done',
       guid,
-      subAssets: subAssets.map(({ guid: subAssetGuid, kind }) => ({ guid: subAssetGuid, kind })),
+      subAssets: subAssets.map(({ guid: subAssetGuid, kind }) => ({
+        guid: subAssetGuid,
+        kind,
+      })),
     };
   } catch (err) {
     if (isCancelled()) return cancelledImport(sourceName, destPath, cancelledHint);
     const msg = err instanceof Error ? err.message : String(err);
-    return failedImport(sourceName, destPath, 'IMPORT_EXECUTION_FAILED', msg, { retryable: false });
+    return failedImport(sourceName, destPath, 'IMPORT_EXECUTION_FAILED', msg, {
+      retryable: false,
+    });
   } finally {
     if (sourceTransaction !== undefined && !importCommitted) await sourceTransaction.rollback();
   }
@@ -1120,26 +1178,48 @@ export async function executeAssetImport(spec: AssetImportSpec): Promise<ImportF
 // Both operations share this one completion owner. The only semantic difference
 // is whether the executor may mint identity (import) or must reuse the existing
 // source metadata (reimport).
-function registerImportOperation(operationId: 'importAsset' | 'reimportAsset', mode: 'import' | 'reimport'): void {
+function registerImportOperation(
+  operationId: 'importAsset' | 'reimportAsset',
+  mode: 'import' | 'reimport',
+): void {
   registerApplier('session', operationId, (op, ctx) => {
-    const { destPath, sourceName, base64, companionSources, sourceFiles, skipUpload, requestId } = op as {
-      destPath: string;
-      sourceName?: string;
-      base64?: string;
-      companionSources?: readonly { destPath: string; base64: string }[];
-      sourceFiles?: readonly { destPath: string; relativePath: string; base64: string }[];
-      skipUpload?: boolean;
-      requestId: string;
-    };
+    const { destPath, sourceName, base64, companionSources, sourceFiles, skipUpload, requestId } =
+      op as {
+        destPath: string;
+        sourceName?: string;
+        base64?: string;
+        companionSources?: readonly { destPath: string; base64: string }[];
+        sourceFiles?: readonly {
+          destPath: string;
+          relativePath: string;
+          base64: string;
+        }[];
+        skipUpload?: boolean;
+        requestId: string;
+      };
     if (typeof destPath !== 'string' || destPath.trim() === '') {
-      return { ok: false as const, error: { code: 'INVALID_ARGS', hint: `${operationId}.destPath must be a non-empty source path` } };
+      return {
+        ok: false as const,
+        error: {
+          code: 'INVALID_ARGS',
+          hint: `${operationId}.destPath must be a non-empty source path`,
+        },
+      };
     }
     if (typeof requestId !== 'string' || requestId.trim() === '') {
-      return { ok: false as const, error: { code: 'INVALID_ARGS', hint: `${operationId}.requestId must be a non-empty caller-minted id` } };
+      return {
+        ok: false as const,
+        error: {
+          code: 'INVALID_ARGS',
+          hint: `${operationId}.requestId must be a non-empty caller-minted id`,
+        },
+      };
     }
     let resolved: string;
     let resolvedCompanions: readonly { destPath: string; base64: string }[] | undefined;
-    let resolvedSourceFiles: readonly { destPath: string; relativePath: string; base64: string }[] | undefined;
+    let resolvedSourceFiles:
+      | readonly { destPath: string; relativePath: string; base64: string }[]
+      | undefined;
     try {
       const destination = validateImportDestinationPath(destPath);
       if (!destination.ok) throw new Error(`${operationId}.destPath: ${destination.hint}`);
@@ -1148,17 +1228,35 @@ function registerImportOperation(operationId: 'importAsset' | 'reimportAsset', m
       destinationTargets.add(resolved);
       if (companionSources !== undefined) {
         if (companionSources.length > 1) {
-          return { ok: false as const, error: { code: 'INVALID_ARGS', hint: `${operationId}.companionSources accepts at most one bounded companion` } };
+          return {
+            ok: false as const,
+            error: {
+              code: 'INVALID_ARGS',
+              hint: `${operationId}.companionSources accepts at most one bounded companion`,
+            },
+          };
         }
         resolvedCompanions = companionSources.map((companion) => {
-          if (typeof companion.destPath !== 'string' || companion.destPath.trim() === '' || typeof companion.base64 !== 'string' || companion.base64 === '') {
-            throw new Error(`${operationId}.companionSources requires non-empty destPath and base64`);
+          if (
+            typeof companion.destPath !== 'string' ||
+            companion.destPath.trim() === '' ||
+            typeof companion.base64 !== 'string' ||
+            companion.base64 === ''
+          ) {
+            throw new Error(
+              `${operationId}.companionSources requires non-empty destPath and base64`,
+            );
           }
           const companionDestination = validateImportDestinationPath(companion.destPath);
-          if (!companionDestination.ok) throw new Error(`${operationId}.companionSources.destPath: ${companionDestination.hint}`);
+          if (!companionDestination.ok)
+            throw new Error(
+              `${operationId}.companionSources.destPath: ${companionDestination.hint}`,
+            );
           const resolvedDestPath = resolveGamePath(companion.destPath);
           if (destinationTargets.has(resolvedDestPath)) {
-            throw new Error(`${operationId}.companionSources contains a destination collision with the root or another source`);
+            throw new Error(
+              `${operationId}.companionSources contains a destination collision with the root or another source`,
+            );
           }
           destinationTargets.add(resolvedDestPath);
           return { destPath: resolvedDestPath, base64: companion.base64 };
@@ -1168,27 +1266,35 @@ function registerImportOperation(operationId: 'importAsset' | 'reimportAsset', m
         const seenRelativePaths = new Set<string>();
         resolvedSourceFiles = sourceFiles.map((sourceFile) => {
           if (
-            typeof sourceFile.destPath !== 'string'
-            || sourceFile.destPath.trim() === ''
-            || typeof sourceFile.relativePath !== 'string'
-            || sourceFile.relativePath.trim() === ''
-            || typeof sourceFile.base64 !== 'string'
-            || sourceFile.base64 === ''
+            typeof sourceFile.destPath !== 'string' ||
+            sourceFile.destPath.trim() === '' ||
+            typeof sourceFile.relativePath !== 'string' ||
+            sourceFile.relativePath.trim() === '' ||
+            typeof sourceFile.base64 !== 'string' ||
+            sourceFile.base64 === ''
           ) {
-            throw new Error(`${operationId}.sourceFiles requires relativePath, destPath, and base64`);
+            throw new Error(
+              `${operationId}.sourceFiles requires relativePath, destPath, and base64`,
+            );
           }
           const sourceDestination = validateImportDestinationPath(sourceFile.destPath);
-          if (!sourceDestination.ok) throw new Error(`${operationId}.sourceFiles.destPath: ${sourceDestination.hint}`);
+          if (!sourceDestination.ok)
+            throw new Error(`${operationId}.sourceFiles.destPath: ${sourceDestination.hint}`);
           const sourceRelative = validateImportSourceRelativePath(sourceFile.relativePath);
-          if (!sourceRelative.ok) throw new Error(`${operationId}.sourceFiles.relativePath: ${sourceRelative.hint}`);
+          if (!sourceRelative.ok)
+            throw new Error(`${operationId}.sourceFiles.relativePath: ${sourceRelative.hint}`);
           const resolvedDestPath = resolveGamePath(sourceFile.destPath);
           if (destinationTargets.has(resolvedDestPath)) {
-            throw new Error(`${operationId}.sourceFiles contains a destination collision with the root, companion, or another source`);
+            throw new Error(
+              `${operationId}.sourceFiles contains a destination collision with the root, companion, or another source`,
+            );
           }
           destinationTargets.add(resolvedDestPath);
           const normalizedRelativePath = sourceRelative.name;
           if (seenRelativePaths.has(normalizedRelativePath.toLowerCase())) {
-            throw new Error(`${operationId}.sourceFiles contains a duplicate FBX relative dependency path`);
+            throw new Error(
+              `${operationId}.sourceFiles contains a duplicate FBX relative dependency path`,
+            );
           }
           seenRelativePaths.add(normalizedRelativePath.toLowerCase());
           return {
@@ -1199,7 +1305,13 @@ function registerImportOperation(operationId: 'importAsset' | 'reimportAsset', m
         });
       }
     } catch (err) {
-      return { ok: false as const, error: { code: 'INVALID_ARGS', hint: err instanceof Error ? err.message : String(err) } };
+      return {
+        ok: false as const,
+        error: {
+          code: 'INVALID_ARGS',
+          hint: err instanceof Error ? err.message : String(err),
+        },
+      };
     }
     const name = sourceName ?? destPath.slice(destPath.lastIndexOf('/') + 1);
     const cancellation = new AbortController();
@@ -1222,8 +1334,8 @@ function registerImportOperation(operationId: 'importAsset' | 'reimportAsset', m
       cancellation.abort();
       return { ok: true as const };
     });
-    const runProgress = createImportProgressReporter(
-      (event) => ctx?.operationRun?.reportProgress({ ...event }),
+    const runProgress = createImportProgressReporter((event) =>
+      ctx?.operationRun?.reportProgress({ ...event }),
     );
     const completion = executeAssetImport({
       destPath: resolved,
@@ -1239,45 +1351,65 @@ function registerImportOperation(operationId: 'importAsset' | 'reimportAsset', m
         cancellationPolicy = policy;
       },
       onProgress: (progress) => runProgress.report(progress),
-    })
-      .then(async (result) => {
-        if (result.status === 'done') {
-          const catalogEntries = producedCatalogEntries(result);
-          const reportRunProgress = (progress: ImportProgressEvent): void => {
-            runProgress.report(progress);
-          };
+    }).then(async (result) => {
+      if (result.status === 'done') {
+        // Source-package imports (glTF/FBX) land as disk sidecars first. Their
+        // sub-assets materialize lazily through the engine import transport,
+        // so waiting for every pack-index row here races the watcher and marks
+        // a successful import as failed while the files are already on disk.
+        if (isSourcePackageImport(name)) {
+          const producedGuids = result.subAssets?.map((subAsset) => subAsset.guid) ?? [];
           try {
-            await awaitProducedCatalogSync(catalogEntries, reportRunProgress);
-          } catch (err) {
-            const hint = err instanceof Error ? err.message : String(err);
-            return {
-              ok: false as const,
-              error: {
-                code: 'IMPORT_CATALOG_SYNC_FAILED',
-                hint,
-                subjectRef: { kind: 'source-file', id: destPath },
-                retryable: true,
-                recoveryActions: ['operation.retry'],
-              },
-            };
+            await awaitPostSourcePackageCatalogSync({
+              destPath: resolved,
+              sourceName: name,
+              ...(result.guid === undefined ? {} : { packageGuid: result.guid }),
+              subAssetGuids: producedGuids,
+            });
+          } catch {
+            // GLB/FBX: sidecar + cook entries already landed; barrier is best-effort.
           }
-          reportRunProgress({ stage: 'indexing', fraction: IMPORT_FRACTION.done });
-          broadcastAssetsChanged();
+          broadcastAssetsChanged('pack-changed', 'local-op');
           return { ok: true as const, result };
         }
-        const detail = result.errorDetail;
-        return {
-          ok: false as const,
-          error: {
-            code: detail?.code ?? 'IMPORT_EXECUTION_FAILED',
-            hint: detail?.hint ?? result.error ?? `Asset import failed for ${name}.`,
-            subjectRef: { kind: 'source-file', id: destPath },
-            retryable: detail?.retryable ?? false,
-            recoveryActions: detail?.recoveryActions ?? ['import.verifySource'],
-            ...(detail?.producerError === undefined ? {} : { details: { producerError: detail.producerError } }),
-          },
-        };
-      });
+
+        // Cooked importers (image/font/…) must observe every produced GUID in
+        // the served catalog before the run claims terminal success.
+        const producedGuids = result.subAssets?.map((subAsset) => subAsset.guid) ?? [];
+        const catalogGuids = Array.from(
+          new Set(
+            producedGuids.length > 0
+              ? producedGuids
+              : result.guid !== undefined
+                ? [result.guid]
+                : [],
+          ),
+        );
+        try {
+          await Promise.all(
+            catalogGuids.map((catalogGuid) => awaitPostAssetWriteCatalogSync(catalogGuid)),
+          );
+        } catch {
+          // Cook response + registry refresh already applied in executeAssetImport.
+        }
+        broadcastAssetsChanged('pack-changed', 'local-op');
+        return { ok: true as const, result };
+      }
+      const detail = result.errorDetail;
+      return {
+        ok: false as const,
+        error: {
+          code: detail?.code ?? 'IMPORT_EXECUTION_FAILED',
+          hint: detail?.hint ?? result.error ?? `Asset import failed for ${name}.`,
+          subjectRef: { kind: 'source-file', id: destPath },
+          retryable: detail?.retryable ?? false,
+          recoveryActions: detail?.recoveryActions ?? ['import.verifySource'],
+          ...(detail?.producerError === undefined
+            ? {}
+            : { details: { producerError: detail.producerError } }),
+        },
+      };
+    });
     return { ok: true as const, completion };
   });
 }

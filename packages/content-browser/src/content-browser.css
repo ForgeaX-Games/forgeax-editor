@@ -5,6 +5,9 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  /* Keep the split layout usable when Dockview restores a very narrow group:
+     source tree + one card column + the minimum preview panel. */
+  min-width: 520px;
   min-height: 0;
   --cb-accent: var(--color-brand-primary, #d4ff48);
   --cb-accent-fg: var(--color-text-on-bright-primary, #000);
@@ -90,8 +93,11 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  min-width: 0;
-  min-height: 0;
+  /* Preserve room for at least one full card beside the source tree and
+     preview panel. Without these bounds the flex layout collapses the grid
+     to a few pixels and the preview surface intercepts its controls. */
+  min-width: 120px;
+  min-height: 140px;
   overflow: hidden;
 }
 .cb-source-tree {
@@ -237,6 +243,9 @@
   background: var(--color-danger-soft, rgba(240, 110, 110, 0.14));
   box-shadow: inset 2px 0 0 var(--color-danger-line, rgba(240, 110, 110, 0.8));
   cursor: not-allowed;
+}
+.cb-source-row.cb-source-virtual-root .cb-source-name {
+  font-weight: 600;
 }
 .cb-source-chev {
   width: 14px;
@@ -686,6 +695,7 @@
 .cb-grid-view {
   overflow-y: auto;
   flex: 1;
+  min-width: 112px;
   min-height: 0;
   /* Positioning context + offsetParent for the measured group backdrops. */
   position: relative;
@@ -1137,6 +1147,11 @@
   -webkit-line-clamp: 3;
 }
 /* ── Inline rename (shared by grid cards + source-tree rows) ── */
+.cb-inline-rename-wrap {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
 .cb-inline-rename {
   min-width: 0;
   width: 100%;
@@ -1151,6 +1166,47 @@
 }
 .cb-inline-rename.is-invalid {
   border-color: var(--color-danger, #e5484d);
+}
+.cb-inline-rename-error {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: calc(100% + 2px);
+  z-index: 20;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 240px;
+  max-width: min(320px, 92vw);
+  width: max-content;
+  padding: 6px 8px;
+  border-radius: 3px;
+  background: var(--color-danger, #e5484d);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.35;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+.cb-inline-rename-error-icon {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  background: #fff;
+  color: var(--color-danger, #e5484d);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 12px;
+  text-align: center;
+}
+.cb-inline-rename-error-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-word;
 }
 /* Grid-card variant: match the centered 11px label it replaces. */
 .cb-fe-card .cb-inline-rename {

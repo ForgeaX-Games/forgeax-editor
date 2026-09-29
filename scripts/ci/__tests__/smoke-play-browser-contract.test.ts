@@ -68,6 +68,11 @@ test('strict smoke uses the pinned Bun CLI without a bunx shim', () => {
   expect(workflow).toContain('FORGEAX_SMOKE_VITE_RUNTIME: node');
 });
 
+test('broad-core playwright config trusts the sample play-runtime webServer', () => {
+  expect(playwrightConfig).toContain('FORGEAX_SMOKE_INCLUDE_PLAY_RUNTIME');
+  expect(playwrightConfig).toContain('if (!e2eSkipSampleStack) {');
+});
+
 test('independent Play producers reuse each host runtime scope and generation', () => {
   expect(playwrightConfig).toContain('const e2eTemplateRuntimeScopeId = process.env.FORGEAX_E2E_TEMPLATE_RUNTIME_SCOPE_ID');
   expect(playwrightConfig).toContain('const e2eTemplateRuntimeGeneration = process.env.FORGEAX_E2E_TEMPLATE_RUNTIME_GENERATION');

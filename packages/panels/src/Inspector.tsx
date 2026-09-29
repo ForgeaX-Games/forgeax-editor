@@ -45,6 +45,7 @@ import {
   SelectValue,
 } from '@forgeax/editor-ui';
 import { useNumberDraft } from './useNumberDraft';
+import { useTransformEulerLiveDegrees } from './inspector-transform-euler-live';
 import { AssetPicker } from './AssetPicker';
 import type { AssetPickerAnchor } from './asset-picker-placement';
 import { AssetRefControl } from './AssetRefControl';
@@ -262,6 +263,71 @@ function ScrubInput({
         </button>
       </span>
     </span>
+  );
+}
+
+function TransformRotationFields({
+  sel,
+  rotationDraft,
+  setRotationDraft,
+  dispatchMutation,
+  selectionGeneration,
+  readOpts,
+}: {
+  sel: EntityHandle;
+  rotationDraft: { rotX: number; rotY: number; rotZ: number };
+  setRotationDraft: (next: { rotX: number; rotY: number; rotZ: number }) => void;
+  dispatchMutation: (op: EditorOp) => void;
+  selectionGeneration: string;
+  readOpts: HandleCheckOpts | undefined;
+}) {
+  const liveEuler = useTransformEulerLiveDegrees(sel, rotationDraft, readOpts);
+  const commitEuler = (key: 'rotX' | 'rotY' | 'rotZ', deg: number) => {
+    const next = { ...liveEuler, [key]: deg };
+    setRotationDraft(next);
+    const [qx, qy, qz, qw] = eulerToQuat(next.rotX, next.rotY, next.rotZ);
+    dispatchMutation({ kind: 'setComponent', entity: sel, component: 'Transform', patch: { quat: [qx, qy, qz, qw] } });
+  };
+  const ROTATIONS = [
+    { key: 'rotX' as const, axis: 'x', tooltip: 'rotation around X (degrees)', testid: 'insp-Transform-rotX' },
+    { key: 'rotY' as const, axis: 'y', tooltip: 'rotation around Y (degrees)', testid: 'insp-Transform-rotY' },
+    { key: 'rotZ' as const, axis: 'z', tooltip: 'rotation around Z (degrees)', testid: 'insp-Transform-rotZ' },
+  ];
+  const rotDirty =
+    Math.abs(liveEuler.rotX) > 1e-4
+    || Math.abs(liveEuler.rotY) > 1e-4
+    || Math.abs(liveEuler.rotZ) > 1e-4;
+  return (
+    <div className="f-row" data-testid="insp-Transform-rot-vec3">
+      <span className="f-name">Rotation</span>
+      <span className="f-val vec">
+        {ROTATIONS.map((r) => (
+          <span className={`vcell ${r.axis}`} key={r.key}>
+            <ScrubInput
+              key={`${selectionGeneration}:${r.key}`}
+              value={liveEuler[r.key]}
+              fs={{ key: r.key, type: 'number', step: 1, tooltip: r.tooltip }}
+              testid={r.testid}
+              className="box-i"
+              onCommit={(val) => commitEuler(r.key, val)}
+            />
+          </span>
+        ))}
+        <button
+          type="button"
+          className={`reset${rotDirty ? '' : ' hidden'}`}
+          data-testid="insp-Transform-rotation-reset"
+          title="reset rotation to default"
+          tabIndex={rotDirty ? 0 : -1}
+          onClick={rotDirty ? () => {
+            setRotationDraft({ rotX: 0, rotY: 0, rotZ: 0 });
+            dispatchMutation({ kind: 'setComponent', entity: sel, component: 'Transform', patch: { quat: [0, 0, 0, 1] } });
+          } : undefined}
+        >
+          <ForgeaxIcon name="reset" size={11} />
+        </button>
+      </span>
+    </div>
   );
 }
 
@@ -1595,6 +1661,9 @@ function LocalInspectorPanel() {
   const sceneInstanceMember = sceneInstance.ok
     ? sceneInstance.value.members.find((member) => member.entity === sel)
     : undefined;
+  const sceneInstanceMemberOverrides = sceneInstance.ok && sceneInstanceMember !== undefined
+    ? sceneInstance.value.overrides.filter((override) => override.member === sel && override.field !== undefined)
+    : [];
   const missingComponents = listComponentSchemas()
     .map((schema) => schema.name)
     .filter((c) => nodeComponents[c] === undefined);
@@ -1645,39 +1714,63 @@ function LocalInspectorPanel() {
         >
           <ForgeaxIcon name={copied ? 'check' : 'copy'} size={15} />
         </button>
-        <button type="button" className="tico2 is-disabled" title={t('editor.inspector.lockDisabled')} aria-disabled>
-          <ForgeaxIcon name="unlock" size={15} />
-        </button>
       </div>
 
       {sceneInstance.ok && sceneInstanceMember !== undefined && (
-        <div className="dp-comp" data-testid="insp-scene-instance">
-          <div className="ch">
-            <span className="lbl">Scene Instance</span>
-            <span className="badge">local {sceneInstanceMember.localId}</span>
+        <div
+          className={`scene-inst${sceneInstanceMemberOverrides.length > 0 ? '' : ' no-overrides'}`}
+          data-testid="insp-scene-instance"
+        >
+          <div className="scene-inst-head">
+            <span className="scene-inst-icon"><ForgeaxIcon name="layers" size={14} /></span>
+            <div className="scene-inst-title">
+              <span className="lbl">{t('editor.inspector.sceneInstance.title')}</span>
+              <span className="scene-inst-meta">{t('editor.inspector.sceneInstance.localMember', { id: sceneInstanceMember.localId })}</span>
+            </div>
+            {sceneInstanceMemberOverrides.length > 0 && (
+              <span className="scene-inst-count">
+                {t('editor.inspector.sceneInstance.overrideCount', { count: sceneInstanceMemberOverrides.length })}
+              </span>
+            )}
           </div>
-          <div className="dp-note" data-testid="insp-scene-instance-source">
-            source: {sceneInstance.value.source.name ?? sceneInstance.value.source.guid ?? sceneInstance.value.source.kind}
-            {' · '}root #{sceneInstance.value.root}
-            {' · '}{sceneInstance.value.overrides.filter((override) => override.member === sel).length} override(s)
+          <div className="scene-inst-body">
+            <div className="scene-inst-row" data-testid="insp-scene-instance-source">
+              <span className="scene-inst-k">{t('editor.inspector.sceneInstance.source')}</span>
+              <span
+                className="scene-inst-v"
+                title={sceneInstance.value.source.name ?? sceneInstance.value.source.guid ?? sceneInstance.value.source.kind}
+              >
+                {sceneInstance.value.source.name ?? sceneInstance.value.source.guid ?? sceneInstance.value.source.kind}
+              </span>
+            </div>
           </div>
-          {sceneInstance.value.overrides
-            .filter((override) => override.member === sel && override.field !== undefined)
-            .map((override) => (
-              <div className="f-row" key={`${override.component}:${override.field}`} data-testid={`insp-scene-instance-override-${override.component}-${override.field}`}>
-                <span className="f-name">{override.component}.{inspectorFieldLabel(override.field!)}</span>
-                <span className="f-val">
+          {sceneInstanceMemberOverrides.length > 0 && (
+            <div className="scene-inst-overrides">
+              <div className="scene-inst-override-head">{t('editor.inspector.sceneInstance.modifiedProperties')}</div>
+              {sceneInstanceMemberOverrides.map((override) => (
+                <div
+                  className="scene-inst-override-row"
+                  key={`${override.component}:${override.field}`}
+                  data-testid={`insp-scene-instance-override-${override.component}-${override.field}`}
+                >
+                  <span className="scene-inst-dot" aria-hidden />
+                  <span className="scene-inst-field">
+                    {override.component}.{inspectorFieldLabel(override.field!)}
+                  </span>
                   <button
                     type="button"
-                    className="fbtn"
+                    className="scene-inst-revert"
                     data-testid={`insp-instance-revert-${override.component}-${override.field}`}
+                    title={t('editor.inspector.sceneInstance.revertTitle')}
+                    aria-label={t('editor.inspector.sceneInstance.revert')}
                     onClick={() => dispatchMutation({ kind: 'removeSceneOverride', root: sceneInstance.value.root, member: sel, component: override.component, field: override.field! })}
                   >
-                    revert
+                    <ForgeaxIcon name="reset" size={12} />
                   </button>
-                </span>
-              </div>
-            ))}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -1934,52 +2027,18 @@ function LocalInspectorPanel() {
                       );
                     }
 
-                    // Transform euler overlay (scheme B): edit degrees, write quat.
+                    // Transform euler overlay (scheme B): edit degrees, write quat; live read §6 B.
                     if (comp === 'Transform' && fieldMatches(comp, 'rotation')) {
-                      const commitEuler = (key: string, deg: number) => {
-                        const next = { ...rotationDraft, [key]: deg };
-                        setRotationDraft(next);
-                        const [qx, qy, qz, qw] = eulerToQuat(next.rotX, next.rotY, next.rotZ);
-                        dispatchMutation({ kind: 'setComponent', entity: sel, component: 'Transform', patch: { quat: [qx, qy, qz, qw] } });
-                      };
-                      const ROTATIONS = [
-                        { key: 'rotX', axis: 'x', tooltip: 'rotation around X (degrees)', testid: 'insp-Transform-rotX' },
-                        { key: 'rotY', axis: 'y', tooltip: 'rotation around Y (degrees)', testid: 'insp-Transform-rotY' },
-                        { key: 'rotZ', axis: 'z', tooltip: 'rotation around Z (degrees)', testid: 'insp-Transform-rotZ' },
-                      ];
                       out.push(
-                        <div className="f-row" data-testid="insp-Transform-rot-vec3" key="__rot">
-                          <span className="f-name">Rotation</span>
-                          <span className="f-val vec">
-                            {ROTATIONS.map((r) => (
-                              <span className={`vcell ${r.axis}`} key={r.key}>
-                                <ScrubInput
-                                  key={`${selectionGeneration}:${r.key}`}
-                                  value={rotationDraft[r.key as keyof typeof rotationDraft]}
-                                  fs={{ key: r.key, type: 'number', step: 1, tooltip: r.tooltip }}
-                                  testid={r.testid}
-                                  className="box-i"
-                                  onCommit={(val) => commitEuler(r.key, val)}
-                                />
-                              </span>
-                            ))}
-                            {(() => {
-                              const rotDirty = Math.abs(rotationDraft.rotX) > 1e-4 || Math.abs(rotationDraft.rotY) > 1e-4 || Math.abs(rotationDraft.rotZ) > 1e-4;
-                              return (
-                                <button
-                                  type="button"
-                                  className={`reset${rotDirty ? '' : ' hidden'}`}
-                                  data-testid="insp-Transform-rotation-reset"
-                                  title="reset rotation to default"
-                                  tabIndex={rotDirty ? 0 : -1}
-                                  onClick={rotDirty ? () => { setRotationDraft({ rotX: 0, rotY: 0, rotZ: 0 }); dispatchMutation({ kind: 'setComponent', entity: sel, component: 'Transform', patch: { quat: [0, 0, 0, 1] } }); } : undefined}
-                                >
-                                  <ForgeaxIcon name="reset" size={11} />
-                                </button>
-                              );
-                            })()}
-                          </span>
-                        </div>,
+                        <TransformRotationFields
+                          key="__rot"
+                          sel={sel}
+                          rotationDraft={rotationDraft}
+                          setRotationDraft={setRotationDraft}
+                          dispatchMutation={dispatchMutation}
+                          selectionGeneration={selectionGeneration}
+                          readOpts={readOptsFor(sel)}
+                        />,
                       );
                     }
 

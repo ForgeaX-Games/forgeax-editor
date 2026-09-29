@@ -1,29 +1,43 @@
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type {
+  AssetGuid as AssetGuidType,
   MaterialAsset,
   MeshAsset,
   SceneAsset,
-  SceneInstanceMount,
+  SceneEntity,
 } from '@forgeax/engine-types';
 
-export function sceneMount(
-  source: string,
-  localId: number,
-  memberFirst: number,
-  memberCount: number,
-  parent = 0,
-): SceneInstanceMount {
-  if (!Number.isInteger(localId) || localId < 0) throw new RangeError('mount localId must be a non-negative integer');
-  if (!Number.isInteger(memberFirst) || memberFirst < 0) throw new RangeError('mount memberFirst must be a non-negative integer');
-  if (!Number.isInteger(memberCount) || memberCount <= 0) throw new RangeError('mount memberCount must be positive');
-  if (!Number.isInteger(parent) || parent < 0) throw new RangeError('mount parent must be a non-negative integer');
-  return {
-    localId: localId as never,
-    source,
-    memberFirst: memberFirst as never,
-    memberCount,
-    parent: parent as never,
-  };
+function assetGuid(value: string | AssetGuidType): AssetGuidType {
+  if (typeof value !== 'string') return value;
+  const parsed = AssetGuid.parse(value);
+  if (!parsed.ok) throw parsed.error;
+  return parsed.value;
 }
+
+/** Shared component schemas used by both sample ScriptablePack scene outputs. */
+export const SAMPLE_SCENE_COMPONENTS = [
+  { name: 'ChildOf', fields: { parent: 'entity' } },
+  { name: 'MeshFilter', fields: { assetHandle: 'shared<MeshAsset>' } },
+  { name: 'MeshRenderer', fields: { materials: 'array<shared<MaterialAsset>>' } },
+  { name: 'Name', fields: { value: 'string' } },
+  {
+    name: 'ParticleEffectPlayer',
+    fields: {
+      effect: 'shared<ParticleEffectAsset>',
+      playing: 'bool',
+      seed: 'u32',
+      timeScale: 'f32',
+    },
+  },
+  {
+    name: 'Transform',
+    fields: {
+      pos: 'array<f32, 3>',
+      quat: 'array<f32, 4>',
+      scale: 'array<f32, 3>',
+    },
+  },
+] as const;
 
 const FORWARD_PASSES = [
   {
@@ -44,7 +58,29 @@ const STANDARD_PARAMETERS = [
   { name: 'roughness', type: 'f32' },
 ] as const;
 
-export function createShardMesh(scale = 1, defaultMaterial?: string): MeshAsset {
+const FLOATS_PER_VERTEX = 12;
+
+/** Decode the sample's position/normal/uv/tangent interleaved buffer. */
+function attributesFromInterleaved(vertices: Float32Array): MeshAsset['attributes'] {
+  if (vertices.length % FLOATS_PER_VERTEX !== 0) {
+    throw new RangeError(`shard vertices must use the ${FLOATS_PER_VERTEX}-float layout`);
+  }
+  const vertexCount = vertices.length / FLOATS_PER_VERTEX;
+  const position = new Float32Array(vertexCount * 3);
+  const normal = new Float32Array(vertexCount * 3);
+  const uv = new Float32Array(vertexCount * 2);
+  const tangent = new Float32Array(vertexCount * 4);
+  for (let vertex = 0; vertex < vertexCount; vertex++) {
+    const source = vertex * FLOATS_PER_VERTEX;
+    position.set(vertices.subarray(source, source + 3), vertex * 3);
+    normal.set(vertices.subarray(source + 3, source + 6), vertex * 3);
+    uv.set(vertices.subarray(source + 6, source + 8), vertex * 2);
+    tangent.set(vertices.subarray(source + 8, source + FLOATS_PER_VERTEX), vertex * 4);
+  }
+  return { position, normal, uv, tangent };
+}
+
+export function createShardMesh(scale = 1, defaultMaterial?: string | AssetGuidType): MeshAsset {
   const vertices = new Float32Array([
     0, 0.9 * scale, 0, 0, 1, 0, 0.5, 1, 1, 0, 0, 1,
     0, -0.7 * scale, 0, 0, -1, 0, 0.5, 0, 1, 0, 0, 1,
@@ -57,14 +93,14 @@ export function createShardMesh(scale = 1, defaultMaterial?: string): MeshAsset 
     kind: 'mesh',
     vertices,
     indices: new Uint16Array([0, 2, 4, 0, 5, 2, 0, 3, 5, 0, 4, 3, 1, 4, 2, 1, 2, 5, 1, 5, 3, 1, 3, 4]),
-    attributes: { position: vertices },
+    attributes: attributesFromInterleaved(vertices),
     aabb: new Float32Array([-0.3 * scale, -0.7 * scale, -0.3 * scale, 0.3 * scale, 0.9 * scale, 0.3 * scale]),
     submeshes: [{ indexOffset: 0, indexCount: 24, vertexCount: 6, topology: 'triangle-list', materialSlot: 0 }],
-    materialSlots: [{ slotName: 'Energy', ...(defaultMaterial === undefined ? {} : { defaultMaterial: defaultMaterial as never }) }],
+    materialSlots: [{ slotName: 'Energy', ...(defaultMaterial === undefined ? {} : { defaultMaterial: assetGuid(defaultMaterial) }) }],
   };
 }
 
-export function deriveShardMesh(template: MeshAsset, defaultMaterial: string): MeshAsset {
+export function deriveShardMesh(template: MeshAsset, defaultMaterial: string | AssetGuidType): MeshAsset {
   const vertices = new Float32Array(template.vertices);
   for (let offset = 0; offset < vertices.length; offset += 12) {
     vertices[offset] = (vertices[offset] ?? 0) * 0.72;
@@ -74,9 +110,9 @@ export function deriveShardMesh(template: MeshAsset, defaultMaterial: string): M
   return {
     ...template,
     vertices,
-    attributes: { ...template.attributes, position: vertices },
+    attributes: attributesFromInterleaved(vertices),
     aabb: new Float32Array([-0.22, -0.95, -0.22, 0.22, 1.22, 0.22]),
-    materialSlots: [{ slotName: 'Energy', defaultMaterial: defaultMaterial as never }],
+    materialSlots: [{ slotName: 'Energy', defaultMaterial: assetGuid(defaultMaterial) }],
   };
 }
 
@@ -114,11 +150,6 @@ export function derivedEnergyMaterial(accent: MaterialAsset): MaterialAsset {
   return material(baseColor, 0.45, 0.18);
 }
 
-export const SHOWCASE_MOUNT_SLOTS = {
-  crystalCluster: 2,
-  pylonModule: 2,
-} as const;
-
 export function pylonModuleScene(input: {
   readonly pylonGuid: string;
   readonly shardGuid: string;
@@ -126,9 +157,8 @@ export function pylonModuleScene(input: {
 }): SceneAsset {
   return {
     kind: 'scene',
-    entities: [
-      {
-        localId: 0 as never,
+    entities: {
+      'entity-0': {
         components: {
           Name: { value: 'Pylon Module Root' },
           Transform: { pos: [0, 0.8, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
@@ -136,32 +166,26 @@ export function pylonModuleScene(input: {
           MeshRenderer: { materials: [input.platformMaterialGuid] },
         },
       },
-      {
-        localId: 1 as never,
+      'entity-1': {
         components: {
           Name: { value: 'Pylon Module Shard' },
           Transform: { pos: [0, 1.2, 0], quat: [0, 0, 0, 1], scale: [0.55, 0.55, 0.55] },
-          ChildOf: { parent: 0 },
+          ChildOf: { parent: 'entity-0' },
           MeshFilter: { assetHandle: input.shardGuid },
           MeshRenderer: { materials: [input.platformMaterialGuid] },
         },
       },
-    ],
+    },
   };
 }
 
-function mountWithTransform(
-  source: string,
-  localId: number,
-  memberFirst: number,
-  memberCount: number,
-  position: readonly [number, number, number],
-): SceneInstanceMount {
+function mountWithTransform(source: string, position: readonly [number, number, number]): SceneEntity {
   return {
-    ...sceneMount(source, localId, memberFirst, memberCount),
+    instance: { source },
     components: {
-      Name: { value: `Nested ${source} ${localId}` },
+      Name: { value: 'Nested Scene' },
       Transform: { pos: position, quat: [0, 0, 0, 1], scale: [1, 1, 1] },
+      ChildOf: { parent: 'entity-0' },
     },
   };
 }
@@ -180,9 +204,8 @@ export function showcaseScene(input: {
 }): SceneAsset {
   return {
     kind: 'scene',
-    entities: [
-      {
-        localId: 0 as never,
+    entities: {
+      'entity-0': {
         components: {
           Name: { value: 'Scriptable Platform' },
           Transform: { pos: [0, 0.15, 0], quat: [0, 0, 0, 1], scale: [5, 0.35, 5] },
@@ -190,8 +213,7 @@ export function showcaseScene(input: {
           MeshRenderer: { materials: [input.platformMaterialGuid] },
         },
       },
-      {
-        localId: 1 as never,
+      'entity-1': {
         components: {
           Name: { value: 'Generated Energy Shard' },
           Transform: { pos: [0, 1.4, 0], quat: [0, 0, 0, 1], scale: [1.5, 1.5, 1.5] },
@@ -199,8 +221,7 @@ export function showcaseScene(input: {
           MeshRenderer: { materials: [input.energyMaterialGuid] },
         },
       },
-      {
-        localId: 2 as never,
+      'entity-2': {
         components: {
           Name: { value: 'External Accent Witness' },
           Transform: { pos: [2.2, 0.85, 0], quat: [0, 0, 0, 1], scale: [0.8, 0.8, 0.8] },
@@ -208,8 +229,7 @@ export function showcaseScene(input: {
           MeshRenderer: { materials: [input.accentMaterialGuid] },
         },
       },
-      {
-        localId: 3 as never,
+      'entity-3': {
         components: {
           Name: { value: 'Resonance Arena Core' },
           Transform: { pos: [0, 1.2, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
@@ -223,19 +243,18 @@ export function showcaseScene(input: {
           },
         },
       },
-    ],
-    mounts: [
-      mountWithTransform(input.crystalClusterGuid, 4, 5, SHOWCASE_MOUNT_SLOTS.crystalCluster, [-3, 0, 0]),
-      mountWithTransform(input.crystalClusterGuid, 7, 8, SHOWCASE_MOUNT_SLOTS.crystalCluster, [3, 0, 0]),
-      mountWithTransform(input.crystalClusterGuid, 10, 11, SHOWCASE_MOUNT_SLOTS.crystalCluster, [0, 0, -3]),
-      mountWithTransform(input.pylonModuleGuid, 13, 14, SHOWCASE_MOUNT_SLOTS.pylonModule, [-4, 0, -4]),
-      mountWithTransform(input.pylonModuleGuid, 16, 17, SHOWCASE_MOUNT_SLOTS.pylonModule, [0, 0, -4]),
-      mountWithTransform(input.pylonModuleGuid, 19, 20, SHOWCASE_MOUNT_SLOTS.pylonModule, [4, 0, -4]),
-      mountWithTransform(input.pylonModuleGuid, 22, 23, SHOWCASE_MOUNT_SLOTS.pylonModule, [-4, 0, 4]),
-      mountWithTransform(input.pylonModuleGuid, 25, 26, SHOWCASE_MOUNT_SLOTS.pylonModule, [0, 0, 4]),
-      mountWithTransform(input.pylonModuleGuid, 28, 29, SHOWCASE_MOUNT_SLOTS.pylonModule, [4, 0, 4]),
-      mountWithTransform(input.pylonModuleGuid, 31, 32, SHOWCASE_MOUNT_SLOTS.pylonModule, [-4, 0, 0]),
-      mountWithTransform(input.pylonModuleGuid, 34, 35, SHOWCASE_MOUNT_SLOTS.pylonModule, [4, 0, 0]),
-    ],
+
+      'instance-4': mountWithTransform(input.crystalClusterGuid, [-3, 0, 0]),
+      'instance-7': mountWithTransform(input.crystalClusterGuid, [3, 0, 0]),
+      'instance-10': mountWithTransform(input.crystalClusterGuid, [0, 0, -3]),
+      'instance-13': mountWithTransform(input.pylonModuleGuid, [-4, 0, -4]),
+      'instance-16': mountWithTransform(input.pylonModuleGuid, [0, 0, -4]),
+      'instance-19': mountWithTransform(input.pylonModuleGuid, [4, 0, -4]),
+      'instance-22': mountWithTransform(input.pylonModuleGuid, [-4, 0, 4]),
+      'instance-25': mountWithTransform(input.pylonModuleGuid, [0, 0, 4]),
+      'instance-28': mountWithTransform(input.pylonModuleGuid, [4, 0, 4]),
+      'instance-31': mountWithTransform(input.pylonModuleGuid, [-4, 0, 0]),
+      'instance-34': mountWithTransform(input.pylonModuleGuid, [4, 0, 0]),
+    },
   };
 }

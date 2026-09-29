@@ -28,7 +28,8 @@ import {
 } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { ForgeaxIcon, prompt as promptDialog } from '@forgeax/editor-ui';
-import { AssetPicker, anchorFromElement, type AssetPickerAnchor } from '../AssetPicker';
+import { AssetPicker, type AssetPickerAnchor } from '../AssetPicker';
+import { MaterialAssetRefRow } from '../material-asset-ref-row';
 import { OverrideFieldRow } from './OverrideFieldRow';
 
 type GroupId = 'surface' | 'general' | 'lightmass' | 'propertyOverrides';
@@ -360,22 +361,13 @@ export function MaterialInstanceEditor(): ReactElement {
           </div>
           <div className="cat-fields">
             {fieldVisible('Parent') && (
-              <div className="f-row" data-testid="mi-parent">
-                <span className="f-name">{t('editor.materialInstance.parent')}</span>
-                <span className="f-val asset-f">
-                  <input className="an" readOnly value={livePayload.parent} title={livePayload.parent} />
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      const rect = anchorFromElement(event.currentTarget);
-                      if (rect) setPicker({ kind: 'parent', anchor: rect });
-                    }}
-                    title="Browse parent"
-                  >
-                    <ForgeaxIcon name="folder" size={12} />
-                  </button>
-                </span>
-              </div>
+              <MaterialAssetRefRow
+                label={t('editor.materialInstance.parent')}
+                guid={livePayload.parent}
+                testId="mi-parent"
+                onBrowse={(anchor) => setPicker({ kind: 'parent', anchor })}
+                onBind={patchParent}
+              />
             )}
             {fieldVisible('Phys Material') && (
               <div className="f-row" data-testid="mi-physMaterial">

@@ -111,8 +111,10 @@ const readState = () => page.evaluate(() => {
   const vfxRuntime = runtime?.world?.hasResource?.('VfxGpuRuntime')
     ? runtime.world.getResource('VfxGpuRuntime')
     : null;
-  const vfx = runtime?.renderer?.renderFeatureDiagnostics?.()
-    .find((entry) => entry.identity === 'forgeax.vfx-render.gpu-particles');
+  const inspection = runtime?.renderer?.inspect?.();
+  const vfx = inspection?.featureDiagnostics?.find(
+    (entry) => entry.identity === 'forgeax.vfx-render.gpu-particles',
+  );
   return {
     canvas: document.querySelectorAll('canvas').length,
     app: Boolean(runtime),

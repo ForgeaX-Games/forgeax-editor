@@ -128,7 +128,13 @@ export async function scanAssetsIntegrity(): Promise<IntegrityScanResult> {
       result.ok.push(sourcePath);
     } else {
       result.needsMeta.push({ sourcePath, sourceName: basename });
-      result.observations.push({ kind: 'source-meta', sourcePath, sourcePresent: true, metaPresent: false, logicalBatchId: `scan:${sourcePath}` });
+      result.observations.push({
+        kind: 'source-meta',
+        sourcePath,
+        sourcePresent: true,
+        metaPresent: false,
+        logicalBatchId: `scan:${sourcePath}`,
+      });
     }
   }
 
@@ -141,7 +147,13 @@ export async function scanAssetsIntegrity(): Promise<IntegrityScanResult> {
     const basename = expectedSource.slice(expectedSource.lastIndexOf('/') + 1);
     if (isImportable(basename) && !sourceFiles.includes(expectedSource)) {
       result.orphanedSidecar.push({ metaPath, expectedSourcePath: expectedSource });
-      result.observations.push({ kind: 'source-meta', sourcePath: expectedSource, sourcePresent: false, metaPresent: true, logicalBatchId: `scan:${metaPath}` });
+      result.observations.push({
+        kind: 'source-meta',
+        sourcePath: expectedSource,
+        sourcePresent: false,
+        metaPresent: true,
+        logicalBatchId: `scan:${metaPath}`,
+      });
       result.diagnostics.push({
         file: metaPath,
         severity: 'warn',

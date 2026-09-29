@@ -33,9 +33,8 @@
 //   the core barrel is browser-bundled — keeping it off the barrel keeps browser
 //   builds free of node builtins.
 
-import { readdirSync, readFileSync } from 'node:fs';
-import { existsSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { RuntimeCatalogRoot } from '@forgeax/engine-types';
 
 /** The alias prefix that addresses the shared `forgeax-editor-assets/` submodule. */
@@ -53,6 +52,81 @@ export interface ResolvedRoot {
   readonly abs: string;
   readonly shared: boolean;
   readonly sub?: string;
+}
+
+export interface SourceIdentityOptions {
+  /** Absolute game directory whose declared local roots should be projected. */
+  readonly gameDirAbs?: string | null;
+  /** Absolute shared-assets directory used by the `@shared/` alias. */
+  readonly sharedBase: string;
+  /** Extra shared roots injected by a host (for example template assets). */
+  readonly implicitSharedSubs?: readonly string[];
+}
+
+function normalizedPath(path: string): string {
+  return path.replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/+$/, '');
+}
+
+function canonicalPath(path: string): string {
+  let current = isAbsolute(path) ? path : resolve(path);
+  const suffix: string[] = [];
+  while (true) {
+    try {
+      const resolved = realpathSync(current);
+      return suffix.length === 0 ? resolved : join(resolved, ...suffix.reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return current;
+      suffix.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
+function pathWithin(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+/**
+ * Create the host-owned source identity projection shared by Pack Catalog and
+ * importer dependency fingerprints. Physical paths (including a Vite symlink
+ * farm) remain valid file locators; only the returned logical path is persisted
+ * in publication/revision facts.
+ */
+export function createSourceIdentityFor(options: SourceIdentityOptions): (sourcePath: string) => string {
+  const sharedBase = canonicalPath(options.sharedBase);
+  const gameDir =
+    options.gameDirAbs === null || options.gameDirAbs === undefined
+      ? null
+      : canonicalPath(options.gameDirAbs);
+  const roots =
+    gameDir === null || gameDir === undefined
+      ? []
+      : resolveGameAssetRoots(gameDir, {
+          sharedBase,
+          implicitSharedSubs: options.implicitSharedSubs,
+        });
+  const rootIdentities = roots.map((root) => ({
+    abs: canonicalPath(root.abs),
+    identity: root.shared
+      ? `${SHARED_ROOT_PREFIX}${root.sub ?? ''}`.replace(/\/+$/, '')
+      : normalizedPath(relative(gameDir ?? '', root.abs)),
+  }));
+
+  return (sourcePath: string): string => {
+    const candidate = canonicalPath(sourcePath);
+    for (const root of rootIdentities) {
+      if (!pathWithin(root.abs, candidate)) continue;
+      const suffix = normalizedPath(relative(root.abs, candidate));
+      return suffix.length === 0 ? root.identity : `${root.identity}/${suffix}`;
+    }
+    if (pathWithin(sharedBase, candidate)) {
+      const suffix = normalizedPath(relative(sharedBase, candidate));
+      return suffix.length === 0 ? SHARED_ROOT_PREFIX.replace(/\/$/, '') : `${SHARED_ROOT_PREFIX}${suffix}`;
+    }
+    return normalizedPath(sourcePath);
+  };
 }
 
 /**

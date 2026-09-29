@@ -7,15 +7,18 @@
 
 import { createApp, type App } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { createMeshPreviewPrimitive, meshBindingFromPayload, previewSnapshot } from '@forgeax/engine-preview';
+import { createMeshPreviewPrimitive, meshBindingFromPayload, previewSnapshot,
+} from '@forgeax/engine-preview';
 import type { EntityHandle } from '@forgeax/engine-ecs';
-import type { MeshAsset, RuntimeAssetBinding, SceneAsset, SkinAsset } from '@forgeax/engine-types';import {
+import type { MeshAsset, RuntimeAssetBinding, SceneAsset, SkinAsset } from '@forgeax/engine-types';
+import {
   createEngineFacade,
   getViewportRuntimeClientSnapshot,
   queryViewportRuntimeProjection,
   type SelectedAsset,
 } from '@forgeax/editor-core';
-import { assembleMeshPreviewWorld, type MeshPreviewAssembly, type MeshPreviewBounds } from './assemble-mesh-preview-world';
+import { assembleMeshPreviewWorld, type MeshPreviewAssembly, type MeshPreviewBounds,
+} from './assemble-mesh-preview-world';
 import { installBoundsOverlay } from './bounds-overlay';
 import { buildSkeletonTree, type SkeletonTreeNode } from './skeleton-tree';
 import { installSkeletonOverlay } from './skeleton-overlay';
@@ -298,7 +301,11 @@ export class PreviewWorldService {
       return;
     }
     if (asset.kind !== 'mesh') {
-      this.emit({ status: 'failed', assetGuid: asset.guid, error: `Unsupported preview kind: ${asset.kind}` });
+      this.emit({
+        status: 'failed',
+        assetGuid: asset.guid,
+        error: `Unsupported preview kind: ${asset.kind}`,
+      });
       return;
     }
 
@@ -316,16 +323,16 @@ export class PreviewWorldService {
     const parsed = AssetGuid.parse(asset.guid);
     const previewAssets = this.app?.assets;
     if (parsed.ok && previewAssets !== undefined) {
-      if (this.loadedSubject?.guid.toLowerCase() === asset.guid.toLowerCase()
-        && this.loadedSubject.revision !== revision) {
+      if (
+        this.loadedSubject?.guid.toLowerCase() === asset.guid.toLowerCase() &&
+        this.loadedSubject.revision !== revision
+      ) {
         previewAssets.invalidate(asset.guid);
       }
       const loaded = await previewAssets.loadByGuid<MeshAsset>(parsed.value);
       if (this.disposed || generation !== this.generation) return;
       if (!loaded.ok) {
-        const detail = 'detail' in loaded.error
-          ? JSON.stringify(loaded.error.detail)
-          : undefined;
+        const detail = 'detail' in loaded.error ? JSON.stringify(loaded.error.detail) : undefined;
         const expected = 'expected' in loaded.error ? String(loaded.error.expected) : undefined;
         const hint = 'hint' in loaded.error ? String(loaded.error.hint) : undefined;
         this.emit({
@@ -336,7 +343,9 @@ export class PreviewWorldService {
             expected === undefined ? undefined : `expected: ${expected}`,
             hint === undefined ? undefined : `hint: ${hint}`,
             detail,
-          ].filter((part): part is string => part !== undefined).join('; '),
+          ]
+            .filter((part): part is string => part !== undefined)
+            .join('; '),
         });
         return;
       }
@@ -349,7 +358,10 @@ export class PreviewWorldService {
         return;
       }
       runtimePayload = loaded.value;
-      this.loadedSubject = { guid: asset.guid, ...(revision === undefined ? {} : { revision }) };
+      this.loadedSubject = {
+        guid: asset.guid,
+        ...(revision === undefined ? {} : { revision }),
+      };
     }
     if (!parsed.ok || previewAssets === undefined) {
       runtimePayload = await queryRuntimeMeshPayload(asset.guid, this.dependencies);
@@ -360,9 +372,8 @@ export class PreviewWorldService {
     // hosts, but the authoritative cross-realm path is the Runtime projection
     // above. Content Browser pack-index rows commonly carry only identity
     // metadata, so never pass those raw JSON rows directly to allocSharedRef.
-    const selectedPayload = Object.keys(asset.payload).length > 0
-      ? selectedMeshPayload(asset)
-      : undefined;
+    const selectedPayload =
+      Object.keys(asset.payload).length > 0 ? selectedMeshPayload(asset) : undefined;
     const payload = runtimePayload ?? selectedPayload;
     if (payload === undefined) {
       this.emit({
@@ -377,11 +388,13 @@ export class PreviewWorldService {
       const bounds = this.assembly.replaceSubject(payload as MeshAsset);
       const binding = meshBindingFromPayload(asset.guid, payload as MeshAsset);
       if (binding) {
-        this.assembly.setEnginePrimitive?.(createMeshPreviewPrimitive({
-          subjectGuid: asset.guid,
-          snapshot: previewSnapshot(asset.guid),
-          binding,
-        }));
+        this.assembly.setEnginePrimitive?.(
+          createMeshPreviewPrimitive({
+            subjectGuid: asset.guid,
+            snapshot: previewSnapshot(asset.guid),
+            binding,
+          }),
+        );
       }
       this.viewport.frameBounds(bounds);
       this.emit({
@@ -390,19 +403,27 @@ export class PreviewWorldService {
         bounds,
         previewOperationId: 'mesh.preview',
         previewSource: 'engine',
-        materialDefaultGuids: (payload.materialSlots ?? []).flatMap((slot) => (
-          slot.defaultMaterial === undefined ? [] : [AssetGuid.format(slot.defaultMaterial)]
-        )),
+        materialDefaultGuids: (payload.materialSlots ?? []).flatMap((slot) =>
+          slot.defaultMaterial === undefined ? [] : [AssetGuid.format(slot.defaultMaterial)],
+        ),
       });
     } catch (error) {
-      this.emit({ status: 'failed', assetGuid: asset.guid, error: errorMessage(error) });
+      this.emit({
+        status: 'failed',
+        assetGuid: asset.guid,
+        error: errorMessage(error),
+      });
     }
   }
 
   /** Despawn the active Scene subject root (joints + Skin subtree), if any. */
   private despawnSceneRoot(): void {
     if (this.sceneRoot !== null) {
-      try { this.facade?.despawnScene(this.sceneRoot); } catch { /* already despawned */ }
+      try {
+        this.facade?.despawnScene(this.sceneRoot);
+      } catch {
+        /* already despawned */
+      }
       this.sceneRoot = null;
     }
   }
@@ -416,7 +437,11 @@ export class PreviewWorldService {
    */
   private async buildSkeletonTree(
     sceneAsset: SceneAsset,
-    previewAssets: { loadByGuid<T>(guid: AssetGuid): Promise<{ ok: true; value: T } | { ok: false; error: unknown }> },
+    previewAssets: {
+      loadByGuid<T>(
+        guid: AssetGuid,
+      ): Promise<{ ok: true; value: T } | { ok: false; error: unknown }>;
+    },
   ): Promise<readonly SkeletonTreeNode[]> {
     const skinGuids = sceneAsset.skinGuids ?? [];
     if (skinGuids.length === 0) return [];
@@ -434,7 +459,9 @@ export class PreviewWorldService {
       }
       const skinAsset = loaded.value;
       if (skinAsset.kind !== 'skin') {
-        console.warn(`[SkeletonTree] '${skinGuid}' resolved as '${skinAsset.kind}', not 'skin'; skipped`);
+        console.warn(
+          `[SkeletonTree] '${skinGuid}' resolved as '${skinAsset.kind}', not 'skin'; skipped`,
+        );
         continue;
       }
       for (const path of skinAsset.jointPaths) allJointPaths.push(path);
@@ -455,7 +482,8 @@ export class PreviewWorldService {
     revision: string | undefined,
     generation: number,
   ): Promise<void> {
-    if (this.disposed || this.assembly === null || this.viewport === null || this.app === null) return;
+    if (this.disposed || this.assembly === null || this.viewport === null || this.app === null)
+      return;
 
     // Replacing any prior subject: tear down the old Scene root (or restore the
     // mesh cube) before spawning the new one.
@@ -469,13 +497,16 @@ export class PreviewWorldService {
       this.emit({
         status: 'failed',
         assetGuid: asset.guid,
-        error: 'Scene preview requires a load-capable preview AssetRegistry (Runtime binding unavailable).',
+        error:
+          'Scene preview requires a load-capable preview AssetRegistry (Runtime binding unavailable).',
       });
       return;
     }
 
-    if (this.loadedSubject?.guid.toLowerCase() === asset.guid.toLowerCase()
-      && this.loadedSubject.revision !== revision) {
+    if (
+      this.loadedSubject?.guid.toLowerCase() === asset.guid.toLowerCase() &&
+      this.loadedSubject.revision !== revision
+    ) {
       previewAssets.invalidate(asset.guid);
     }
 
@@ -489,7 +520,9 @@ export class PreviewWorldService {
         error: [
           `Preview AssetRegistry could not load the scene dependency closure: ${loaded.error.code}`,
           hint === undefined ? undefined : `hint: ${hint}`,
-        ].filter((part): part is string => part !== undefined).join('; '),
+        ]
+          .filter((part): part is string => part !== undefined)
+          .join('; '),
       });
       return;
     }
@@ -508,7 +541,8 @@ export class PreviewWorldService {
         this.emit({
           status: 'failed',
           assetGuid: asset.guid,
-          error: 'Preview engine facade is not available (boot incomplete).',        });
+          error: 'Preview engine facade is not available (boot incomplete).',
+        });
         return;
       }
       const handle = this.facade.allocSharedRef('SceneAsset', sceneAsset);
@@ -523,7 +557,10 @@ export class PreviewWorldService {
         return;
       }
       this.sceneRoot = inst.value;
-      this.loadedSubject = { guid: asset.guid, ...(revision === undefined ? {} : { revision }) };
+      this.loadedSubject = {
+        guid: asset.guid,
+        ...(revision === undefined ? {} : { revision }),
+      };
       // Conservative bounds: the scene root sits at the origin; radius 2.5
       // frames a typical rigged asset. Per-subtree AABB aggregation is a
       // follow-up; the user can Frame All manually in the meantime.
@@ -544,7 +581,11 @@ export class PreviewWorldService {
         ...(skeletonTree.length === 0 ? {} : { skeletonTree }),
       });
     } catch (error) {
-      this.emit({ status: 'failed', assetGuid: asset.guid, error: errorMessage(error) });
+      this.emit({
+        status: 'failed',
+        assetGuid: asset.guid,
+        error: errorMessage(error),
+      });
     }
   }
 
@@ -556,9 +597,17 @@ export class PreviewWorldService {
     this.despawnSceneRoot();
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
-    try { this.viewport?.dispose(); } catch { /* already disposed */ }
+    try {
+      this.viewport?.dispose();
+    } catch {
+      /* already disposed */
+    }
     this.viewport = null;
-    try { this.app?.stop(); } catch { /* already stopped */ }
+    try {
+      this.app?.stop();
+    } catch {
+      /* already stopped */
+    }
     this.app = null;
     this.assembly = null;
     this.facade = null;
@@ -585,28 +634,32 @@ export class PreviewWorldService {
     // transport is a construction-time bundler capability; configuring only
     // the registry after createApp cannot recover import-on-demand when the
     // editor-core module identity differs from the active Viewport carrier.
-    const runtimeBinding = this.dependencies.getRuntimeBinding()
-      ?? await queryRuntimeBinding(this.dependencies);
+    const runtimeBinding =
+      this.dependencies.getRuntimeBinding() ?? (await queryRuntimeBinding(this.dependencies));
     if (runtimeBinding === undefined) {
       this.emit({
         status: 'failed',
-        error: 'Preview runtime asset binding did not become ready before the bounded boot deadline.',
+        error:
+          'Preview runtime asset binding did not become ready before the bounded boot deadline.',
       });
       return;
     }
     try {
-      const previewBundlerOptions = await this.dependencies.createPreviewBundlerOptions(runtimeBinding);
+      const previewBundlerOptions =
+        await this.dependencies.createPreviewBundlerOptions(runtimeBinding);
       let abandonPrimary = false;
-      const primary = this.dependencies.createApp(
-        canvas,
-        { pointerLockAllowed: () => false },
-        previewBundlerOptions,
-      ).then((result) => {
-        if (abandonPrimary && result.ok) {
-          try { result.value.stop(); } catch { /* timed-out app never became owned */ }
-        }
-        return result;
-      });
+      const primary = this.dependencies
+        .createApp(canvas, { pointerLockAllowed: () => false }, previewBundlerOptions)
+        .then((result) => {
+          if (abandonPrimary && result.ok) {
+            try {
+              result.value.stop();
+            } catch {
+              /* timed-out app never became owned */
+            }
+          }
+          return result;
+        });
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<undefined>((resolve) => {
         timeoutId = setTimeout(() => resolve(undefined), PREVIEW_BOOT_TIMEOUT_MS);
@@ -647,14 +700,16 @@ export class PreviewWorldService {
       }
 
       this.app = created.value;
-      if (runtimeBinding !== undefined) {
-        // createApp receives the transport at construction, while the registry
-        // still needs the same authority-bearing scope to configure its pack
-        // index. Keep both halves on the active Runtime binding so Preview
-        // loadByGuid resolves the same catalog as Edit and Play.
-        this.app.assets?.configureRuntimeBinding(runtimeBinding);
+      const renderAssets = this.app.assets;
+      if (renderAssets === undefined) {
+        throw new Error('Preview App did not expose its AssetRegistry');
       }
-      const facade = this.dependencies.createEngineFacade(this.app.world as never, this.app.assets);
+      // createApp receives the transport at construction, while the registry
+      // still needs the same authority-bearing scope to configure its pack
+      // index. Keep both halves on the active Runtime binding so Preview
+      // loadByGuid resolves the same catalog as Edit and Play.
+      renderAssets.configureRuntimeBinding(runtimeBinding);
+      const facade = this.dependencies.createEngineFacade(this.app.world as never, renderAssets);
       this.facade = facade;
       this.assembly = this.dependencies.assembleMeshPreviewWorld(facade);
       // P1.1: Bounds wireframe overlay. Reads the assembly's current subject
@@ -679,7 +734,12 @@ export class PreviewWorldService {
         engine: facade,
         editorEngine: facade,
         camera: this.assembly.camera,
-        initialOrbit: { target: orbit.target, dist: orbit.dist, yaw: 0.55, pitch: -0.35 },
+        initialOrbit: {
+          target: orbit.target,
+          dist: orbit.dist,
+          yaw: 0.55,
+          pitch: -0.35,
+        },
         interaction: 'preview',
       });
 

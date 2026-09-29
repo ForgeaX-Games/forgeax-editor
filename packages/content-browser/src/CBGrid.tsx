@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { useKeybindingScope } from '@forgeax/interface/core/app-shell';
+import { useKeybindingScope } from '@forgeax/app-shell/application';
 import type { CBAsset, CBViewItem, CBViewMode } from './types';
 import type { CBViewMode2 } from './view-mode';
 import type { MultiSelectAPI } from './hooks';
@@ -30,7 +30,7 @@ interface Props {
   /** viewItemKey of the item currently being inline-renamed, or null. */
   renamingKey?: string | null;
   /** Basename validator forwarded to the inline editor. */
-  renameValidate?: (value: string) => string | null;
+  renameValidate?: (value: string, item: CBViewItem) => string | null;
   /** Commit an inline rename (shared pipeline in ContentBrowser). */
   onRenameCommit?: (item: CBViewItem, value: string) => void;
   /** Abandon the in-flight inline rename. */
@@ -143,7 +143,7 @@ export function CBGrid({ items, thumbnailSize, multiSelect, searchActive = false
   // the subjects in the folder being browsed. Folder-tile drop zones stopPropagation
   // first, so this only fires for genuine background drops. `same-parent` moves
   // (an item already in this folder) are rejected by the shared policy.
-  const gridDropTarget = useMemo<CBDropTarget>(() => ({ kind: 'grid-blank', path: currentDir ?? 'assets' }), [currentDir]);
+  const gridDropTarget = useMemo<CBDropTarget>(() => ({ kind: 'grid-blank', path: currentDir ?? '' }), [currentDir]);
   const { isOver: gridDropOver, verdict: gridDropVerdict, dropProps: gridDropProps } = useFolderDropZone(gridDropTarget, onMoveDrop ?? NOOP_MOVE);
   const gridDropClass = gridDropOver && gridDropVerdict
     ? gridDropVerdict.ok ? ' cb-drop-ok' : ' cb-drop-reject'

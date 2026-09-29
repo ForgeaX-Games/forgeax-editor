@@ -102,7 +102,7 @@ test('native runner writes a report when setup fails after identity collection',
   const reportPath = join(reportDir, 'editor-portability-report.json');
   const sourceSha = fixture.valid.sourceSha;
   const identityOutputs = new Map([
-    ['bun --version', '1.3.14\n'],
+    ['bun --version', '1.4.0\n'],
     ['bun --revision', 'bun-revision\n'],
     ['node --version', 'v22.13.0\n'],
     ['pnpm --version', '11.7.0\n'],
@@ -134,7 +134,7 @@ test('native runner writes a report when setup fails after identity collection',
     assert.equal(result.error.code, 'native-command-failed');
     assert.equal(result.error.stage, 'setup');
     assert.equal(result.error.observed, 'setup failed: missing native dependency');
-    assert.equal(result.platform.toolchain.bun, '1.3.14');
+    assert.equal(result.platform.toolchain.bun, '1.4.0');
     assert.deepEqual(JSON.parse(readFileSync(reportPath, 'utf8')), result.reports);
     assert.ok(result.reports.every((report) => validateEditorCiReport(report).ok), JSON.stringify(result.reports));
     const setup = result.reports.find(({stage}) => stage === 'setup');
@@ -505,7 +505,7 @@ test('native command boundary captures actual toolchain identities and recursive
     if (command === 'git' && args[0] === 'rev-parse') return {ok: true, status: 0, stdout: `${fixture.valid.sourceSha}\n`, stderr: ''};
     if (command === 'git' && args[0] === 'submodule') return {ok: true, status: 0, stdout: '', stderr: ''};
     const identities = {
-      'bun --version': '1.3.14\n',
+      'bun --version': '1.4.0\n',
       'bun --revision': 'bun-revision\n',
       'node --version': 'v22.13.0\n',
       'pnpm --version': '11.7.0\n',
@@ -529,7 +529,7 @@ test('native command boundary captures actual toolchain identities and recursive
     },
   });
   assert.equal(result.ok, true, JSON.stringify(result));
-  assert.equal(result.platform.toolchain.bun, '1.3.14');
+  assert.equal(result.platform.toolchain.bun, '1.4.0');
   assert.equal(result.platform.toolchain.bunRevision, 'bun-revision');
   assert.ok(calls.includes('bun --revision'));
   assert.ok(calls.includes('git submodule status --recursive'));

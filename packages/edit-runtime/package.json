@@ -63,6 +63,10 @@
       "types": "./src/keyboard-router-deps.ts",
       "import": "./src/keyboard-router-deps.ts"
     },
+    "./feedback-health": {
+      "types": "./src/feedback-health.ts",
+      "import": "./src/feedback-health.ts"
+    },
     "./package.json": "./package.json"
   },
   "main": "./src/index.ts",
@@ -88,12 +92,13 @@
     }
   },
   "dependencies": {
+    "@forgeax/app-shell": "0.103.0",
     "@forgeax/editor-game-plugins": "workspace:*",
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-play-runtime": "workspace:*",
     "@forgeax/editor-panels": "workspace:*",
     "@forgeax/editor-product": "workspace:*",
-    "@forgeax/interface": "workspace:*",
+    "@forgeax/editor-ui": "workspace:*",
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-audio": "workspace:*",
     "@forgeax/engine-audio-webaudio": "workspace:*",
@@ -155,7 +160,6 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.0.3",
     "typescript": "^5.6.3",
-    "vite": "^8.0.0",
-    "@webgpu/types": "^0.1.70"
+    "vite": "^8.0.16"
   }
 }

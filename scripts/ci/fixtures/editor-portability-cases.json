@@ -235,15 +235,14 @@
   "valid": {
     "sourceSha": "1111111111111111111111111111111111111111",
     "recursivePins": [
-      {"path": "packages/engine", "pin": "2222222222222222222222222222222222222222"},
-      {"path": "packages/interface", "pin": "3333333333333333333333333333333333333333"}
+      {"path": "packages/engine", "pin": "2222222222222222222222222222222222222222"}
     ],
     "platformIdentity": {
       "os": "linux",
       "architecture": "x64",
       "runnerImage": "ubuntu-24.04",
       "toolchain": {
-        "bun": "1.3.14",
+        "bun": "1.4.0",
         "bunRevision": "bun-revision",
         "node": "22.13.0",
         "pnpm": "11.7.0",

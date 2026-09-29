@@ -17,7 +17,10 @@
 
 import { z } from 'zod';
 import { VIEWPORT_CARRIER_KINDS } from '@forgeax/editor-product';
-import { GameplayInputSchema, GameplayScopeSchema, type GameplayScope } from './io/gameplay-contract';
+import {
+  GameplayInputSchema,
+  GameplayScopeSchema, type GameplayScope,
+} from './io/gameplay-contract';
 
 // ── 1. VAG_CONSOLE ───────────────────────────────────────────────────────────
 // Producer: editor-runtime/main.tsx:267,272,275 (console proxy + global error).
@@ -92,7 +95,16 @@ export const VagRuntimeDiagnosticSchema = z.object({
   actual: z.string().max(2000).optional(),
   propertyPath: z.string().max(4096).optional(),
   unexpectedSourceKeys: z.array(z.string().max(4096)).max(100).optional(),
-  kindMismatches: z.array(z.object({ sourceKey: z.string().max(4096), expected: z.string().max(2000), actual: z.string().max(2000) })).max(100).optional(),
+  kindMismatches: z
+    .array(
+      z.object({
+        sourceKey: z.string().max(4096),
+        expected: z.string().max(2000),
+        actual: z.string().max(2000),
+      }),
+    )
+    .max(100)
+    .optional(),
   sourcePath: z.string().max(4096).optional(),
   sourceKey: z.string().max(4096).optional(),
   missingGuids: z.array(z.string().max(128)).max(100).optional(),
@@ -113,6 +125,13 @@ export const VagCarrierFailureDetailSchema = z.object({
   diagnostics: VagRuntimeDiagnosticsSchema.optional(),
 });
 export type VagCarrierFailureDetail = z.infer<typeof VagCarrierFailureDetailSchema>;
+
+const ExecutionWorkerDecisionSchema = z.object({
+  requested: z.union([z.literal('auto'), z.boolean()]),
+  enabled: z.boolean(),
+  reason: z.enum(['enabled', 'disabled', 'engine-disabled', 'capability-unavailable']),
+  missingCapabilities: z.array(z.enum(['worker', 'crossOriginIsolated', 'offscreenCanvas', 'workerAnimationFrame', 'workerWebGpu', 'sharedArrayBuffer', 'atomicsWait'])).readonly(),
+});
 
 const VagCarrierPayloadSchema = z.object({
   version: z.literal(VAG_CARRIER_PROTOCOL_VERSION),
@@ -138,10 +157,12 @@ const VagCarrierPayloadSchema = z.object({
   liveness: z.enum(['alive', 'unreachable', 'terminated']),
   renderReadiness: z.enum(['pending', 'ready', 'unavailable']),
   execution: z.object({
-    schemaVersion: z.literal(1),
-    requestedTier: z.enum(['auto', 'main-serial', 'engine-worker', 'shared']),
-    actualTier: z.enum(['main-serial', 'engine-worker', 'shared']).nullable(),
-    selectionReason: z.enum(['explicit-request', 'auto-shared', 'auto-engine-worker', 'auto-main-serial']).nullable(),
+    schemaVersion: z.literal(2),
+    workers: z.object({
+      engine: ExecutionWorkerDecisionSchema,
+      render: ExecutionWorkerDecisionSchema,
+      kernels: ExecutionWorkerDecisionSchema,
+    }),
     engine: z.object({ realm: z.enum(['host', 'worker']), health: z.enum(['idle', 'starting', 'running', 'stopped', 'faulted']) }),
     fault: z.object({ code: z.string(), hint: z.string() }).nullable(),
   }).nullable().optional(),
@@ -174,12 +195,14 @@ export type VagCarrierFailureMessage = z.infer<typeof VagCarrierFailureSchema>;
 export const VAG_GAMEPLAY_PROTOCOL_VERSION = 1 as const;
 
 const VagGameplayRequestPayloadSchema = z.discriminatedUnion('operation', [
-  z.object({
-    version: z.literal(VAG_GAMEPLAY_PROTOCOL_VERSION),
-    requestId: z.string().min(1),
-    operation: z.literal('input'),
-    action: GameplayInputSchema,
-  }).strict(),
+  z
+    .object({
+      version: z.literal(VAG_GAMEPLAY_PROTOCOL_VERSION),
+      requestId: z.string().min(1),
+      operation: z.literal('input'),
+      action: GameplayInputSchema,
+    })
+    .strict(),
   z.object({
     version: z.literal(VAG_GAMEPLAY_PROTOCOL_VERSION),
     requestId: z.string().min(1),
@@ -362,7 +385,8 @@ export function sendVagMessage<S extends z.ZodType<{ type: string; payload?: unk
   // `unknown` first because the generic `S` only guarantees a ZodType, but
   // every VAG_* schema is actually a ZodObject with a `.type` literal field.
   const typeValue = (
-    (schema as unknown as z.ZodObject<{ type: z.ZodLiteral<string> }>).shape.type as z.ZodLiteral<string>
+    (schema as unknown as z.ZodObject<{ type: z.ZodLiteral<string> }>).shape
+      .type as z.ZodLiteral<string>
   ).value;
 
   const fullMessage = {
@@ -440,8 +464,16 @@ export interface OnVagMessageOpts {
  *  referrer origin (split-dev, where the shell is a different port). */
 export function allowedParentOrigins(): string[] {
   const out = new Set<string>();
-  try { out.add(self.origin); } catch { /* no self */ }
-  try { if (document.referrer) out.add(new URL(document.referrer).origin); } catch { /* no/odd referrer */ }
+  try {
+    out.add(self.origin);
+  } catch {
+    /* no self */
+  }
+  try {
+    if (document.referrer) out.add(new URL(document.referrer).origin);
+  } catch {
+    /* no/odd referrer */
+  }
   return [...out];
 }
 
@@ -453,17 +485,23 @@ function makeOriginPredicate(
   // An empty allowlist (e.g. opaque origin) would reject everything and wedge
   // the wire; treat "no derivable origin" as allow-same-origin only.
   const set = new Set(list);
-  return (origin) => set.size === 0 ? origin === safeSelfOrigin() : set.has(origin);
+  return (origin) => (set.size === 0 ? origin === safeSelfOrigin() : set.has(origin));
 }
 
 function safeSelfOrigin(): string {
-  try { return self.origin; } catch { return ''; }
+  try {
+    return self.origin;
+  } catch {
+    return '';
+  }
 }
 
 function defaultReject(r: VagReject): void {
   // eslint-disable-next-line no-console
-  console.warn(`[vag] rejected ${r.type} (${r.reason}) from ${r.origin || '<null origin>'}`,
-    r.issues ? r.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') : '');
+  console.warn(
+    `[vag] rejected ${r.type} (${r.reason}) from ${r.origin || '<null origin>'}`,
+    r.issues ? r.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') : '',
+  );
 }
 
 /**
@@ -481,7 +519,10 @@ function defaultReject(r: VagReject): void {
 export function onVagMessage(win: Window, opts: OnVagMessageOpts): () => void {
   const originOk = makeOriginPredicate(opts.allowedOrigins);
   const onReject = opts.onReject ?? defaultReject;
-  const handlers = opts.handlers as Record<string, ((m: unknown, e: MessageEvent) => void) | undefined>;
+  const handlers = opts.handlers as Record<
+    string,
+    ((m: unknown, e: MessageEvent) => void) | undefined
+  >;
 
   const listener = (ev: MessageEvent): void => {
     if (opts.expectSource) {
@@ -492,12 +533,23 @@ export function onVagMessage(win: Window, opts: OnVagMessageOpts): () => void {
     if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
     const type = data.type;
     if (!type.startsWith('VAG_')) return; // foreign protocol on the shared bus — not ours
-    if (!originOk(ev.origin)) { onReject({ reason: 'bad-origin', type, origin: ev.origin }); return; }
+    if (!originOk(ev.origin)) {
+      onReject({ reason: 'bad-origin', type, origin: ev.origin });
+      return;
+    }
     const schema = VAG_SCHEMA_BY_TYPE[type as VagType];
-    if (!schema) { onReject({ reason: 'unknown-type', type, origin: ev.origin }); return; }
+    if (!schema) {
+      onReject({ reason: 'unknown-type', type, origin: ev.origin });
+      return;
+    }
     const result = schema.safeParse(data);
     if (!result.success) {
-      onReject({ reason: 'failed-validation', type, origin: ev.origin, issues: result.error.issues });
+      onReject({
+        reason: 'failed-validation',
+        type,
+        origin: ev.origin,
+        issues: result.error.issues,
+      });
       return;
     }
     handlers[type]?.(result.data, ev);
@@ -506,3 +558,17 @@ export function onVagMessage(win: Window, opts: OnVagMessageOpts): () => void {
   win.addEventListener('message', listener);
   return () => win.removeEventListener('message', listener);
 }
+
+// Play-runtime value imports from editor-core must use this /protocol entry
+// (lint-play-vag-boundary). Renderer host bootstrap is re-exported here so
+// play realms can compose the same facade without a second editor-core door.
+export {
+  createEditorRendererHost,
+  asEditorRendererHost,
+  type EditorRendererHost,
+  type EditorRendererHostDeps,
+} from './renderer/editor-renderer-host';
+export { subscribeRendererFrameEnd } from './renderer/subscribe-renderer-frame-end';
+
+// Apply VAG gameplay input through the carrier's DOM surface without importing Editor state.
+export { createGameplayInputSurface } from './io/gameplay-input-surface';

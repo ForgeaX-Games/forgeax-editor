@@ -129,7 +129,6 @@ function currentAdmission() {
   return {
     editorSha: sha(ROOT),
     engineSha: sha(join(ROOT, 'packages/engine')),
-    interfaceSha: sha(join(ROOT, 'packages/interface')),
     platformIoSha: sha(join(ROOT, 'packages/platform-io')),
     assetsSha: sha(join(ROOT, 'forgeax-editor-assets')),
   };
@@ -183,7 +182,7 @@ export function validateEnginePriorArtTransfer(transfer, {measurements, admitted
     mutations.add(row.falsifierResult.mutation);
     codes.add(row.falsifierResult.code);
   }
-  if (!isObject(transfer.admitted) || Object.values(transfer.admitted).some((value) => !HEX40.test(value))) return result([issue('prior-art-admission-invalid', 'five admitted 40-hex SHAs', transfer.admitted, 'Bind transfer to one editor and four submodule admission SHAs.')]);
+  if (!isObject(transfer.admitted) || Object.values(transfer.admitted).some((value) => !HEX40.test(value))) return result([issue('prior-art-admission-invalid', 'four admitted 40-hex SHAs', transfer.admitted, 'Bind transfer to one editor and three submodule admission SHAs.')]);
   if (!measurements || measurements.status !== 'pass') return result([issue('prior-art-measurement-mismatch', 'status=pass measurement index', measurements?.status, 'Focused structural tests cannot replace a live passing measurement index.')]);
   if (!isObject(measurements.admitted) || JSON.stringify(measurements.admitted) !== JSON.stringify(transfer.admitted)) return result([issue('prior-art-admission-drift', measurements.admitted, transfer.admitted, 'Use the same admitted SHA set in measurements and transfer.')]);
   if (measurements.sourceSha !== transfer.admitted.editorSha) return result([issue('prior-art-measurement-mismatch', transfer.admitted.editorSha, measurements.sourceSha, 'The measurement index source must equal the admitted editor SHA.')]);

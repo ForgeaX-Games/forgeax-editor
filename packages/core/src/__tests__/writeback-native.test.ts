@@ -104,10 +104,10 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
 
     const sceneAsset = collected.value;
     expect(sceneAsset.kind).toBe('scene');
-    expect(sceneAsset.entities.length).toBe(3); // root + 2 children
+    expect(Object.values(sceneAsset.entities).length).toBe(3); // root + 2 children
 
     // Verify entity names are present.
-    const names = sceneAsset.entities.map(
+    const names = Object.values(sceneAsset.entities).map(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (e: any) => (e.components as Record<string, Record<string, unknown>>)['Name']?.['value'],
     );
@@ -141,8 +141,8 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
 
     // payload is `{ entities: [...] }` — no `kind` field inside payload
     const payload = scenePacked.payload as Record<string, unknown>;
-    expect(Array.isArray(payload.entities)).toBe(true);
-    const entities = payload.entities as Array<Record<string, unknown>>;
+    expect(Array.isArray(payload.entities)).toBe(false);
+    const entities = Object.values(payload.entities as Record<string, Record<string, unknown>>);
     expect(entities.length).toBe(3);
 
     // AC-08: verify no editor-only fields leak into pack.
@@ -211,12 +211,12 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
     // Before strip: engine collected BOTH entities (hidden not dropped) and the
     // Visibility intent is present on the hidden one.
     const rawEntities = (collected.value as unknown as { entities: Array<{ components: Record<string, unknown> }> }).entities;
-    expect(rawEntities.length).toBe(2); // AC-05: hidden entity NOT dropped
+    expect(Object.values(rawEntities).length).toBe(2); // AC-05: hidden entity NOT dropped
 
     // After strip: entity count unchanged and Visibility remains authored data.
     const stripped = stripDisabledMarker(collected.value) as unknown as { entities: Array<{ components: Record<string, unknown> }> };
-    expect(stripped.entities.length).toBe(2); // AC-05: both entities still present
-    const hiddenEntity = stripped.entities.find((e) => 'Visibility' in e.components);
+    expect(Object.values(stripped.entities).length).toBe(2); // AC-05: both entities still present
+    const hiddenEntity = Object.values(stripped.entities).find((e) => 'Visibility' in e.components);
     expect(hiddenEntity?.components.Visibility).toEqual({ state: VisibilityStateValue.hidden });
 
     // The explicit Visibility state is part of the authored pack contract.
@@ -242,8 +242,8 @@ describe('M5 writeback: rootsToSceneAsset + serializeSceneAssetToPack', () => {
     if (!collected.ok) return;
 
     const stripped = stripDisabledMarker(collected.value) as unknown as { entities: Array<{ components: Record<string, unknown> }> };
-    expect(stripped.entities.length).toBe(1);
-    for (const e of stripped.entities) {
+    expect(Object.values(stripped.entities).length).toBe(1);
+    for (const e of Object.values(stripped.entities)) {
       expect('Disabled' in e.components).toBe(false);
       expect(e.components.Visibility).toEqual({ state: VisibilityStateValue.hidden });
     }

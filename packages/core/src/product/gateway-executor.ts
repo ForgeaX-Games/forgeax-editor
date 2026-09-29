@@ -130,15 +130,18 @@ export interface GatewayCapabilityAdapter {
   dispatchRun(operationId: string, input: unknown, request: GatewayRunRequest): GatewayRunResult;
   getRun(runId: string): OperationRun | undefined;
   listRunEvents(runId: string): readonly RunJournalEventInput[];
-  updateRunProgress(runId: string, progress: { readonly fraction: number; readonly stage: string }): GatewayRunMutationResult;
+  updateRunProgress(runId: string, progress: { readonly fraction: number; readonly stage: string },
+  ): GatewayRunMutationResult;
   cancelRun(runId: string): GatewayRunMutationResult;
-  failRun(runId: string, error: import('@forgeax/editor-product').CommandError): GatewayRunMutationResult;
+  failRun(runId: string, error: import('@forgeax/editor-product').CommandError,
+  ): GatewayRunMutationResult;
   retryRun(runId: string, retryRunId: string): GatewayRunResult;
   getOperationRunResult(requestId: string): OperationRunReadResult;
   waitOperationRun(requestId: string): Promise<OperationRunReadResult>;
   subscribeOperationRun(requestId: string, listener: (run: OperationRun) => void): () => void;
   cancelOperationRun(requestId: string): OperationRunReadResult<never>;
-  retryOperationRun(requestId: string, retryRequestId: string, actor?: RunActor): OperationRunAcceptResult;
+  retryOperationRun(requestId: string, retryRequestId: string, actor?: RunActor,
+  ): OperationRunAcceptResult;
 }
 
 export type GatewayRunMutationResult =
@@ -172,10 +175,10 @@ function gatewayAvailability(
 
 function operationRunFromGatewayResult(result: GatewayDispatchResult): OperationRun | undefined {
   const nested = result.result !== null && typeof result.result === 'object'
-    ? result.result as Record<string, unknown>
-    : undefined;
+    ? (result.result as Record<string, unknown>)
+      : undefined;
   const run = result.operationRun ?? nested?.operationRun;
-  return run !== null && typeof run === 'object' ? run as OperationRun : undefined;
+  return run !== null && typeof run === 'object' ? (run as OperationRun) : undefined;
 }
 
 function replaceGatewayOperationRun(
@@ -183,8 +186,8 @@ function replaceGatewayOperationRun(
   run: OperationRun,
 ): GatewayDispatchResult {
   const nested = result.result !== null && typeof result.result === 'object'
-    ? result.result as Record<string, unknown>
-    : undefined;
+    ? (result.result as Record<string, unknown>)
+      : undefined;
   return nested === undefined
     ? { ...result, operationRun: run }
     : { ...result, result: { ...nested, operationRun: run } };
@@ -197,8 +200,8 @@ async function executeGatewayCommand(
   signal?: AbortSignal,
 ): Promise<GatewayDispatchResult> {
   const args = input !== null && typeof input === 'object'
-    ? input as Record<string, unknown>
-    : { value: input };
+    ? (input as Record<string, unknown>)
+      : { value: input };
   const result = source.dispatch!({ kind: descriptor.id, ...args }, 'ai');
   if (!result.ok) return result;
   const completionGuid = descriptor.completion === undefined
@@ -215,46 +218,62 @@ async function executeGatewayCommand(
         hint: cause instanceof Error
           ? cause.message
           : `Created asset ${completionGuid} did not become visible in the live asset catalog.`,
-        retryable: true,
-        recoveryActions: descriptor.completion?.kind === 'asset-visible'
-          ? ['editor.requestReimport', 'request.retry']
-          : ['request.retry'],
-      } };
+          retryable: true,
+          recoveryActions:
+            descriptor.completion?.kind === 'asset-visible'
+              ? ['editor.requestReimport', 'request.retry']
+              : ['request.retry'],
+        },
+      };
     }
   }
   const accepted = operationRunFromGatewayResult(result);
   if (accepted === undefined) return result;
   if (accepted.status === 'succeeded') return result;
   if (accepted.status === 'failed' || accepted.status === 'cancelled') {
-    return { ok: false, error: accepted.error ?? {
-      code: 'operation-failed',
-      hint: `Gateway operation "${descriptor.id}" ended ${accepted.status}.`,
-      retryable: accepted.retryable,
-      recoveryActions: accepted.recoveryActions,
-    } };
+    return {
+      ok: false,
+      error: accepted.error ?? {
+        code: 'operation-failed',
+        hint: `Gateway operation "${descriptor.id}" ended ${accepted.status}.`,
+        retryable: accepted.retryable,
+        recoveryActions: accepted.recoveryActions,
+      },
+    };
   }
   if (source.operationRuns === undefined || typeof accepted.requestId !== 'string') {
-    return { ok: false, error: {
-      code: 'operation-run-unavailable',
-      hint: `Gateway operation "${descriptor.id}" requires terminal run tracking.`,
-      retryable: true,
-      recoveryActions: ['run.wait', 'editor.discover'],
-    } };
+    return {
+      ok: false,
+      error: {
+        code: 'operation-run-unavailable',
+        hint: `Gateway operation "${descriptor.id}" requires terminal run tracking.`,
+        retryable: true,
+        recoveryActions: ['run.wait', 'editor.discover'],
+      },
+    };
   }
-  const cancel = () => { if (accepted.cancellable) source.operationRuns?.cancel(accepted.requestId!); };
+  const cancel = () => {
+    if (accepted.cancellable) source.operationRuns?.cancel(accepted.requestId!);
+  };
   signal?.addEventListener('abort', cancel, { once: true });
   if (signal?.aborted) cancel();
   let completed: OperationRunReadResult;
-  try { completed = await source.operationRuns.wait(accepted.requestId); }
-  finally { signal?.removeEventListener('abort', cancel); }
+  try {
+    completed = await source.operationRuns.wait(accepted.requestId);
+  } finally {
+    signal?.removeEventListener('abort', cancel);
+  }
   if (!completed.ok) return { ok: false, error: completed.error };
   if (completed.value.status !== 'succeeded') {
-    return { ok: false, error: completed.value.error ?? {
-      code: 'operation-failed',
-      hint: `Gateway operation "${descriptor.id}" ended ${completed.value.status}.`,
-      retryable: completed.value.retryable,
-      recoveryActions: completed.value.recoveryActions,
-    } };
+    return {
+      ok: false,
+      error: completed.value.error ?? {
+        code: 'operation-failed',
+        hint: `Gateway operation "${descriptor.id}" ended ${completed.value.status}.`,
+        retryable: completed.value.retryable,
+        recoveryActions: completed.value.recoveryActions,
+      },
+    };
   }
   return replaceGatewayOperationRun(result, completed.value);
 }
@@ -281,9 +300,10 @@ function registrationFor(
 ): CapabilityRegistration {
   const id = `editor.${descriptor.id}`;
   const hasExecutor = source.dispatch !== undefined && descriptor.availability.available;
-  const operationRun = descriptor.operationRun !== null && typeof descriptor.operationRun === 'object'
-    ? descriptor.operationRun
-    : undefined;
+  const operationRun =
+    descriptor.operationRun !== null && typeof descriptor.operationRun === 'object'
+      ? descriptor.operationRun
+      : undefined;
   const registration: CapabilityRegistration = {
     id,
     kind: 'operation',
@@ -295,16 +315,23 @@ function registrationFor(
     availability: gatewayAvailability(descriptor, hasExecutor),
     preconditions: [],
     ...(descriptor.confirmation === undefined ? {} : { confirmation: descriptor.confirmation }),
-    ...(operationRun === undefined ? {} : {
-      cancellation: { supported: operationRun.cancellable === true },
-      retry: {
-        supported: true,
-        createsNewAttempt: operationRun.retry?.requiresNewRequestId === true,
-      },
-    }),
+    ...(operationRun === undefined
+      ? {}
+      : {
+          cancellation: { supported: operationRun.cancellable === true },
+          retry: {
+            supported: true,
+            createsNewAttempt: operationRun.retry?.requiresNewRequestId === true,
+          },
+        }),
     recoveryActions: descriptor.recoveryActions ?? ['editor.discover'],
     ...(hasExecutor
-      ? { executor: { execute: (input: unknown, context?: Parameters<CapabilityExecutor['execute']>[1]) => executeGatewayCommand(source, descriptor, input, context?.signal) } }
+      ? {
+          executor: {
+            execute: (input: unknown, context?: Parameters<CapabilityExecutor['execute']>[1]) =>
+              executeGatewayCommand(source, descriptor, input, context?.signal),
+          },
+        }
       : {}),
   };
   return registration;
@@ -336,7 +363,8 @@ export function createGatewayCapabilityAdapter(
     managedIds = populateRegistry(source, registry, next);
   };
   syncCapabilities();
-  const unsubscribeCapabilities = source.subscribeOps?.((snapshot) => syncCapabilities(snapshot.ops)) ?? (() => undefined);
+  const unsubscribeCapabilities =
+    source.subscribeOps?.((snapshot) => syncCapabilities(snapshot.ops)) ?? (() => undefined);
   const journals = new Map<string, RunJournal>();
   let generatedRun = 0;
   const journalFor = (scope: string): RunJournal => {
@@ -347,22 +375,26 @@ export function createGatewayCapabilityAdapter(
     return journal;
   };
   const journalForRun = (runId: string): RunJournal | undefined => {
-    for (const journal of journals.values()) if (journal.getRun(runId) !== undefined) return journal;
+    for (const journal of journals.values())
+      if (journal.getRun(runId) !== undefined) return journal;
     return undefined;
   };
   const saveOperationRuns: SaveOperationRunPort = {
     dispatchSave(requestId, input, actor) {
       const descriptor = descriptors.get('saveDocToDisk');
       if (
-        descriptor === undefined
-        || !descriptor.availability.available
-        || source.dispatch === undefined
-        || source.operationRuns === undefined
-      ) return unavailableRunAccept();
+        descriptor === undefined ||
+        !descriptor.availability.available ||
+        source.dispatch === undefined ||
+        source.operationRuns === undefined
+      )
+        return unavailableRunAccept();
       const result = source.dispatch(
         {
           kind: 'saveDocToDisk',
-          ...(input !== null && typeof input === 'object' ? input as Record<string, unknown> : { value: input }),
+          ...(input !== null && typeof input === 'object'
+            ? (input as Record<string, unknown>)
+            : { value: input }),
           requestId,
         },
         actor.kind === 'human' ? 'human' : 'ai',
@@ -378,9 +410,10 @@ export function createGatewayCapabilityAdapter(
           },
         };
       }
-      const resultRecord = result.result !== null && typeof result.result === 'object'
-        ? result.result as Record<string, unknown>
-        : undefined;
+      const resultRecord =
+        result.result !== null && typeof result.result === 'object'
+          ? (result.result as Record<string, unknown>)
+          : undefined;
       const run = result.operationRun ?? resultRecord?.operationRun;
       if (run === null || typeof run !== 'object') return unavailableRunAccept();
       return {
@@ -403,24 +436,49 @@ export function createGatewayCapabilityAdapter(
       return source.operationRuns?.cancel(requestId) ?? unavailableRunResult<never>();
     },
     retry(requestId, retryRequestId, actor) {
-      return source.operationRuns?.retry(requestId, retryRequestId, actor) ?? unavailableRunAccept();
+      return (
+        source.operationRuns?.retry(requestId, retryRequestId, actor) ?? unavailableRunAccept()
+      );
     },
   };
-  const acceptRun = (operationId: string, input: unknown, request: GatewayRunRequest): GatewayRunResult => {
+  const acceptRun = (
+    operationId: string,
+    input: unknown,
+    request: GatewayRunRequest,
+  ): GatewayRunResult => {
     const descriptor = descriptors.get(operationId);
     if (descriptor === undefined) {
-      return { ok: false, error: { code: 'not-supported', hint: `operation "${operationId}" is not registered.`, retryable: false, recoveryActions: ['editor.discover'] } };
+      return {
+        ok: false,
+        error: {
+          code: 'not-supported',
+          hint: `operation "${operationId}" is not registered.`,
+          retryable: false,
+          recoveryActions: ['editor.discover'],
+        },
+      };
     }
     if (!descriptor.availability.available) {
-      return { ok: false, error: {
-        code: 'executor-unavailable',
-        hint: descriptor.availability.reason,
-        retryable: true,
-        recoveryActions: ['editor.discover'],
-      } };
+      return {
+        ok: false,
+        error: {
+          code: 'executor-unavailable',
+          hint: descriptor.availability.reason,
+          retryable: true,
+          recoveryActions: ['editor.discover'],
+        },
+      };
     }
     if (source.dispatch === undefined) {
-      return { ok: false, error: { code: 'executor-unavailable', hint: `gateway executor for "${operationId}" is not connected.`, retryable: false, recoveryActions: ['editor.discover'] } };
+      return {
+        ok: false,
+        error: {
+          code: 'executor-unavailable',
+          hint: `gateway executor for "${operationId}" is not connected.`,
+          retryable: false,
+          recoveryActions: ['editor.discover'],
+        },
+      };
     }
     const scope = request.scope;
     const journal = journalFor(scope);
@@ -438,9 +496,16 @@ export function createGatewayCapabilityAdapter(
     if (!running.ok) return { ok: false, error: running.error };
     return { ...accepted, run: running.value };
   };
-  const dispatchRun = (operationId: string, input: unknown, request: GatewayRunRequest): GatewayRunResult => {
-    const inputRecord = input !== null && typeof input === 'object' ? input as Record<string, unknown> : undefined;
-    const requestId = request.requestId ?? (typeof inputRecord?.requestId === 'string' ? inputRecord.requestId : undefined);
+  const dispatchRun = (
+    operationId: string,
+    input: unknown,
+    request: GatewayRunRequest,
+  ): GatewayRunResult => {
+    const inputRecord =
+      input !== null && typeof input === 'object' ? (input as Record<string, unknown>) : undefined;
+    const requestId =
+      request.requestId ??
+      (typeof inputRecord?.requestId === 'string' ? inputRecord.requestId : undefined);
     if (operationId === 'saveDocToDisk' && requestId !== undefined) {
       return saveOperationRuns.dispatchSave(requestId, input, request.actor);
     }
@@ -453,12 +518,15 @@ export function createGatewayCapabilityAdapter(
     const journal = journalFor(request.scope);
     const progress = journal.updateProgress(accepted.runId, { fraction: 1, stage: 'complete' });
     if (!progress.ok) return { ok: false, error: progress.error };
-    const inputArgs = input !== null && typeof input === 'object'
-      ? input as Record<string, unknown>
-      : { value: input };
+    const inputArgs =
+      input !== null && typeof input === 'object'
+        ? (input as Record<string, unknown>)
+        : { value: input };
     const result = source.dispatch!({ kind: operationId, ...inputArgs }, 'ai');
     if (result.ok === false) {
-      const runError = (result.error as import('@forgeax/editor-product').CommandError | undefined) ?? {
+      const runError = (result.error as
+        | import('@forgeax/editor-product').CommandError
+        | undefined) ?? {
         code: 'operation-failed',
         hint: 'The gateway operation failed.',
         retryable: false,
@@ -471,21 +539,27 @@ export function createGatewayCapabilityAdapter(
         error: runError,
       });
     } else {
-      journal.append({ type: 'succeeded', runId: accepted.runId, at: Date.now(), result: result.result ?? result });
+      journal.append({
+        type: 'succeeded',
+        runId: accepted.runId,
+        at: Date.now(),
+        result: result.result ?? result,
+      });
     }
     return accepted;
   };
   return {
     registry,
     capabilities: () => registry.discover({ includeUnavailable: true }),
-    product: () => createEditorProduct({
-      capabilityRegistry: registry,
-      availability: {
-        available: true,
-        blocking: false,
-        code: 'product-available',
-      },
-    }),
+    product: () =>
+      createEditorProduct({
+        capabilityRegistry: registry,
+        availability: {
+          available: true,
+          blocking: false,
+          code: 'product-available',
+        },
+      }),
     dispose() {
       unsubscribeCapabilities();
       for (const id of managedIds) registry.unregister(id);
@@ -503,27 +577,90 @@ export function createGatewayCapabilityAdapter(
     },
     updateRunProgress(runId, progress) {
       const journal = journalForRun(runId);
-      if (journal === undefined) return { ok: false, error: { code: 'run-not-found', hint: `run "${runId}" is unknown.`, retryable: false, recoveryActions: ['run.list'] } };
+      if (journal === undefined)
+        return {
+          ok: false,
+          error: {
+            code: 'run-not-found',
+            hint: `run "${runId}" is unknown.`,
+            retryable: false,
+            recoveryActions: ['run.list'],
+          },
+        };
       return journal.updateProgress(runId, progress);
     },
     cancelRun(runId) {
       const journal = journalForRun(runId);
-      if (journal === undefined) return { ok: false, error: { code: 'run-not-found', hint: `run "${runId}" is unknown.`, retryable: false, recoveryActions: ['run.list'] } };
+      if (journal === undefined)
+        return {
+          ok: false,
+          error: {
+            code: 'run-not-found',
+            hint: `run "${runId}" is unknown.`,
+            retryable: false,
+            recoveryActions: ['run.list'],
+          },
+        };
       const run = journal.getRun(runId);
-      if (run === undefined) return { ok: false, error: { code: 'run-not-found', hint: `run "${runId}" is unknown.`, retryable: false, recoveryActions: ['run.list'] } };
-      if (!run.cancellable) return { ok: false, error: { code: 'run-not-cancellable', hint: 'The operation cannot be cancelled.', retryable: false, recoveryActions: [] } };
+      if (run === undefined)
+        return {
+          ok: false,
+          error: {
+            code: 'run-not-found',
+            hint: `run "${runId}" is unknown.`,
+            retryable: false,
+            recoveryActions: ['run.list'],
+          },
+        };
+      if (!run.cancellable)
+        return {
+          ok: false,
+          error: {
+            code: 'run-not-cancellable',
+            hint: 'The operation cannot be cancelled.',
+            retryable: false,
+            recoveryActions: [],
+          },
+        };
       return journal.append({ type: 'cancelled', runId, at: Date.now() });
     },
     failRun(runId, runError) {
       const journal = journalForRun(runId);
-      if (journal === undefined) return { ok: false, error: { code: 'run-not-found', hint: `run "${runId}" is unknown.`, retryable: false, recoveryActions: ['run.list'] } };
+      if (journal === undefined)
+        return {
+          ok: false,
+          error: {
+            code: 'run-not-found',
+            hint: `run "${runId}" is unknown.`,
+            retryable: false,
+            recoveryActions: ['run.list'],
+          },
+        };
       return journal.append({ type: 'failed', runId, at: Date.now(), error: runError });
     },
     retryRun(runId, retryRunId) {
       const journal = journalForRun(runId);
       const run = journal?.getRun(runId);
-      if (journal === undefined || run === undefined) return { ok: false, error: { code: 'run-not-found', hint: `run "${runId}" is unknown.`, retryable: false, recoveryActions: ['run.list'] } };
-      if (run.status !== 'failed' || !run.retryable) return { ok: false, error: { code: 'run-not-retryable', hint: 'The failed run cannot be retried.', retryable: false, recoveryActions: [] } };
+      if (journal === undefined || run === undefined)
+        return {
+          ok: false,
+          error: {
+            code: 'run-not-found',
+            hint: `run "${runId}" is unknown.`,
+            retryable: false,
+            recoveryActions: ['run.list'],
+          },
+        };
+      if (run.status !== 'failed' || !run.retryable)
+        return {
+          ok: false,
+          error: {
+            code: 'run-not-retryable',
+            hint: 'The failed run cannot be retried.',
+            retryable: false,
+            recoveryActions: [],
+          },
+        };
       return journal.accept({
         runId: retryRunId,
         operationId: run.operationId,
@@ -577,15 +714,17 @@ export function createEditorCarrierFacade(
     version: EDITOR_CARRIER_CONTRACT_VERSION,
     adapter,
     identity: options.getIdentity,
-    discover: () => Object.freeze({
-      version: EDITOR_CARRIER_CONTRACT_VERSION,
-      identity: options.getIdentity(),
-      capabilities: adapter.capabilities(),
-      schemas,
-      recoveryActions,
-      page: options.page,
-    }),
-    executeGameplay: (input) => options.gameplay?.execute(input) ?? Promise.resolve(missingGameplayResult()),
+    discover: () =>
+      Object.freeze({
+        version: EDITOR_CARRIER_CONTRACT_VERSION,
+        identity: options.getIdentity(),
+        capabilities: adapter.capabilities(),
+        schemas,
+        recoveryActions,
+        page: options.page,
+      }),
+    executeGameplay: (input) =>
+      options.gameplay?.execute(input) ?? Promise.resolve(missingGameplayResult()),
     dispose: () => adapter.dispose(),
   };
 }

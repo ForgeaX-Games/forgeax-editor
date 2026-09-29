@@ -1,8 +1,8 @@
 import { PlayBindingFailure } from './boot-diagnostic';
 import {
   isRuntimeCatalogRoots,
-  type RuntimeAssetBinding,
-} from '@forgeax/engine-types';
+  type RuntimeAssetBinding } from '@forgeax/engine-types';
+import { playBootDiag } from './play-boot-diag';
 
 export const RUNTIME_BINDING_MAX_WAIT_MS = 30_000;
 export const RUNTIME_BINDING_RETRY_DELAY_MS = 100;
@@ -66,25 +66,44 @@ export async function loadRuntimeBinding(
 
   while (Date.now() - startedAt < maxWaitMs) {
     attempts += 1;
+    if (attempts === 1 || attempts % 20 === 0) {
+      playBootDiag('binding.fetch.attempt', { attempts, bindingUrl });
+    }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
     try {
-      const response = await fetchImpl(bindingUrl, { cache: 'no-store', signal: controller.signal });
-      const body = await response.json().catch(() => null) as unknown;
-      const state = body !== null && typeof body === 'object' ? body as Record<string, unknown> : undefined;
+      const response = await fetchImpl(bindingUrl, { cache: 'no-store', signal: controller.signal,
+      });
+      const body = (await response.json().catch(() => null)) as unknown;
+      const state =
+        body !== null && typeof body === 'object' ? (body as Record<string, unknown>) : undefined;
       const expected = options.expected;
-      const matches = !expected || (state?.gameId === expected.gameId && state?.scopeId === expected.scopeId && state?.generation === expected.generation);
+      const matches =
+        !expected ||
+        (state?.gameId === expected.gameId &&
+          state?.scopeId === expected.scopeId &&
+          state?.generation === expected.generation);
       // A known producer failure is not evidence of a slow first frame. Ignore
       // diagnostics from any other binding; they do not describe this attempt.
       if (matches && state?.status !== 'transitioning') {
         const blocking = Array.isArray(state?.diagnostics)
-          ? state.diagnostics.find((item: unknown) => item !== null && typeof item === 'object' && (item as { severity?: unknown }).severity === 'blocking') : undefined;
+          ? state.diagnostics.find(
+              (item: unknown) =>
+                item !== null &&
+                typeof item === 'object' &&
+                (item as { severity?: unknown }).severity === 'blocking',
+            )
+          : undefined;
         if (blocking) throw new PlayBindingFailure(blocking);
         if (response.status === 503 && state?.diagnostic && state.status === 'unavailable') {
           throw new PlayBindingFailure(state.diagnostic);
         }
       }
-      if (response.ok && !matches) throw new PlayBindingFailure({ code: 'play-runtime-scope-stale', hint: 'The requested runtime binding has changed; start a new Play attempt.' });
+      if (response.ok && !matches)
+        throw new PlayBindingFailure({
+          code: 'play-runtime-scope-stale',
+          hint: 'The requested runtime binding has changed; start a new Play attempt.',
+        });
       if (response.status === 503) {
         if (
           body !== null

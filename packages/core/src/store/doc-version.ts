@@ -16,6 +16,17 @@
 //   plan-strategy §4 R3 / research F-4: gateway.subscribe kept top-level.
 //   requirements AC-09: pure structural migration.
 import { useSyncExternalStore } from 'react';
+import {
+  extractVisibilityCommandEntityIds,
+  extractVisibilityCommandState,
+  type VisibilityCommandState,
+  isHierarchyVisibilityTraceEnabled,
+  isVisibilityDocumentCommand,
+  isVisibilityRelatedCommandKind,
+  traceHierarchyVisibility,
+  traceVisibilityCommandKind,
+} from '../io/hierarchy-visibility-trace';
+import type { EntityHandle } from '@forgeax/engine-ecs';
 import { gateway } from './gateway';
 
 type RuntimeUiTestGate = { disableRuntimeUiPulse?: boolean };
@@ -30,10 +41,34 @@ let docVersion = 0;
 const docListeners = new Set<() => void>();
 let authoredVersion = 0;
 const authoredListeners = new Set<() => void>();
+let visibilityRevision = 0;
+const visibilityListeners = new Set<() => void>();
+let lastVisibilityCommandEntityIds: readonly EntityHandle[] = [];
+let lastVisibilityCommandState: VisibilityCommandState | null = null;
 gateway.subscribe((_doc, command) => {
   if (!runtimeUiPulseEnabled() || command === null) return;
   docVersion++;
+  if (isHierarchyVisibilityTraceEnabled()) {
+    const kind = traceVisibilityCommandKind(command);
+    if (isVisibilityRelatedCommandKind(kind)) {
+      traceHierarchyVisibility('doc.bump', { kind, docVersion });
+    }
+  }
   for (const fn of docListeners) fn();
+});
+gateway.subscribe((_doc, command) => {
+  if (!runtimeUiPulseEnabled() || command === null) return;
+  if (!isVisibilityDocumentCommand(command)) return;
+  visibilityRevision++;
+  lastVisibilityCommandEntityIds = extractVisibilityCommandEntityIds(command) as EntityHandle[];
+  lastVisibilityCommandState = extractVisibilityCommandState(command);
+  if (isHierarchyVisibilityTraceEnabled() && visibilityListeners.size === 0) {
+    traceHierarchyVisibility('visibility.revision.bump.no-listeners', {
+      revision: visibilityRevision,
+      gatewayRev: gateway.rev,
+    });
+  }
+  for (const fn of visibilityListeners) fn();
 });
 gateway.subscribe((_doc, command) => {
   if (!runtimeUiPulseEnabled() || command === null) return;
@@ -48,6 +83,21 @@ function subscribeDoc(fn: () => void): () => void {
  *  snapshot, but runtime World frames do not notify this signal. */
 export function subscribeDocVersion(fn: () => void): () => void {
   return subscribeDoc(fn);
+}
+/** Fires only when a document command changes Visibility (not every doc bump). */
+export function subscribeVisibilityRevision(fn: () => void): () => void {
+  visibilityListeners.add(fn);
+  return () => visibilityListeners.delete(fn);
+}
+export function getVisibilityRevision(): number {
+  return visibilityRevision;
+}
+/** Roots from the gateway command that last bumped {@link getVisibilityRevision}. */
+export function getLastVisibilityCommandEntityIds(): readonly EntityHandle[] {
+  return lastVisibilityCommandEntityIds;
+}
+export function getLastVisibilityCommandState(): VisibilityCommandState | null {
+  return lastVisibilityCommandState;
 }
 /** Notify authored-side consumers after a direct producer mutation that is not
  *  represented by a gateway command, such as a scene asset instantiation. */

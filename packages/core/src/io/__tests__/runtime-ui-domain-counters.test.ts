@@ -1,9 +1,16 @@
-import { describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
 import { createRuntimeUiGraph, createRuntimeUiOperations } from '../runtime-ui-diagnostics';
 
 describe('runtime UI domain diagnostics counters', () => {
+  let graph: ReturnType<typeof createRuntimeUiGraph> | null = null;
+
+  afterEach(() => {
+    graph?.dispose();
+    graph = null;
+  });
+
   it('reports runtime frames separately from producer-owned domain publishes', () => {
-    const graph = createRuntimeUiGraph();
+    graph = createRuntimeUiGraph();
     const diagnostics = createRuntimeUiOperations(graph).diagnostics();
 
     expect(diagnostics.counters).toMatchObject({

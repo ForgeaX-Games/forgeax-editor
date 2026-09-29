@@ -13,7 +13,7 @@ import {
   openMaterialStaging,
   patchMaterialStagingParam,
 } from '@forgeax/editor-core';
-import type { PageControllerContext } from '@forgeax/interface/core/page-platform';
+import type { PageControllerContext } from '@forgeax/app-shell/application';
 import type { AuthoringGatewayProjection } from '../../runtime/tool-client-operations';
 
 const GUID = '44444444-4444-4444-8444-444444444444';

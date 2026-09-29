@@ -1,7 +1,7 @@
 import { useCallback, useMemo, type MouseEvent, type ReactElement } from 'react';
-import { getAssetSelection, useAssetSelection } from '@forgeax/editor-core';
+import { gateway, getAssetSelection, useAssetSelection } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
-import { useHost } from '@forgeax/interface/core/app-shell';
+import { useHost } from '@forgeax/app-shell/application';
 import {
   AssetThumbnail,
   DropdownMenu,
@@ -24,6 +24,8 @@ export interface AssetRefControlProps {
   guid?: string | null;
   testId: string;
   readOnly?: boolean;
+  /** When set, accept catalog rows by `kind` instead of `compatibleWith` asset type. */
+  acceptKinds?: ReadonlySet<string>;
   onBrowse: (anchor: AssetPickerAnchor) => void;
   onBind: (guid: string) => void;
   onClear: () => void;
@@ -35,6 +37,7 @@ export function AssetRefControl({
   guid,
   testId,
   readOnly = false,
+  acceptKinds,
   onBrowse,
   onBind,
   onClear,
@@ -57,15 +60,23 @@ export function AssetRefControl({
     onDragLeave,
     onDragOver,
     onDrop,
-  } = useAssetRefDrop({ assetType, readOnly, onBind });
+  } = useAssetRefDrop({ assetType, readOnly, acceptKinds, onBind });
+
+  const guidAccepted = useCallback((candidateGuid: string): boolean => {
+    if (acceptKinds) {
+      const entry = gateway.assetCatalog().find((row) => row.guid === candidateGuid);
+      return entry !== undefined && acceptKinds.has(entry.kind);
+    }
+    return isGuidCompatibleWithAssetType(candidateGuid, assetType);
+  }, [acceptKinds, assetType]);
 
   const useSelection = useCallback(() => {
     if (readOnly) return;
     const selected = getAssetSelection();
     if (!selected?.guid) return;
-    if (!isGuidCompatibleWithAssetType(selected.guid, assetType)) return;
+    if (!guidAccepted(selected.guid)) return;
     onBind(selected.guid);
-  }, [assetType, onBind, readOnly]);
+  }, [guidAccepted, onBind, readOnly]);
 
   const revealBound = useCallback(() => {
     if (!binding.guid) return;
@@ -91,8 +102,7 @@ export function AssetRefControl({
   }, [binding.guid]);
 
   const selected = useAssetSelection();
-  const canUseSelection = selected?.guid !== undefined
-    && isGuidCompatibleWithAssetType(selected.guid, assetType);
+  const canUseSelection = selected?.guid !== undefined && guidAccepted(selected.guid);
 
   return (
     <div

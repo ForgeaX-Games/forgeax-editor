@@ -1,10 +1,20 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync, realpathSync, rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { RuntimeAssetBinding } from '@forgeax/engine-types';
-import type { PluginPack } from '@forgeax/engine-vite-plugin-pack';
-import { createRuntimeScopeController, type RuntimeScopeCommand } from '../runtime-scope-controller';
+import {
+  createRuntimeScopeController,
+  type RuntimeScopeCommand,
+  type RuntimeScopePack,
+} from '../runtime-scope-controller';
 import { loadRuntimeBinding } from '../runtime-binding-loader';
 
 type Middleware = (req: FakeRequest, res: FakeResponse, next: () => void) => unknown;
@@ -80,23 +90,50 @@ describe('runtime scope controller', () => {
           current = { ...binding, status: 'ready', authority: 'authoritative' };
           return current;
         },
-      } as unknown as PluginPack;
+      } as unknown as RuntimeScopePack;
       let middleware!: Middleware;
       createRuntimeScopeController({
-        pack, base: '/preview/', secret: 'secret',
+        pack,
+        base: '/preview/',
+        secret: 'secret',
         resolveRoots: (dir) => [join(dir, 'assets')],
-        resolveProjectDdcRoot: projectDdcRoot, resolveCatalogRoots: () => [],
-      }).configureServer({ middlewares: { use(handler) { middleware = handler as Middleware; } } });
+        resolveProjectDdcRoot: projectDdcRoot,
+        resolveCatalogRoots: () => [],
+      }).configureServer({
+        middlewares: {
+          use(handler) {
+            middleware = handler as Middleware;
+          },
+        },
+      });
       const call = async (url: string, body: unknown, headers = {}) => {
         const result = response();
-        await middleware(request(url, 'POST', typeof body === 'string' ? body : JSON.stringify(body), headers), result, () => {});
+        await middleware(
+          request(url, 'POST', typeof body === 'string' ? body : JSON.stringify(body), headers),
+          result,
+          () => {},
+        );
         return { status: result.statusCode, body: JSON.parse(result.body) };
       };
-      const bind = (dir: string, generation: number) => call('/__pack/control/bind', command(dir, generation), { 'x-forgeax-runtime-secret': 'secret' });
+      const bind = (dir: string, generation: number) =>
+        call('/__pack/control/bind', command(dir, generation), {
+          'x-forgeax-runtime-secret': 'secret',
+        });
       const endpoint = '/preview/api/assets/source/execute';
-      const scope = { 'x-forgeax-game-id': 'fps', 'x-forgeax-scope-id': 'fps-scope', 'x-forgeax-generation': '1' };
-      const sourcePath = 'assets/generated.pack.ts';
-      const create = { requestId: 'create', kind: 'create-scriptable-pack', sourcePath, name: 'Generated', initialOutput: { sourceKey: 'scene/main', kind: 'scene', name: 'Main' } };
+      const scope = {
+        'x-forgeax-game-id': 'fps',
+        'x-forgeax-scope-id': 'fps-scope',
+        'x-forgeax-generation': '1',
+      };
+      const sourcePath = 'assets/generated.pack.json';
+      const create = {
+        requestId: 'create',
+        operation: 'asset-source.create',
+        targetPath: sourcePath,
+        format: 'pack.json',
+        packageId: '01900000-0000-7000-8000-000000000075',
+        initialAssets: { 'scene/main': { kind: 'scene', payload: { entities: [] }, refs: [] } },
+      };
       expect((await call(endpoint, create, scope)).status).toBe(409);
       await bind(first, 1);
       const validationEndpoint = '/preview/api/validation/project';
@@ -114,13 +151,46 @@ describe('runtime scope controller', () => {
       expect((await call(endpoint, create, scope)).body.ok).toBe(true);
       expect(existsSync(join(first, sourcePath))).toBe(true);
       expect(existsSync(join(second, sourcePath))).toBe(false);
-      const preflight = await call(endpoint, { requestId: 'inspect', kind: 'preflight', sourcePath }, scope);
+      const preflight = await call(
+        endpoint,
+        { requestId: 'inspect', operation: 'asset.inspect', subject: sourcePath },
+        scope,
+      );
       expect(preflight.body.ok).toBe(true);
-      expect((await call(endpoint, { requestId: 'rebuild', kind: 'rebuild', sourcePath, expectedRevision: preflight.body.value.revision }, scope)).body.ok).toBe(true);
-      expect((await call(endpoint, { requestId: 'escape', kind: 'preflight', sourcePath: '../other.pack.ts' }, scope)).body.ok).toBe(false);
+      expect(
+        (
+          await call(
+            endpoint,
+            {
+              requestId: 'rebuild',
+              operation: 'asset-source.rebuild',
+              sourcePath,
+              expectedRevision: preflight.body.value.revision,
+            },
+            scope,
+          )
+        ).body.ok,
+      ).toBe(true);
+      expect(
+        (
+          await call(
+            endpoint,
+            {
+              requestId: 'escape',
+              operation: 'asset.inspect',
+              subject: '../other.pack.json',
+            },
+            scope,
+          )
+        ).body.ok,
+      ).toBe(false);
       await bind(second, 2);
       expect((await call(validationEndpoint, {}, scope)).status).toBe(409);
-      const secondValidation = await call(validationEndpoint, {}, { ...scope, 'x-forgeax-generation': '2' });
+      const secondValidation = await call(
+        validationEndpoint,
+        {},
+        { ...scope, 'x-forgeax-generation': '2' },
+      );
       expect(secondValidation.status).toBe(200);
       expect(secondValidation.body.gameDir).toBe(second);
       expect((await call(endpoint, create, scope)).status).toBe(409);
@@ -144,7 +214,7 @@ describe('runtime scope controller', () => {
           current = { ...binding, status: 'ready', authority: 'authoritative' };
           return current;
         },
-      } as unknown as PluginPack;
+      } satisfies RuntimeScopePack;
 
       const controller = createRuntimeScopeController({
         pack,
@@ -155,11 +225,13 @@ describe('runtime scope controller', () => {
       });
       let middleware: Middleware | undefined;
       controller.configureServer({
-        middlewares: { use(handler) { middleware = handler as Middleware; } },
+        middlewares: { use(handler) { middleware = handler as Middleware; },
+        },
       });
 
       const result = response();
-      void middleware?.(request('/__pack/control/bind', 'POST', JSON.stringify(command(gameDir, 1))), result, () => {});
+      void middleware?.(request('/__pack/control/bind', 'POST', JSON.stringify(command(gameDir, 1))), result, () => {},
+      );
       expect(receivedRoots).toBeUndefined();
       expect(result.body).not.toContain('gameDir');
       expect(result.body).not.toContain('projectDdcRoot');
@@ -189,7 +261,7 @@ describe('runtime scope controller', () => {
           current = { ...binding, status: 'ready', authority: 'authoritative' };
           return current;
         },
-      } as unknown as PluginPack;
+      } satisfies RuntimeScopePack;
       let middleware: Middleware | undefined;
       createRuntimeScopeController({
         pack,
@@ -213,8 +285,8 @@ describe('runtime scope controller', () => {
           '/__pack/control/bind',
           'POST',
           JSON.stringify(command(gameDir, 1)),
-          { 'x-forgeax-runtime-secret': 'wrong-secret' },
-        ),
+          { 'x-forgeax-runtime-secret': 'wrong-secret',
+        }),
         forbidden,
         () => {},
       );
@@ -227,8 +299,8 @@ describe('runtime scope controller', () => {
           '/__pack/control/bind',
           'POST',
           JSON.stringify(command(gameDir, 2)),
-          { 'x-forgeax-runtime-secret': 'test-secret' },
-        ),
+          { 'x-forgeax-runtime-secret': 'test-secret',
+        }),
         accepted,
         () => {},
       );
@@ -251,8 +323,8 @@ describe('runtime scope controller', () => {
           '/__pack/control/bind',
           'POST',
           JSON.stringify(command(gameDir, 1)),
-          { 'x-forgeax-runtime-secret': 'test-secret' },
-        ),
+          { 'x-forgeax-runtime-secret': 'test-secret',
+        }),
         stale,
         () => {},
       );
@@ -267,7 +339,7 @@ describe('runtime scope controller', () => {
     const pack = {
       name: 'test-pack',
       runtimeBinding: () => undefined,
-    } as unknown as PluginPack;
+    } satisfies RuntimeScopePack;
     let middleware: Middleware | undefined;
     createRuntimeScopeController({
       pack,
@@ -285,7 +357,8 @@ describe('runtime scope controller', () => {
     const result = response();
     await middleware?.(request('/__pack/runtime-binding.json', 'GET'), result, () => {});
     expect(result.statusCode).toBe(503);
-    expect(JSON.parse(result.body)).toEqual({ error: 'runtime-scope-unbound', status: 'unbound' });
+    expect(JSON.parse(result.body)).toEqual({ error: 'runtime-scope-unbound', status: 'unbound',
+    });
   });
 
   test('holds the binding probe until the initial bind publishes a ready snapshot', async () => {
@@ -304,7 +377,7 @@ describe('runtime scope controller', () => {
           current = { ...binding, status: 'ready', authority: 'authoritative' };
           return current;
         },
-      } as unknown as PluginPack;
+      } satisfies RuntimeScopePack;
       let middleware: Middleware | undefined;
       createRuntimeScopeController({
         pack,
@@ -371,7 +444,7 @@ describe('runtime scope controller', () => {
           current = { ...binding, status: 'ready', authority: 'authoritative' };
           return current;
         },
-      } as unknown as PluginPack;
+      } satisfies RuntimeScopePack;
       let middleware: Middleware | undefined;
       createRuntimeScopeController({
         pack,
@@ -380,7 +453,9 @@ describe('runtime scope controller', () => {
         resolveRoots: () => [],
         resolveProjectDdcRoot: projectDdcRoot,
         resolveCatalogRoots: () => [],
-      }).configureServer({ middlewares: { use: (handler) => { middleware = handler as Middleware; } } });
+      }).configureServer({ middlewares: { use: (handler) => { middleware = handler as Middleware; },
+        },
+      });
 
       const invoke = async () => {
         const result = response();
@@ -420,9 +495,10 @@ describe('runtime scope controller', () => {
         runtimeBinding: () => undefined,
         rebind: async (binding: RuntimeAssetBinding) => {
           calls += 1;
-          return { ...binding, status: calls === 1 ? 'transitioning' : 'ready' };
+          return { ...binding, status: calls === 1 ? 'transitioning' : 'ready',
+          };
         },
-      } as unknown as PluginPack;
+      } satisfies RuntimeScopePack;
       let middleware: Middleware | undefined;
       createRuntimeScopeController({
         pack,
@@ -431,7 +507,9 @@ describe('runtime scope controller', () => {
         resolveRoots: () => [],
         resolveProjectDdcRoot: projectDdcRoot,
         resolveCatalogRoots: () => [],
-      }).configureServer({ middlewares: { use: (handler) => { middleware = handler as Middleware; } } });
+      }).configureServer({ middlewares: { use: (handler) => { middleware = handler as Middleware; },
+        },
+      });
 
       const invoke = async () => {
         const result = response();
@@ -469,7 +547,7 @@ describe('runtime scope controller', () => {
         name: 'test-pack',
         runtimeBinding: () => previous,
         rebind: async () => previous,
-      } as unknown as PluginPack;
+      } as unknown as RuntimeScopePack;
       let middleware: Middleware | undefined;
       createRuntimeScopeController({
         pack,
@@ -478,7 +556,13 @@ describe('runtime scope controller', () => {
         resolveRoots: () => [],
         resolveProjectDdcRoot: projectDdcRoot,
         resolveCatalogRoots: () => [],
-      }).configureServer({ middlewares: { use: (handler) => { middleware = handler as Middleware; } } });
+      }).configureServer({
+        middlewares: {
+          use: (handler) => {
+            middleware = handler as Middleware;
+          },
+        },
+      });
 
       const result = response();
       await middleware?.(
@@ -512,7 +596,7 @@ describe('runtime scope controller', () => {
           current = { ...binding, status: 'ready', authority: 'authoritative' };
           return current;
         },
-      } as unknown as PluginPack;
+      } as unknown as RuntimeScopePack;
       let middleware: Middleware | undefined;
       createRuntimeScopeController({
         pack,
@@ -521,14 +605,24 @@ describe('runtime scope controller', () => {
         prepareGameMount: (_gameDir, gameId) => {
           mountEvents.push(`stage:${gameId}`);
           return {
-            commit: () => { mountEvents.push(`commit:${gameId}`); },
-            rollback: () => { mountEvents.push(`rollback:${gameId}`); },
+            commit: () => {
+              mountEvents.push(`commit:${gameId}`);
+            },
+            rollback: () => {
+              mountEvents.push(`rollback:${gameId}`);
+            },
           };
         },
         resolveRoots: () => [],
         resolveCatalogRoots: () => [],
         resolveProjectDdcRoot: projectDdcRoot,
-      }).configureServer({ middlewares: { use: (handler) => { middleware = handler as Middleware; } } });
+      }).configureServer({
+        middlewares: {
+          use: (handler) => {
+            middleware = handler as Middleware;
+          },
+        },
+      });
 
       const invoke = async (generation: number) => {
         const result = response();
@@ -545,13 +639,10 @@ describe('runtime scope controller', () => {
       expect((await invoke(9)).statusCode).toBe(200);
       const failed = await invoke(10);
       expect(failed.statusCode).toBe(409);
-      expect(JSON.parse(failed.body)).toMatchObject({ code: 'runtime-binding-mismatch' });
-      expect(mountEvents).toEqual([
-        'stage:fps',
-        'commit:fps',
-        'stage:fps',
-        'rollback:fps',
-      ]);
+      expect(JSON.parse(failed.body)).toMatchObject({
+        code: 'runtime-binding-mismatch',
+      });
+      expect(mountEvents).toEqual(['stage:fps', 'commit:fps', 'stage:fps', 'rollback:fps']);
       expect(current).toMatchObject({ generation: 9, status: 'ready' });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -570,7 +661,7 @@ describe('runtime scope controller', () => {
           current = { ...binding, status: 'ready', authority: 'authoritative' };
           return current;
         },
-      } as unknown as PluginPack;
+      } satisfies RuntimeScopePack;
       let middleware: Middleware | undefined;
       createRuntimeScopeController({
         pack,
@@ -579,7 +670,13 @@ describe('runtime scope controller', () => {
         resolveRoots: () => [],
         resolveCatalogRoots: () => [],
         resolveProjectDdcRoot: projectDdcRoot,
-      }).configureServer({ middlewares: { use: (handler) => { middleware = handler as Middleware; } } });
+      }).configureServer({
+        middlewares: {
+          use: (handler) => {
+            middleware = handler as Middleware;
+          },
+        },
+      });
 
       const invoke = async (value: RuntimeScopeCommand) => {
         const result = response();
@@ -616,164 +713,412 @@ describe('runtime scope controller', () => {
       });
       expect(failed.body).not.toContain(root);
       expect(stale.body).not.toContain(root);
-      expect(JSON.parse(snapshotAfterFailure.body)).toMatchObject({ generation: 9, status: 'ready' });
+      expect(JSON.parse(snapshotAfterFailure.body)).toMatchObject({
+        generation: 9,
+        status: 'ready',
+      });
       expect(recovered.statusCode).toBe(200);
-      expect(JSON.parse(recovered.body)).toMatchObject({ generation: 11, status: 'ready' });
+      expect(JSON.parse(recovered.body)).toMatchObject({
+        generation: 11,
+        status: 'ready',
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 });
 
-
-for (const advanceFailedBinding of [false, true]) test(`source recovery invalidates old readiness after a failed rebind (producer advances: ${advanceFailedBinding})`, async () => {
-  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'recovery-control-')));
-  const other = realpathSync.native(mkdtempSync(join(tmpdir(), 'recovery-other-')));
-  try {
-    mkdirSync(join(root, 'assets'));
-    mkdirSync(join(other, 'assets'));
-    const farm = join(other, 'farm-alias');
-    writeFileSync(join(root, 'assets/a.png'), 'source');
-    let current: RuntimeAssetBinding | undefined;
-    let rejectBind = false;
-    let middleware!: Middleware;
-    const pack = {
-      runtimeBinding: () => current,
-      rebind: async (binding: RuntimeAssetBinding) => {
-        if (rejectBind) {
-          if (advanceFailedBinding) current = { ...binding, status: 'unavailable', authority: 'authoritative' };
-          throw Object.assign(new Error('private error'), {
-          code: 'scan-failed', expected: 'valid source catalog', hint: 'repair the named source',
-          detail: { cause: { code: 'pack-orphan-meta', detail: { expectedFile: join(farm, 'other.png') } } },
-          });
-        }
-        current = { ...binding, status: 'ready', authority: 'authoritative' };
-        return current;
-      },
-    } as unknown as PluginPack;
-    createRuntimeScopeController({ pack, base: '/preview', secret: 'secret', resolveRoots: () => [farm],
-      prepareGameMount: () => {
-        rmSync(farm, { force: true });
-        symlinkSync(join(root, 'assets'), farm);
-        return { commit() {}, rollback() {
+for (const advanceFailedBinding of [false, true])
+  test(`source recovery invalidates old readiness after a failed rebind (producer advances: ${advanceFailedBinding})`, async () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'recovery-control-')));
+    const other = realpathSync.native(mkdtempSync(join(tmpdir(), 'recovery-other-')));
+    try {
+      mkdirSync(join(root, 'assets'));
+      mkdirSync(join(other, 'assets'));
+      const farm = join(other, 'farm-alias');
+      writeFileSync(join(root, 'assets/a.png'), 'source');
+      let current: RuntimeAssetBinding | undefined;
+      let rejectBind = false;
+      let middleware!: Middleware;
+      const pack = {
+        runtimeBinding: () => current,
+        rebind: async (binding: RuntimeAssetBinding) => {
+          if (rejectBind) {
+            if (advanceFailedBinding)
+              current = {
+                ...binding,
+                status: 'unavailable',
+                authority: 'authoritative',
+              };
+            throw Object.assign(new Error('private error'), {
+              code: 'scan-failed',
+              expected: 'valid source catalog',
+              hint: 'repair the named source',
+              detail: {
+                cause: {
+                  code: 'pack-orphan-meta',
+                  detail: { expectedFile: join(farm, 'other.png') },
+                },
+              },
+            });
+          }
+          current = { ...binding, status: 'ready', authority: 'authoritative' };
+          return current;
+        },
+      } as unknown as RuntimeScopePack;
+      createRuntimeScopeController({
+        pack,
+        base: '/preview',
+        secret: 'secret',
+        resolveRoots: () => [farm],
+        prepareGameMount: () => {
           rmSync(farm, { force: true });
-          symlinkSync(join(other, 'assets'), farm);
-        } };
-      },
-      resolveProjectDdcRoot: projectDdcRoot, resolveCatalogRoots: () => [],
-    }).configureServer({ middlewares: { use(handler) { middleware = handler as Middleware; } } });
-    const call = async (url: string, body: unknown, authorized = true) => {
-      const result = response();
-      await middleware(request(url, 'POST', JSON.stringify(body), authorized ? { 'x-forgeax-runtime-secret': 'secret' } : {}), result, () => {});
-      return { status: result.statusCode, body: JSON.parse(result.body) };
-    };
-    await call('/__pack/control/bind', command(root, 1));
-    const endpoint = '/__pack/control/recover-asset';
-    expect((await call(endpoint, { ...command(root, 2), sourcePath: 'assets/a.png' }, false)).status).toBe(403);
-    expect(existsSync(join(root, 'assets/a.png.meta.json'))).toBe(false);
-    expect((await call(endpoint, { ...command(other, 2), sourcePath: 'assets/a.png' })).body).toMatchObject({ code: 'asset-recovery-scope-mismatch', metadataRebuilt: false });
-    expect((await call(endpoint, { ...command(root, 1), sourcePath: 'assets/a.png' })).body).toMatchObject({ code: 'runtime-generation-stale', metadataRebuilt: false });
-    expect(existsSync(join(root, 'assets/a.png.meta.json'))).toBe(false);
-    rejectBind = true;
-    const partial = await call(endpoint, { ...command(root, 2), sourcePath: 'assets/a.png' });
-    expect(partial.body).toMatchObject({ code: 'scan-failed', metadataRebuilt: true, diagnostic: { cause: { detail: { cause: { detail: { expectedFile: './assets/other.png' } } } } } });
-    expect(partial.status).toBe(409);
-    const failedSnapshot = response();
-    await middleware(request('/__pack/runtime-binding.json', 'GET'), failedSnapshot, () => {});
-    expect(failedSnapshot.statusCode).toBe(503);
-    expect(JSON.parse(failedSnapshot.body)).toMatchObject({ status: 'unavailable', code: 'scan-failed', diagnostic: { detail: { cause: { detail: { expectedFile: './assets/other.png' } } } } });
-    expect(JSON.parse(failedSnapshot.body).status).not.toBe('ready');
-    const meta = JSON.parse(readFileSync(join(root, 'assets/a.png.meta.json'), 'utf8'));
-    rejectBind = false;
-    const ready = await call(endpoint, { ...command(root, 3), sourcePath: 'assets/a.png' });
-    expect(ready.body).toMatchObject({ ok: true, sourcePath: 'assets/a.png', metaPath: 'assets/a.png.meta.json', metadataRebuilt: true, binding: { generation: 3, status: 'ready' } });
-    expect(ready.body.subAssets).toEqual(meta.subAssets);
-    const readySnapshot = response();
-    await middleware(request('/__pack/runtime-binding.json', 'GET'), readySnapshot, () => {});
-    expect(readySnapshot.statusCode).toBe(200);
-    expect(JSON.parse(readySnapshot.body)).toMatchObject({ generation: 3, status: 'ready' });
-  } finally { rmSync(root, { recursive: true, force: true }); rmSync(other, { recursive: true, force: true }); }
-});
+          symlinkSync(join(root, 'assets'), farm);
+          return {
+            commit() {},
+            rollback() {
+              rmSync(farm, { force: true });
+              symlinkSync(join(other, 'assets'), farm);
+            },
+          };
+        },
+        resolveProjectDdcRoot: projectDdcRoot,
+        resolveCatalogRoots: () => [],
+      }).configureServer({
+        middlewares: {
+          use(handler) {
+            middleware = handler as Middleware;
+          },
+        },
+      });
+      const call = async (url: string, body: unknown, authorized = true) => {
+        const result = response();
+        await middleware(
+          request(
+            url,
+            'POST',
+            JSON.stringify(body),
+            authorized ? { 'x-forgeax-runtime-secret': 'secret' } : {},
+          ),
+          result,
+          () => {},
+        );
+        return { status: result.statusCode, body: JSON.parse(result.body) };
+      };
+      await call('/__pack/control/bind', command(root, 1));
+      const endpoint = '/__pack/control/recover-asset';
+      expect(
+        (await call(endpoint, { ...command(root, 2), sourcePath: 'assets/a.png' }, false)).status,
+      ).toBe(403);
+      expect(existsSync(join(root, 'assets/a.png.meta.json'))).toBe(false);
+      expect(
+        (
+          await call(endpoint, {
+            ...command(other, 2),
+            sourcePath: 'assets/a.png',
+          })
+        ).body,
+      ).toMatchObject({
+        code: 'asset-recovery-scope-mismatch',
+        metadataRebuilt: false,
+      });
+      expect(
+        (
+          await call(endpoint, {
+            ...command(root, 1),
+            sourcePath: 'assets/a.png',
+          })
+        ).body,
+      ).toMatchObject({
+        code: 'runtime-generation-stale',
+        metadataRebuilt: false,
+      });
+      expect(existsSync(join(root, 'assets/a.png.meta.json'))).toBe(false);
+      rejectBind = true;
+      const partial = await call(endpoint, {
+        ...command(root, 2),
+        sourcePath: 'assets/a.png',
+      });
+      expect(partial.body).toMatchObject({
+        code: 'scan-failed',
+        metadataRebuilt: true,
+        diagnostic: {
+          cause: {
+            detail: {
+              cause: { detail: { expectedFile: './assets/other.png' } },
+            },
+          },
+        },
+      });
+      expect(partial.status).toBe(409);
+      const failedSnapshot = response();
+      await middleware(request('/__pack/runtime-binding.json', 'GET'), failedSnapshot, () => {});
+      expect(failedSnapshot.statusCode).toBe(503);
+      expect(JSON.parse(failedSnapshot.body)).toMatchObject({
+        status: 'unavailable',
+        code: 'scan-failed',
+        diagnostic: {
+          detail: { cause: { detail: { expectedFile: './assets/other.png' } } },
+        },
+      });
+      expect(JSON.parse(failedSnapshot.body).status).not.toBe('ready');
+      const meta = JSON.parse(readFileSync(join(root, 'assets/a.png.meta.json'), 'utf8'));
+      rejectBind = false;
+      const ready = await call(endpoint, {
+        ...command(root, 3),
+        sourcePath: 'assets/a.png',
+      });
+      expect(ready.body).toMatchObject({
+        ok: true,
+        sourcePath: 'assets/a.png',
+        metaPath: 'assets/a.png.meta.json',
+        metadataRebuilt: true,
+        binding: { generation: 3, status: 'ready' },
+      });
+      expect(ready.body.subAssets).toEqual(meta.subAssets);
+      const readySnapshot = response();
+      await middleware(request('/__pack/runtime-binding.json', 'GET'), readySnapshot, () => {});
+      expect(readySnapshot.statusCode).toBe(200);
+      expect(JSON.parse(readySnapshot.body)).toMatchObject({
+        generation: 3,
+        status: 'ready',
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
 
-for (const degradation of ['status', 'authority', 'blocking'] as const) test(`metadata recovery rejects producer ${degradation} degradation`, async () => {
-  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'recovery-degraded-')));
-  try {
-    mkdirSync(join(root, 'assets'));
-    writeFileSync(join(root, 'assets/a.png'), 'source');
-    let current: RuntimeAssetBinding | undefined;
-    let middleware!: Middleware;
-    const blocking = { code: 'scan-failed', severity: 'blocking' as const, expected: 'valid catalog', hint: 'repair the remaining source', actual: join(root, 'assets/other.png') };
-    const pack = {
-      runtimeBinding: () => current,
-      rebind: async (binding: RuntimeAssetBinding) => {
-        current = { ...binding, status: binding.generation === 2 && degradation === 'status' ? 'degraded' : 'ready',
-          authority: binding.generation === 2 && degradation === 'authority' ? 'degraded' : 'authoritative',
-          diagnostics: binding.generation === 2 && degradation === 'blocking' ? [blocking] : [],
-        };
-        return current;
-      },
-    } as unknown as PluginPack;
-    createRuntimeScopeController({ pack, base: '/preview', secret: 'secret', resolveRoots: (dir) => [dir],
-      resolveProjectDdcRoot: projectDdcRoot, resolveCatalogRoots: () => [],
-    }).configureServer({ middlewares: { use(handler) { middleware = handler as Middleware; } } });
-    const call = async (url: string, body?: unknown) => {
-      const result = response();
-      await middleware(request(url, body === undefined ? 'GET' : 'POST', JSON.stringify(body), { 'x-forgeax-runtime-secret': 'secret' }), result, () => {});
-      return { status: result.statusCode, body: JSON.parse(result.body) };
-    };
-    await call('/__pack/control/bind', command(root, 1));
-    const failed = await call('/__pack/control/recover-asset', { ...command(root, 2), sourcePath: 'assets/a.png' });
-    expect(failed.status).toBe(409);
-    expect(failed.body.metadataRebuilt).toBe(true);
-    expect(failed.body.code).toBe(degradation === 'blocking' ? 'scan-failed' : 'runtime-asset-recovery-not-ready');
-    expect(failed.body.diagnostic.cause.detail).toMatchObject({ status: current!.status, authority: current!.authority });
-    if (degradation === 'blocking') expect(failed.body.diagnostic.cause.detail.diagnostics).toMatchObject([{ ...blocking, actual: './assets/other.png' }]);
-    const snapshot = await call('/__pack/runtime-binding.json');
-    expect(snapshot.status).toBe(503);
-    expect(snapshot.body.status).toBe('unavailable');
-    const ready = await call('/__pack/control/recover-asset', { ...command(root, 3), sourcePath: 'assets/a.png' });
-    expect(ready.status).toBe(200);
-    expect(ready.body.binding.status).toBe('ready');
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
+for (const degradation of ['status', 'authority', 'blocking'] as const)
+  test(`metadata recovery rejects producer ${degradation} degradation`, async () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'recovery-degraded-')));
+    try {
+      mkdirSync(join(root, 'assets'));
+      writeFileSync(join(root, 'assets/a.png'), 'source');
+      let current: RuntimeAssetBinding | undefined;
+      let middleware!: Middleware;
+      const blocking = {
+        code: 'scan-failed',
+        severity: 'blocking' as const,
+        expected: 'valid catalog',
+        hint: 'repair the remaining source',
+        actual: join(root, 'assets/other.png'),
+      };
+      const pack = {
+        runtimeBinding: () => current,
+        rebind: async (binding: RuntimeAssetBinding) => {
+          current = {
+            ...binding,
+            status: binding.generation === 2 && degradation === 'status' ? 'degraded' : 'ready',
+            authority:
+              binding.generation === 2 && degradation === 'authority'
+                ? 'degraded'
+                : 'authoritative',
+            diagnostics: binding.generation === 2 && degradation === 'blocking' ? [blocking] : [],
+          };
+          return current;
+        },
+      } as unknown as RuntimeScopePack;
+      createRuntimeScopeController({
+        pack,
+        base: '/preview',
+        secret: 'secret',
+        resolveRoots: (dir) => [dir],
+        resolveProjectDdcRoot: projectDdcRoot,
+        resolveCatalogRoots: () => [],
+      }).configureServer({
+        middlewares: {
+          use(handler) {
+            middleware = handler as Middleware;
+          },
+        },
+      });
+      const call = async (url: string, body?: unknown) => {
+        const result = response();
+        await middleware(
+          request(url, body === undefined ? 'GET' : 'POST', JSON.stringify(body), {
+            'x-forgeax-runtime-secret': 'secret',
+          }),
+          result,
+          () => {},
+        );
+        return { status: result.statusCode, body: JSON.parse(result.body) };
+      };
+      await call('/__pack/control/bind', command(root, 1));
+      const failed = await call('/__pack/control/recover-asset', {
+        ...command(root, 2),
+        sourcePath: 'assets/a.png',
+      });
+      expect(failed.status).toBe(409);
+      expect(failed.body.metadataRebuilt).toBe(true);
+      expect(failed.body.code).toBe(
+        degradation === 'blocking' ? 'scan-failed' : 'runtime-asset-recovery-not-ready',
+      );
+      expect(failed.body.diagnostic.cause.detail).toMatchObject({
+        status: current!.status,
+        authority: current!.authority,
+      });
+      if (degradation === 'blocking')
+        expect(failed.body.diagnostic.cause.detail.diagnostics).toMatchObject([
+          { ...blocking, actual: './assets/other.png' },
+        ]);
+      const snapshot = await call('/__pack/runtime-binding.json');
+      expect(snapshot.status).toBe(503);
+      expect(snapshot.body.status).toBe('unavailable');
+      const ready = await call('/__pack/control/recover-asset', {
+        ...command(root, 3),
+        sourcePath: 'assets/a.png',
+      });
+      expect(ready.status).toBe(200);
+      expect(ready.body.binding.status).toBe('ready');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
 test('same-scope producer publications replace cached status in GET and idempotent bind', async () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'controller-diagnostic-')));
-  let handler: any, current: any, fail = true;
-  const command = { gameId: 'kart', scopeId: 'kart-scope', generation: 1, gameDir: dir };
-  const pack = { runtimeBinding: () => current, rebind: async (binding: any) => {
-    if (fail) throw { code: 'scan-failed', cause: [{ code: 'pack-source-external-closure-mismatch', detail: { sourcePath: join(dir, 'scene.pack.ts'), undeclaredReadGuids: ['missing'] } }] };
-    return current = { ...binding, status: 'ready' };
-  } };
+  let handler: any,
+    current: any,
+    fail = true;
+  const command = {
+    gameId: 'kart',
+    scopeId: 'kart-scope',
+    generation: 1,
+    gameDir: dir,
+  };
+  const pack = {
+    runtimeBinding: () => current,
+    rebind: async (binding: any) => {
+      if (fail)
+        throw {
+          code: 'scan-failed',
+          cause: [
+            {
+              code: 'pack-source-external-closure-mismatch',
+              detail: {
+                sourcePath: join(dir, 'scene.pack.ts'),
+                undeclaredReadGuids: ['missing'],
+              },
+            },
+          ],
+        };
+      return (current = { ...binding, status: 'ready' });
+    },
+  };
   try {
-    createRuntimeScopeController({ pack: pack as any, base: '/preview/', secret: 'secret', resolveRoots: () => [dir], resolveProjectDdcRoot: () => join(dir, '.ddc'), resolveCatalogRoots: () => [] }).configureServer({ middlewares: { use: (value: any) => { handler = value; } } });
+    createRuntimeScopeController({
+      pack: pack as any,
+      base: '/preview/',
+      secret: 'secret',
+      resolveRoots: () => [dir],
+      resolveProjectDdcRoot: () => join(dir, '.ddc'),
+      resolveCatalogRoots: () => [],
+    }).configureServer({
+      middlewares: {
+        use: (value: any) => {
+          handler = value;
+        },
+      },
+    });
     const call = async (url: string, body?: unknown) => {
-      let text = ''; const res = { statusCode: 200, setHeader: () => {}, end: (value: string) => { text = value; } };
-      await handler({ url, method: body ? 'POST' : 'GET', headers: { 'x-forgeax-runtime-secret': 'secret' }, on: (event: string, fn: (value?: string) => void) => { if (event === 'data') fn(JSON.stringify(body)); if (event === 'end') fn(); } }, res, () => { throw new Error('unexpected route'); });
+      let text = '';
+      const res = {
+        statusCode: 200,
+        setHeader: () => {},
+        end: (value: string) => {
+          text = value;
+        },
+      };
+      await handler(
+        {
+          url,
+          method: body ? 'POST' : 'GET',
+          headers: { 'x-forgeax-runtime-secret': 'secret' },
+          on: (event: string, fn: (value?: string) => void) => {
+            if (event === 'data') fn(JSON.stringify(body));
+            if (event === 'end') fn();
+          },
+        },
+        res,
+        () => {
+          throw new Error('unexpected route');
+        },
+      );
       return new Response(text, { status: res.statusCode });
     };
-    expect(await (await call('/__pack/runtime-binding.json')).json()).toMatchObject({ status: 'unbound' });
+    expect(await (await call('/__pack/runtime-binding.json')).json()).toMatchObject({
+      status: 'unbound',
+    });
     expect((await call('/__pack/control/bind', command)).status).toBe(409);
     const failed = await call('/__pack/runtime-binding.json');
     expect(failed.status).toBe(503);
-    expect(await failed.json()).toMatchObject({ gameId: 'kart', scopeId: 'kart-scope', generation: 1, status: 'unavailable', diagnostic: { cause: [{ code: 'pack-source-external-closure-mismatch', detail: { sourcePath: './scene.pack.ts', undeclaredReadGuids: ['missing'] } }] } });
-    const failure = await loadRuntimeBinding('/__pack/runtime-binding.json', (url) => call(url), { expected: command }).catch(error => error);
+    expect(await failed.json()).toMatchObject({
+      gameId: 'kart',
+      scopeId: 'kart-scope',
+      generation: 1,
+      status: 'unavailable',
+      diagnostic: {
+        cause: [
+          {
+            code: 'pack-source-external-closure-mismatch',
+            detail: {
+              sourcePath: './scene.pack.ts',
+              undeclaredReadGuids: ['missing'],
+            },
+          },
+        ],
+      },
+    });
+    const failure = await loadRuntimeBinding('/__pack/runtime-binding.json', (url) => call(url), {
+      expected: command,
+    }).catch((error) => error);
     expect(failure.code).toBe('pack-source-external-closure-mismatch');
     fail = false;
     expect((await call('/__pack/control/bind', { ...command, generation: 2 })).status).toBe(200);
     const ready = await call('/__pack/runtime-binding.json');
     expect(ready.status).toBe(200);
-    const body = await ready.json(); expect(body.status).toBe('ready'); expect(body.diagnostic).toBeUndefined();
-    current = { ...current, status: 'degraded', diagnostics: [{ code: 'fresh-failure', severity: 'blocking' }] };
-    expect(await (await call('/__pack/runtime-binding.json')).json()).toMatchObject({ status: 'degraded' });
-    expect(await (await call('/__pack/control/bind', { ...command, generation: 2 })).json()).toMatchObject({ status: 'degraded' });
+    const body = await ready.json();
+    expect(body.status).toBe('ready');
+    expect(body.diagnostic).toBeUndefined();
+    current = {
+      ...current,
+      status: 'degraded',
+      diagnostics: [{ code: 'fresh-failure', severity: 'blocking' }],
+    };
+    expect(await (await call('/__pack/runtime-binding.json')).json()).toMatchObject({
+      status: 'degraded',
+    });
+    expect(
+      await (await call('/__pack/control/bind', { ...command, generation: 2 })).json(),
+    ).toMatchObject({ status: 'degraded' });
     current = { ...current, status: 'ready', diagnostics: [] };
-    expect(await (await call('/__pack/runtime-binding.json')).json()).toMatchObject({ status: 'ready', diagnostics: [] });
+    expect(await (await call('/__pack/runtime-binding.json')).json()).toMatchObject({
+      status: 'ready',
+      diagnostics: [],
+    });
     const valid = current;
     current = { ...valid, gameId: 'other' };
-    expect(await (await call('/__pack/runtime-binding.json')).json()).toMatchObject({ gameId: 'kart', status: 'ready' });
-    current = valid; fail = true;
-    expect((await call('/__pack/control/bind', { ...command, gameId: 'other', generation: 3 })).status).toBe(409);
-    expect(await (await call('/__pack/runtime-binding.json')).json()).toMatchObject({ gameId: 'kart', generation: 2 });
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    expect(await (await call('/__pack/runtime-binding.json')).json()).toMatchObject({
+      gameId: 'kart',
+      status: 'ready',
+    });
+    current = valid;
+    fail = true;
+    expect(
+      (
+        await call('/__pack/control/bind', {
+          ...command,
+          gameId: 'other',
+          generation: 3,
+        })
+      ).status,
+    ).toBe(409);
+    expect(await (await call('/__pack/runtime-binding.json')).json()).toMatchObject({
+      gameId: 'kart',
+      generation: 2,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

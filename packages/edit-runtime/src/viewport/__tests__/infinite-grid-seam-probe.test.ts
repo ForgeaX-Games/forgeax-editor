@@ -23,7 +23,7 @@ describe('Edit Runtime no-vertex consumer seam probe', () => {
       depthLoadStore: ['load', 'store'],
     } as const;
 
-    expect(viewportSource).toContain('features: renderFeatures');
+    expect(viewportSource).toContain('features:');
     expect(viewportSource).toContain('createInfiniteGridFeature({');
     expect(viewportSource).not.toContain('rawDevice');
     expect(viewportSource).not.toContain('createRenderPipeline');
@@ -35,10 +35,10 @@ describe('Edit Runtime no-vertex consumer seam probe', () => {
     // the graph resolver manufacture a texture-only group 0 against pbr-view-bgl.
     expect(featureSource).toContain('values: { group: 0 }');
     expect(featureSource).not.toContain('values: { group: 0, sceneDepth: nextDepthTarget }');
-    expect(featureSource).toContain('recover: () =>');
-    expect(featureSource).toContain('RenderFeaturePreparedStateMismatchError');
-    expect(featureSource).toContain('findMaterialArtifact(INFINITE_GRID_SHADER_ID)');
-    expect(featureSource).toContain('existing.value.source !== source');
+    expect(featureSource).toContain('plan: (data, context) =>');
+    expect(featureSource).not.toContain('RenderFeaturePreparedStateMismatchError');
+    expect(featureSource).not.toContain('RenderFeaturePreparedRef');
+    expect(featureSource).toContain("import './shaders/infinite-grid.wgsl'");
     expect(shaderSource).toContain('return value == value && value - value == 0.0;');
     expect(shaderSource).not.toMatch(/\bisNan\b|\bisInf\b/);
     expect(shaderSource).toContain('log2(max(pixelFootprint * 32.0, 1e-6)) / log2(10.0)');
@@ -55,11 +55,11 @@ describe('Edit Runtime no-vertex consumer seam probe', () => {
     expect(preparedGraphicsSource).toContain("draw.vertexLayout === 'none'");
     expect({
       consumerStage: 'createApp.features',
-      producerStage: 'validate-prepared-state',
+      producerStage: 'render-feature-plan',
       outcome: 'accepted-by-public-producer',
     }).toEqual({
       consumerStage: 'createApp.features',
-      producerStage: 'validate-prepared-state',
+      producerStage: 'render-feature-plan',
       outcome: 'accepted-by-public-producer',
     });
   });

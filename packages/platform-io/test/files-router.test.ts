@@ -1,0 +1,141 @@
+import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { mkdtemp, mkdir, readFile, rm, stat } from 'fs/promises';
+import { tmpdir } from 'node:os';
+import { resolve, basename, join } from 'node:path';
+import { createFilesRouter } from '../src/api/files';
+import { singleGameFileBackend } from '../src/api/lib/file-backend';
+
+// Regression coverage for the "New Folder" bug: POST /api/files with
+// `mkdir: true` used to fall through to writeFileSafe and silently create an
+// empty *file* named after the intended folder (Content Browser blank-area
+// "New Folder" then had nothing to show, since folder listings only surface
+// `type: 'dir'` entries).
+
+let tmp: string;
+let gameDir: string;
+let slug: string;
+let router: ReturnType<typeof createFilesRouter>;
+
+beforeAll(async () => {
+  tmp = await mkdtemp(join(tmpdir(), 'fx-files-router-'));
+  gameDir = resolve(tmp, 'my-game');
+  slug = basename(gameDir);
+  await mkdir(resolve(gameDir, 'assets'), { recursive: true });
+  router = createFilesRouter(singleGameFileBackend(gameDir));
+});
+
+afterAll(async () => {
+  await rm(tmp, { recursive: true, force: true });
+});
+
+describe('POST /api/files — mkdir branch', () => {
+  test('{ mkdir: true } creates a real directory, not an empty file', async () => {
+    const target = `${slug}/assets/NewFolder`;
+    const res = await router.request('/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: target, content: '', mkdir: true }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ path: target, directory: true });
+
+    const s = await stat(resolve(gameDir, 'assets', 'NewFolder'));
+    expect(s.isDirectory()).toBe(true);
+  });
+
+  test('{ mkdir: true } is idempotent (recursive: true, no error on re-create)', async () => {
+    const target = `${slug}/assets/NewFolder`;
+    const res = await router.request('/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: target, content: '', mkdir: true }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  test('omitting mkdir still writes a plain file (no regression to normal writes)', async () => {
+    const target = `${slug}/assets/note.txt`;
+    const res = await router.request('/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: target, content: 'hello' }),
+    });
+    expect(res.status).toBe(200);
+    const s = await stat(resolve(gameDir, 'assets', 'note.txt'));
+    expect(s.isFile()).toBe(true);
+  });
+
+  test('missing content when mkdir is absent → 400', async () => {
+    const target = `${slug}/assets/bad.txt`;
+    const res = await router.request('/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: target }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test('resource paths cannot escape the confined game root', async () => {
+    const response = await router.request('/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: `${slug}/../outside.bin`, content: 'blocked' }),
+    });
+    expect(response.status).toBe(400);
+  });
+});
+
+describe('POST /api/files/upload', () => {
+  test('creates missing parent directories before writing binary assets', async () => {
+    const target = `${slug}/assets/e2e-import/model.glb`;
+    const bytes = Buffer.from('glTF-e2e');
+    const res = await router.request('/upload', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: target, data: bytes.toString('base64') }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ path: target, bytes: bytes.byteLength });
+    expect(await readFile(resolve(gameDir, 'assets', 'e2e-import', 'model.glb'))).toEqual(bytes);
+  });
+});
+
+describe('GET /api/files/raw — byte ranges', () => {
+  test('serves a satisfiable byte range as 206 for WebKit media playback', async () => {
+    const target = `${slug}/assets/avatar.mov`;
+    await Bun.write(resolve(gameDir, 'assets', 'avatar.mov'), '0123456789');
+
+    const response = await router.request(`/raw?path=${encodeURIComponent(target)}`, {
+      headers: { range: 'bytes=2-5' },
+    });
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get('accept-ranges')).toBe('bytes');
+    expect(response.headers.get('content-range')).toBe('bytes 2-5/10');
+    expect(response.headers.get('content-length')).toBe('4');
+    expect(await response.text()).toBe('2345');
+  });
+
+  test('supports suffix ranges', async () => {
+    const target = `${slug}/assets/avatar.mov`;
+    const response = await router.request(`/raw?path=${encodeURIComponent(target)}`, {
+      headers: { range: 'bytes=-3' },
+    });
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get('content-range')).toBe('bytes 7-9/10');
+    expect(await response.text()).toBe('789');
+  });
+
+  test('rejects an out-of-bounds range as 416', async () => {
+    const target = `${slug}/assets/avatar.mov`;
+    const response = await router.request(`/raw?path=${encodeURIComponent(target)}`, {
+      headers: { range: 'bytes=20-30' },
+    });
+
+    expect(response.status).toBe(416);
+    expect(response.headers.get('content-range')).toBe('bytes */10');
+  });
+});

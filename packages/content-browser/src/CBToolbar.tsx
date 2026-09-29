@@ -63,9 +63,7 @@ export function CBToolbar({
   const folderInputRef = useRef<HTMLInputElement>(null);
   const acceptString = buildAcceptString();
 
-  // Game-relative directory for authoring ops (appliers resolve to disk).
   const packDir = (currentPath || 'assets').replace(/^\/+|\/+$/g, '') || 'assets';
-  // Host-resolved path — only for import diagnostics / file picker context.
   const basePath = resolveGamePath(packDir);
   const projectPath = resolveGamePath('');
 
@@ -83,12 +81,6 @@ export function CBToolbar({
     });
   }, [acceptString, basePath, currentPath]);
 
-  // Toast subscriber for async asset-IO failures (dev-plan §5 step 3).
-  // Installed once at CBToolbar mount, disposed on unmount. This is the ONE
-  // subscriber for the whole editor because CBToolbar renders once per open
-  // Content Browser panel; if the panel is closed the toast doesn't fire (the
-  // user isn't in an asset-authoring context anyway). Emitted by
-  // session/pack-ops.ts on .then(!ok) / .catch of fire-and-forget IO writes.
   useEffect(() => {
     return panelBridge.on('assetsError', ({ op, hint }) => {
       toast.error(op, { description: hint });
@@ -127,12 +119,6 @@ export function CBToolbar({
         placeholder: spec.defaultNamePrefix,
         confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
         cancelText: t('editor.contentBrowser.dialogs.cancel'),
-        // The asset name becomes part of a filename (`${name}.pack.json`), so
-        // basename rules apply — inline UX-side gate using the SSOT validator
-        // (dev-plan §5 step 5 + follow-up validate wiring). The applier still
-        // enforces on dispatch (north-star §9); this just fails the input BEFORE
-        // Confirm is even enabled, so the user gets red text instead of a
-        // silent toast/reject after the click.
         validate: (v) => {
           const r = validateAssetBasename(v);
           return r.ok ? null : r.hint;
@@ -211,9 +197,6 @@ export function CBToolbar({
     }).then(async (name) => {
       if (!name) return;
       const result = await dispatchActiveEditorOperation({ kind: 'createDirectory', parentPath: currentPath, name }, 'human');
-      // Belt+suspenders: contentBrowserPrompt.validate already blocked bad input, but
-      // a schema/logic bug or an AI-parity concurrent dispatch could still
-      // surface INVALID_ARGS at dispatch time. Toast if so.
       if (!result.ok) toast.error('createDirectory', { description: result.error.hint });
     });
   }, [currentPath, t]);

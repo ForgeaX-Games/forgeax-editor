@@ -69,7 +69,7 @@ const LABEL = '[lint-unique-mutator]';
 // Git helpers (same base-resolution discipline as lint-op-via-gateway.mjs)
 // ---------------------------------------------------------------------------
 function git(args) {
-  return execFileSync('git', ['-C', REPO_ROOT, ...args], { encoding: 'utf8' }).trim();
+  return execFileSync('git', ['-C', REPO_ROOT, ...args], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }).trim();
 }
 function gitSafe(args) {
   try { return git(args); } catch { return null; }

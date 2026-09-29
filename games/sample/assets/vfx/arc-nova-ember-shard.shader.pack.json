@@ -5,6 +5,7 @@
     {
       "guid": "cd16a32c-0fd2-4c02-861d-a5537baaa794",
       "kind": "material",
+      "execution": "cooked",
       "name": "Arc Nova Ember Facet",
       "sourceKey": "arc-nova-ember-shard.wgsl",
       "payload": {
@@ -28,11 +29,20 @@
             }
           }
         ],
+        "parameters": [
+          { "name": "baseColor", "type": "color", "colorSpace": "linear" },
+          { "name": "emissive", "type": "color", "colorSpace": "linear" },
+          { "name": "emissiveIntensity", "type": "f32" },
+          { "name": "clearcoat", "type": "f32" },
+          { "name": "metallic", "type": "f32" },
+          { "name": "roughness", "type": "f32" },
+          { "name": "clearcoatRoughness", "type": "f32" }
+        ],
         "values": {
           "baseColor": [1.0, 0.12, 0.015, 1.0],
           "metallic": 0.64,
           "roughness": 0.18,
-          "emissive": [1.0, 0.025, 0.002],
+          "emissive": [1.0, 0.025, 0.002, 1.0],
           "emissiveIntensity": 3.8,
           "clearcoat": 0.68,
           "clearcoatRoughness": 0.08

@@ -11,7 +11,7 @@ describe('VFX asset preview foundation', () => {
     expect(source).toContain('vfxHost.attachWorld');
     expect(source).toContain('createEngineFacade');
     expect(source).toContain("facade.allocSharedRef('ParticleEffectAsset'");
-    expect(source).toContain('facade.spawn(');
+    expect(source).toMatch(/facade\s*\.spawn\(/u);
     expect(source).not.toMatch(/\bapp\.world\.(spawn|set|allocSharedRef)\(/u);
   });
 
@@ -62,7 +62,7 @@ describe('VFX asset preview foundation', () => {
   });
 
   it('routes toolbar and AI through the same Runtime-owned transient operations', () => {
-    expect(source).toContain('dispatchViewportRuntimeOperation(operationId');
+    expect(source).toMatch(/dispatchViewportRuntimeOperation\(\s*operationId/u);
     expect(source).toContain('VFX_PREVIEW_OPERATION_IDS.play');
     expect(source).toContain('VFX_PREVIEW_OPERATION_IDS.pause');
     expect(source).toContain('VFX_PREVIEW_OPERATION_IDS.reset');

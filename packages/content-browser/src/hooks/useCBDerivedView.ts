@@ -7,10 +7,10 @@
 // this hook only derives the render projection and preserves UI state.
 
 import { useCallback, useMemo } from 'react';
-import { resolveGamePath } from '@forgeax/editor-core';
+import { normalizeCBPath, resolveGamePath } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { deriveContentView } from '../folder-view';
-import { isMetaSidecarFile } from '../folder-view';
+import { isMetaSidecarFile, metaSidecarSourcePath } from '../folder-view';
 import { catalogPathToRoot, type CatalogAssetRoot } from '../catalog-root';
 import { resolveViewMode, type CBViewMode2 } from '../view-mode';
 import {
@@ -81,6 +81,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     scriptablePacks = [],
   } = inputs;
   const { t } = useTranslation();
+  const currentPath = useMemo(() => normalizeCBPath(nav.currentPath), [nav.currentPath]);
 
   // Scope the catalog to THIS game's declared asset roots. Each kept entry
   // carries its game-relative path (`assets/characters/x.pack.json`), which
@@ -191,8 +192,8 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
   }, [scopedAssets, diskDirs]);
 
   const viewMode: CBViewMode2 = useMemo(
-    () => resolveViewMode(nav.currentPath, catalogAssetRoots),
-    [nav.currentPath, catalogAssetRoots],
+    () => resolveViewMode(currentPath, catalogAssetRoots),
+    [currentPath, catalogAssetRoots],
   );
 
   const sourceTree = useMemo<SourceTreeNode[]>(() => {
@@ -291,10 +292,10 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     () => deriveContentView({
       scopedAssets,
       packDirs,
-      currentPath: nav.currentPath,
+      currentPath,
       isFavoriteFolder: path => favorites.isFavorite({ kind: 'path', path }),
     }),
-    [scopedAssets, packDirs, nav.currentPath, favorites.isFavorite],
+    [scopedAssets, packDirs, currentPath, favorites.isFavorite],
   );
 
   // Folders carry only a name (kind/time/size are asset concepts), so every sort
@@ -353,7 +354,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
   const filesInPath = useMemo(() => {
     const q = filter.searchQuery.trim().toLowerCase();
     return diskFiles
-      .filter(file => dirOfPath(file.path) === nav.currentPath)
+      .filter(file => dirOfPath(file.path) === currentPath)
       .filter(file => filter.matchesFile(file))
       .filter(file => !favoritesOnly || file.isFavorite || holdsFavoriteAsset(file))
       .filter(file => !q || file.name.toLowerCase().includes(q) || file.assets.some(asset => asset.name.toLowerCase().includes(q)))
@@ -365,7 +366,7 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
           : a.name.localeCompare(b.name);
         return sortDir === 'desc' ? -r : r;
       });
-  }, [diskFiles, favoritesOnly, filter.matchesFile, filter.searchQuery, holdsFavoriteAsset, nav.currentPath, sortKey, sortDir]);
+  }, [currentPath, diskFiles, favoritesOnly, filter.matchesFile, filter.searchQuery, holdsFavoriteAsset, sortKey, sortDir]);
 
   // A file kept only for its contents lists just the favorited ones; a file that
   // is ITSELF the favorite lists all of them (the pack is what was starred).
@@ -383,9 +384,20 @@ export function useCBDerivedView(inputs: CBDerivedViewInputs): CBDerivedView {
     if (filter.activeFilterCount > 0) return [];
     return sortedAssets.filter(asset => {
       const rel = scopedAssets.find(scoped => scoped.asset.guid === asset.guid)?.rel;
-      return !rel || !diskFilePaths.has(rel);
+      if (rel && diskFilePaths.has(rel)) return false;
+      // Sidecar-owned rels (`hud.ui.html.meta.json`) never match diskFilePaths
+      // — sidecars are hidden from the disk tree. Their owning source file
+      // (`hud.ui.html`) is the card that surfaces the asset through the
+      // `<rel>.meta.json` fallback in diskFiles, so its presence counts as disk
+      // backing. Without this, the asset ALSO landed in registryOnlyAssets and
+      // rendered twice under the same guid key in CBGrid (duplicate React key).
+      // The fallback only applies when the source file owns no assets under its
+      // bare rel — mirror that `??` chain here.
+      const sourcePath = rel ? metaSidecarSourcePath(rel) : null;
+      if (sourcePath && diskFilePaths.has(sourcePath) && !(assetsByRel.get(sourcePath)?.length)) return false;
+      return true;
     });
-  }, [diskFilePaths, filter.activeFilterCount, scopedAssets, sortedAssets]);
+  }, [assetsByRel, diskFilePaths, filter.activeFilterCount, scopedAssets, sortedAssets]);
 
   // Single ordered array shared by the view AND multi-select — handleClick
   // resolves items by flat index, so both must see the same order. The array

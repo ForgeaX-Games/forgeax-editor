@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 // dev-standalone.ts — one-command standalone editor dev stack.
 //
-// Starts the two servers the standalone editor needs, wired correctly:
+// Starts the standalone editor servers, wired correctly:
 //   :15290  standalone chrome host (vite, root=apps/standalone/) — proxies /editor → :15280
 //   :15280  edit-runtime (panel + viewport iframe source)
+//   :15281  game backend (only when FORGEAX_GAME_DIR is supplied)
 //
 // The crucial bit is FORGEAX_INTERFACE_PORT=15290: edit-runtime's vite HMR
 // clientPort defaults to 18920 (the studio-embed host). In standalone the host
@@ -18,6 +19,11 @@ import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installCleanup, spawnService, type SpawnServiceOptions } from './lib/dev-stack.ts';
+import {
+  resolveHostCatalogScope,
+  waitForHostCatalogReady,
+  waitForHttpReady,
+} from './lib/wait-host-catalog.ts';
 import { portEnvironment, resolveWorktreePorts } from './lib/worktree-ports.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -28,7 +34,11 @@ const MANUAL_GAME_NAME = basename(configuredGameDir ? resolve(configuredGameDir)
 const MANUAL_LOG_FILE = join(MANUAL_LOG_DIR, `${MANUAL_GAME_NAME}-${MANUAL_RUN_ID}.log`);
 mkdirSync(MANUAL_LOG_DIR, { recursive: true });
 const WORKTREE_PORTS = resolveWorktreePorts(ROOT);
-const PORTS = [WORKTREE_PORTS.standalone, WORKTREE_PORTS.editRuntime];
+const PORTS = [
+  WORKTREE_PORTS.standalone,
+  WORKTREE_PORTS.editRuntime,
+  ...(configuredGameDir === undefined ? [] : [WORKTREE_PORTS.gameApi]),
+];
 const bridgePort = String(WORKTREE_PORTS.bridge);
 const bridgeEnabled = process.env.FORGEAX_BRIDGE !== '0';
 const managedPorts = bridgeEnabled ? [...PORTS, WORKTREE_PORTS.bridge] : PORTS;
@@ -58,6 +68,57 @@ const HOST_DDC_PROJECT_ROOT = DDC_HOST_ROOT === undefined
 const VITE_CACHE_ROOT = process.env.FORGEAX_VITE_CACHE_ROOT
   ?? resolve(gameDirAbs ?? ROOT, '.forgeax', 'vite-cache', `engine-${engineRevision}`);
 
+const useNodeViteRuntime = process.env.FORGEAX_SMOKE_VITE_RUNTIME === 'node';
+const nodeExecutable = process.env.FORGEAX_SMOKE_NODE_BIN ?? 'node';
+const viteBin = resolve(ROOT, 'node_modules/vite/bin/vite.js');
+const hostViteConfig = resolve(ROOT, 'vite.config.ts');
+const playViteConfig = resolve(ROOT, 'packages/play-runtime/vite.config.ts');
+
+function parseRequiredCatalogSources(): readonly string[] {
+  const raw = process.env.FORGEAX_CATALOG_REQUIRED_SOURCES;
+  if (raw === undefined || raw.trim().length === 0) return [];
+  return raw.split(',').map((sourcePath) => sourcePath.trim()).filter((sourcePath) => sourcePath.length > 0);
+}
+
+function resolvePlayEnginePort(): number {
+  const raw = process.env.FORGEAX_ENGINE_PORT
+    ?? process.env.FORGEAX_E2E_ENGINE_PORT
+    ?? process.env.FORGEAX_PLAY_RUNTIME_PORT;
+  if (raw === undefined || raw === '') return WORKTREE_PORTS.playRuntime;
+  return Number.parseInt(raw, 10);
+}
+
+function hostViteLaunch(): { command: string; args: string[] } {
+  if (useNodeViteRuntime) {
+    return { command: nodeExecutable, args: [viteBin, '--config', hostViteConfig] };
+  }
+  return { command: 'bun', args: ['run', 'dev'] };
+}
+
+function startDeferredPlayRuntime(): void {
+  const playPort = resolvePlayEnginePort();
+  const playCwd = resolve(ROOT, 'packages/play-runtime');
+  const playArgs = useNodeViteRuntime
+    ? [viteBin, '--config', playViteConfig, '--port', String(playPort), '--strictPort']
+    : ['x', 'vite', '--config', playViteConfig, '--port', String(playPort), '--strictPort'];
+  const playCommand = useNodeViteRuntime ? nodeExecutable : 'bun';
+  console.log(`[dev-standalone] starting deferred play-runtime :${playPort} ...`);
+  startManagedService({
+    name: 'play-runtime-deferred',
+    command: playCommand,
+    args: playArgs,
+    options: {
+      cwd: playCwd,
+      env: {
+        ...runtimeBaseEnv,
+        FORGEAX_VITE_CACHE_ROOT: resolve(VITE_CACHE_ROOT, 'play-runtime-deferred'),
+        FORGEAX_GAMES_URL_PREFIX: process.env.FORGEAX_GAMES_URL_PREFIX ?? 'smoke-games',
+      },
+      teeLogPath: MANUAL_LOG_FILE,
+    },
+  });
+}
+
 // The standalone stack intentionally runs two Vite producers: the chrome host
 // owns the in-process editor runtime, while edit-runtime remains available as
 // the replaceable iframe carrier. They must not publish into the same project
@@ -80,7 +141,7 @@ const RESTART_DELAY_MS = 1_000;
 const lifecycleEventLogPath = process.env.FORGEAX_DEV_STACK_EVENT_LOG;
 let shuttingDown = false;
 let shutdownEventWritten = false;
-let resolveFatalExit: (() => void) | null = null;
+const fatalExitGate: { resolve: (() => void) | null } = { resolve: null };
 
 type ServiceSpec = {
   name: string;
@@ -89,9 +150,13 @@ type ServiceSpec = {
   options: SpawnServiceOptions;
 };
 
-const fatalExit = new Promise<void>((resolvePromise) => {
-  resolveFatalExit = resolvePromise;
+const fatalExit = new Promise<void>((resolve) => {
+  fatalExitGate.resolve = () => { resolve(); };
 });
+
+function signalFatalExit(): void {
+  fatalExitGate.resolve?.();
+}
 
 function writeLifecycleEvent(eventPayload: Record<string, unknown>): void {
   if (!lifecycleEventLogPath) return;
@@ -140,7 +205,7 @@ function startManagedService(spec: ServiceSpec): void {
       message: error instanceof Error ? error.message : String(error),
     });
     stopSupervision('spawn-error');
-    resolveFatalExit?.();
+    signalFatalExit();
     return;
   }
 
@@ -169,7 +234,7 @@ function startManagedService(spec: ServiceSpec): void {
         signal,
       });
       stopSupervision('restart-exhausted', signal);
-      resolveFatalExit?.();
+      signalFatalExit();
       return;
     }
 
@@ -219,11 +284,26 @@ const bridgeEnv: NodeJS.ProcessEnv = {
   // and live page must derive it from the same source of truth.
   VITE_FORGEAX_BRIDGE_PORT: bridgePort,
 };
+const useExternalGameBackend = process.env.FORGEAX_DEV_STACK_EXTERNAL_GAME_BACKEND === '1';
+const shouldStartGameBackend = gameDirAbs !== undefined && !useExternalGameBackend;
+
 const runtimeBaseEnv: NodeJS.ProcessEnv = {
   ...process.env,
   ...portEnv,
   ...bridgeEnv,
   FORGEAX_VITE_CACHE_ROOT: VITE_CACHE_ROOT,
+  ...(gameDirAbs === undefined
+    ? {}
+    : {
+        FORGEAX_GAME_DIR: gameDirAbs,
+        FORGEAX_GAME_ID: process.env.FORGEAX_GAME_ID ?? basename(gameDirAbs),
+        FORGEAX_RUNTIME_SCOPE_ID: process.env.FORGEAX_RUNTIME_SCOPE_ID
+          ?? `standalone-${basename(gameDirAbs)}`,
+        FORGEAX_RUNTIME_GENERATION: process.env.FORGEAX_RUNTIME_GENERATION ?? '1',
+        FORGEAX_GAME_API_PORT: String(WORKTREE_PORTS.gameApi),
+        FORGEAX_SOURCE_CATALOG_URL: `http://127.0.0.1:${WORKTREE_PORTS.standalone}/__pack/scopes/${encodeURIComponent(process.env.FORGEAX_RUNTIME_SCOPE_ID ?? `standalone-${basename(gameDirAbs)}`)}/${encodeURIComponent(process.env.FORGEAX_RUNTIME_GENERATION ?? '1')}/catalog.json`,
+        FORGEAX_GAMES_URL_PREFIX: process.env.FORGEAX_GAMES_URL_PREFIX ?? 'host-games',
+      }),
   ...(HOST_DDC_PROJECT_ROOT === undefined
     ? {}
     : {
@@ -231,6 +311,94 @@ const runtimeBaseEnv: NodeJS.ProcessEnv = {
         FORGEAX_DDC_BUILD_CACHE_ROOT: resolve(HOST_DDC_PROJECT_ROOT, 'build'),
       }),
 };
+
+if (shouldStartGameBackend) {
+  console.log(`[dev-standalone] starting game-backend :${WORKTREE_PORTS.gameApi} ...`);
+  startManagedService({
+    name: 'game-backend',
+    command: 'bun',
+    args: ['apps/standalone/game-backend.ts'],
+    options: {
+      cwd: ROOT,
+      env: runtimeBaseEnv,
+      teeLogPath: MANUAL_LOG_FILE,
+    },
+  });
+  try {
+    await waitForHttpReady(`http://127.0.0.1:${WORKTREE_PORTS.gameApi}/api/health`, {
+      timeoutMs: 60_000,
+      log: (message) => console.log(`[dev-standalone] ${message}`),
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[dev-standalone] ${message}`);
+    stopSupervision('game-backend-timeout');
+    signalFatalExit();
+    process.exitCode = 1;
+    await fatalExit;
+    process.exit(1);
+  }
+}
+
+console.log(`[dev-standalone] starting standalone host :${WORKTREE_PORTS.standalone} ...`);
+// Forward env (not just the default process.env fallback) so an exported
+// FORGEAX_ENGINE_RHI_DEBUG=1 reaches the host too — the host is where the engine
+// boots + POSTs captured tapes, so it needs the rhi-debug plugin's endpoints.
+// bridgeEnv too: the host vite inlines VITE_FORGEAX_BRIDGE into the in-process
+// ViewportComponent (see the bridgeEnv comment above).
+const hostLaunch = hostViteLaunch();
+startManagedService({
+  name: 'standalone-host',
+  command: hostLaunch.command,
+  args: hostLaunch.args,
+  options: {
+    cwd: ROOT,
+    env: runtimeBaseEnv,
+    teeLogPath: MANUAL_LOG_FILE,
+  },
+});
+
+const requiredCatalogSources = parseRequiredCatalogSources();
+const requirePublishedCatalog = process.env.FORGEAX_CATALOG_REQUIRE_PUBLISHED === '1';
+
+const hostCatalogScopeId = resolveHostCatalogScope({
+  gameDir: gameDirAbs,
+  scopeId: process.env.FORGEAX_RUNTIME_SCOPE_ID,
+});
+
+console.log(
+  `[dev-standalone][boot-trace] game=${gameDirAbs ?? '(none)'} scope=${hostCatalogScopeId ?? '(http-only)'}`
+  + ` catalogRequired=${requiredCatalogSources.length > 0 ? requiredCatalogSources.join('|') : 'none'}`
+  + ` publish=${requirePublishedCatalog} vite=${useNodeViteRuntime ? 'node' : 'bun'}`
+  + ` editWait=/editor/ playInStack=${process.env.FORGEAX_SMOKE_DEFERRED_PLAY === '1' ? 'deferred' : 'external'}`,
+);
+
+try {
+  if (hostCatalogScopeId !== undefined) {
+    await waitForHostCatalogReady({
+      hostPort: WORKTREE_PORTS.standalone,
+      gameDir: gameDirAbs,
+      scopeId: hostCatalogScopeId,
+      requiredSourcePaths: requiredCatalogSources,
+      requirePublishedPackageUrls: requirePublishedCatalog,
+      timeoutMs: requiredCatalogSources.length > 0 ? 180_000 : 90_000,
+      log: (message) => console.log(`[dev-standalone] ${message}`),
+    });
+  } else {
+    await waitForHttpReady(`http://127.0.0.1:${WORKTREE_PORTS.standalone}/`, {
+      timeoutMs: 90_000,
+      log: (message) => console.log(`[dev-standalone] ${message}`),
+    });
+  }
+} catch (error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`[dev-standalone] ${message}`);
+  stopSupervision('catalog-timeout');
+  signalFatalExit();
+  process.exitCode = 1;
+  await fatalExit;
+  process.exit(1);
+}
 
 console.log(`[dev-standalone] starting edit-runtime :${WORKTREE_PORTS.editRuntime} (HMR→${WORKTREE_PORTS.standalone}) ...`);
 console.log(`[dev-standalone] log-file ${MANUAL_LOG_FILE}`);
@@ -250,6 +418,7 @@ startManagedService({
     cwd: ROOT,
     env: {
       ...runtimeBaseEnv,
+      FORGEAX_VITE_CACHE_ROOT: resolve(VITE_CACHE_ROOT, 'edit-runtime'),
       ...(EDIT_RUNTIME_DDC_PROJECT_ROOT === undefined
         ? {}
         : {
@@ -260,6 +429,53 @@ startManagedService({
     teeLogPath: MANUAL_LOG_FILE,
   },
 });
+
+try {
+  await waitForHttpReady(`http://127.0.0.1:${WORKTREE_PORTS.editRuntime}/editor/`, {
+    timeoutMs: 120_000,
+    log: (message) => console.log(`[dev-standalone] ${message}`),
+  });
+  console.log(`[dev-standalone][boot-trace] edit-runtime ready (Playwright webServer url polls :${WORKTREE_PORTS.editRuntime}/editor/)`);
+} catch (error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`[dev-standalone] ${message}`);
+  stopSupervision('edit-runtime-timeout');
+  signalFatalExit();
+  process.exitCode = 1;
+  await fatalExit;
+  process.exit(1);
+}
+
+if (requiredCatalogSources.length > 0 || requirePublishedCatalog) {
+  try {
+    const editCatalogScopeId = gameDirAbs === undefined
+      ? process.env.FORGEAX_RUNTIME_SCOPE_ID
+      : (process.env.FORGEAX_RUNTIME_SCOPE_ID ?? `edit-${basename(gameDirAbs)}`);
+    await waitForHostCatalogReady({
+      hostPort: WORKTREE_PORTS.editRuntime,
+      basePath: '/editor',
+      ...(editCatalogScopeId !== undefined && editCatalogScopeId.length > 0
+        ? { scopeId: editCatalogScopeId, gameDir: gameDirAbs }
+        : {}),
+      requiredSourcePaths: requiredCatalogSources,
+      requirePublishedPackageUrls: requirePublishedCatalog,
+      timeoutMs: requiredCatalogSources.length > 0 ? 180_000 : 90_000,
+      log: (message) => console.log(`[dev-standalone] ${message}`),
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[dev-standalone] ${message}`);
+    stopSupervision('edit-catalog-timeout');
+    signalFatalExit();
+    process.exitCode = 1;
+    await fatalExit;
+    process.exit(1);
+  }
+}
+
+if (process.env.FORGEAX_SMOKE_DEFERRED_PLAY === '1') {
+  startDeferredPlayRuntime();
+}
 
 // DEV-only Gateway bridge relay (:15296 by default). Lets gateway.mjs drive this
 // already-open window. Loopback-only; the page bridge (ViewportComponent, DEV
@@ -281,23 +497,6 @@ if (bridgeEnabled) {
     },
   });
 }
-
-console.log(`[dev-standalone] starting standalone host :${WORKTREE_PORTS.standalone} ...`);
-// Forward env (not just the default process.env fallback) so an exported
-// FORGEAX_ENGINE_RHI_DEBUG=1 reaches the host too — the host is where the engine
-// boots + POSTs captured tapes, so it needs the rhi-debug plugin's endpoints.
-// bridgeEnv too: the host vite inlines VITE_FORGEAX_BRIDGE into the in-process
-// ViewportComponent (see the bridgeEnv comment above).
-startManagedService({
-  name: 'standalone-host',
-  command: 'bun',
-  args: ['run', 'dev'],
-  options: {
-    cwd: ROOT,
-    env: runtimeBaseEnv,
-    teeLogPath: MANUAL_LOG_FILE,
-  },
-});
 
 // Keep the stack alive while a child is restarted. Only exhausted restart
 // attempts terminate the stack and let Playwright report infrastructure failure.

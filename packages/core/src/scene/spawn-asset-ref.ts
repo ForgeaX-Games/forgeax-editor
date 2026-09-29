@@ -5,6 +5,7 @@
 import { componentDefinition } from '@forgeax/engine-ecs';
 import { walkMaterialPassesOverSharedRefs } from '@forgeax/engine-assets-runtime';
 import { gateway, broadcastAssetsChanged, resolveAssetRefToHandle, notifyDocChanged } from '../store/store';
+import { dispatchActiveEditorOperation } from '../store/active-operation';
 import { instantiateSceneRefUnderWorldDetailed } from '../store/scene-persistence';
 import type { SceneInstantiationCleanup, SceneInstantiationError } from '../store/persistence/disk-io';
 import { stemName, type DragAssetRef } from '../assets/drag-asset-spawn';
@@ -168,7 +169,9 @@ async function spawnReferenceEntity(ref: DragAssetRef): Promise<boolean> {
   }
   if (plan.plan.operation !== 'spawnEntity') return false;
 
-  const dispatchResult = gateway.dispatch(plan.plan.args);
+  // Route through the active Runtime authority so spawnEntity + EditorPendingMeshAsset
+  // resolve on the viewport EditGateway (Studio iframe), not a shell shadow gateway.
+  const dispatchResult = await dispatchActiveEditorOperation(plan.plan.args, 'human');
   console.info(`[placement-diag] reference.dispatch ${JSON.stringify(dispatchResult.ok
     ? {
         ok: true,

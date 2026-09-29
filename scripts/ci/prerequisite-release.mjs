@@ -15,6 +15,7 @@ import process from 'node:process';
 const CONTRACT_PATH = resolve('scripts/ci/editor-ci-contract.json');
 const RELEASE_SCHEMA_VERSION = 'forgeax-prerequisite-release/v1';
 const RELEASE_MANIFEST_NAME = 'manifest.json';
+const ENGINE_BUILD_MANIFEST_NAME = 'engine-prerequisite-build-manifest.json';
 const DEFAULT_PROFILE = 'PR';
 const PROFILE_ALIASES = Object.freeze({complete: 'PR'});
 
@@ -185,7 +186,128 @@ function listFiles(root) {
   return files;
 }
 
-function defaultMaterialize({payloadClass, environment}) {
+function engineManifestDigest(value) {
+  return createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
+}
+
+function enginePayloadInventory(outputRoot, payloadClasses) {
+  const inventory = [];
+  for (const payloadClass of payloadClasses) {
+    const payloadRoot = resolve(outputRoot, 'payload', payloadClass);
+    if (!existsSync(payloadRoot)) {
+      throw new Error(`Engine source-build payload is missing: ${payloadRoot}`);
+    }
+    for (const [relativePath, content] of Object.entries(listFiles(payloadRoot))) {
+      inventory.push({
+        payloadClass,
+        path: `payload/${payloadClass}/${relativePath}`,
+        bytes: content.byteLength,
+        sha256: bytesDigest(content).slice('sha256:'.length),
+      });
+    }
+  }
+  return inventory;
+}
+
+function validateEnginePayloadClass(manifest, payloadClass, files) {
+  const actual = Object.entries(files).map(([relativePath, content]) => ({
+    payloadClass,
+    path: `payload/${payloadClass}/${relativePath}`,
+    bytes: content.byteLength,
+    sha256: bytesDigest(content).slice('sha256:'.length),
+  }));
+  const expected = manifest.inventory.filter((entry) => entry.payloadClass === payloadClass);
+  const expectedByPath = new Map(expected.map((entry) => [entry.path, entry]));
+  const actualByPath = new Map(actual.map((entry) => [entry.path, entry]));
+  if (expectedByPath.size !== expected.length || actualByPath.size !== actual.length) {
+    throw new Error(`Engine source-build manifest contains duplicate paths for ${payloadClass}`);
+  }
+  if (expectedByPath.size !== actualByPath.size) {
+    throw new Error(`Engine source-build payload file count mismatch for ${payloadClass}`);
+  }
+  for (const [path, declared] of expectedByPath) {
+    const observed = actualByPath.get(path);
+    if (!observed || JSON.stringify(canonicalize(observed)) !== JSON.stringify(canonicalize(declared))) {
+      throw new Error(`Engine source-build payload mismatch at ${path}`);
+    }
+  }
+}
+
+let stagedEngineManifestCache = null;
+let stagedEngineManifestRoot = null;
+
+// The Engine source-build action stages and verifies one run-scoped payload
+// tree. Consume that exact tree when the producer provides it instead of
+// walking the Engine checkout a second time. The manifest is checked against
+// every staged byte before any Editor release entry is produced, so the
+// downstream artifact carries the Engine SHA, recipe, and output digest that
+// actually produced its payloads.
+function stagedEngineBuildManifest(outputRoot) {
+  if (!outputRoot) return null;
+  const resolvedRoot = resolve(outputRoot);
+  if (stagedEngineManifestRoot === resolvedRoot) return stagedEngineManifestCache;
+  const manifestPath = resolve(resolvedRoot, ENGINE_BUILD_MANIFEST_NAME);
+  if (!existsSync(manifestPath)) {
+    throw new Error(`Engine source-build manifest is missing: ${manifestPath}`);
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`Engine source-build manifest is unreadable: ${error.message ?? String(error)}`);
+  }
+  if (
+    !isObject(manifest) ||
+    manifest.sourceOnly !== true ||
+    manifest.productionMode !== 'source-build' ||
+    typeof manifest.engineSha !== 'string' ||
+    !Array.isArray(manifest.payloadClasses) ||
+    !Array.isArray(manifest.inventory) ||
+    typeof manifest.outputDigest !== 'string'
+  ) {
+    throw new Error('Engine source-build manifest does not declare a complete source-build identity');
+  }
+  const expectedEngineSha = process.env.FORGEAX_ENGINE_PREREQUISITE_SHA;
+  if (expectedEngineSha && manifest.engineSha !== expectedEngineSha) {
+    throw new Error(
+      `Engine source-build SHA mismatch: expected ${expectedEngineSha}, observed ${manifest.engineSha}`,
+    );
+  }
+  const actualInventory = enginePayloadInventory(resolvedRoot, manifest.payloadClasses);
+  const declaredByPath = new Map(manifest.inventory.map((entry) => [entry.path, entry]));
+  const actualByPath = new Map(actualInventory.map((entry) => [entry.path, entry]));
+  if (declaredByPath.size !== manifest.inventory.length || actualByPath.size !== actualInventory.length) {
+    throw new Error('Engine source-build manifest contains duplicate inventory paths');
+  }
+  if (declaredByPath.size !== actualByPath.size) {
+    throw new Error('Engine source-build manifest inventory does not match staged payload files');
+  }
+  for (const [path, declared] of declaredByPath) {
+    const actual = actualByPath.get(path);
+    if (!actual || JSON.stringify(canonicalize(actual)) !== JSON.stringify(canonicalize(declared))) {
+      throw new Error(`Engine source-build inventory mismatch at ${path}`);
+    }
+  }
+  if (engineManifestDigest(manifest.inventory) !== manifest.outputDigest) {
+    throw new Error('Engine source-build output digest does not match its inventory');
+  }
+  stagedEngineManifestRoot = resolvedRoot;
+  stagedEngineManifestCache = manifest;
+  return manifest;
+}
+
+function stagedEnginePayload(payloadClass, outputRoot) {
+  const manifest = stagedEngineBuildManifest(outputRoot);
+  if (!manifest) return null;
+  if (!manifest.payloadClasses.includes(payloadClass)) {
+    throw new Error(`Engine source-build manifest does not provide payload class ${payloadClass}`);
+  }
+  const files = listFiles(resolve(outputRoot, 'payload', payloadClass));
+  validateEnginePayloadClass(manifest, payloadClass, files);
+  return files;
+}
+
+function defaultMaterialize({payloadClass, environment, enginePrerequisiteOutput}) {
   if (payloadClass === 'bun-install-facts') {
     return {
       'install.json': JSON.stringify({
@@ -195,6 +317,8 @@ function defaultMaterialize({payloadClass, environment}) {
       }),
     };
   }
+  const staged = stagedEnginePayload(payloadClass, enginePrerequisiteOutput);
+  if (staged) return staged;
   const sources = {
     'engine-dist': resolve('packages/engine/packages'),
     'wgpu-wasm': resolve('packages/engine/packages/wgpu-wasm/pkg'),
@@ -272,7 +396,14 @@ function writeRelease(outputDir, manifest, files) {
   writeFileSync(resolve(outputDir, RELEASE_MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-async function collectProductionPayloads(payloadClasses, {reuse, materialize, outputDir, environment, profile}) {
+async function collectProductionPayloads(payloadClasses, {
+  reuse,
+  materialize,
+  outputDir,
+  environment,
+  profile,
+  enginePrerequisiteOutput,
+}) {
   const files = {};
   const inventory = [];
   const materializedPayloadClasses = [];
@@ -284,7 +415,13 @@ async function collectProductionPayloads(payloadClasses, {reuse, materialize, ou
       reusedPayloadClasses.push(payloadClass);
       continue;
     }
-    const produced = asFileMap(await materialize({payloadClass, outputDir, environment, profile}));
+    const produced = asFileMap(await materialize({
+      payloadClass,
+      outputDir,
+      environment,
+      profile,
+      enginePrerequisiteOutput,
+    }));
     if (!produced) throw new Error(`materializer returned an invalid file map for ${payloadClass}`);
     materializedEntries(payloadClass, produced, inventory, files);
     materializedPayloadClasses.push(payloadClass);
@@ -310,9 +447,15 @@ export async function producePrerequisiteRelease(input = {}) {
   }
 
   const environment = normalizeEnvironment(input.environment);
-  const materialize = input.materializePayload ?? defaultMaterialize;
+  const enginePrerequisiteOutput = Object.hasOwn(input, 'enginePrerequisiteOutput')
+    ? input.enginePrerequisiteOutput
+    : input.useEnvironment
+      ? process.env.FORGEAX_ENGINE_PREREQUISITE_OUTPUT
+      : null;
 
   try {
+    const enginePrerequisite = stagedEngineBuildManifest(enginePrerequisiteOutput);
+    const materialize = input.materializePayload ?? defaultMaterialize;
     const recursivePins = input.recursivePins ?? deriveRecursivePins();
     const reuseInput = {...input, recursivePins};
     const reuse = reuseIsEligible(input.reuse, reuseInput, environment) ? input.reuse : null;
@@ -322,6 +465,7 @@ export async function producePrerequisiteRelease(input = {}) {
       outputDir,
       environment,
       profile: profile.profileName,
+      enginePrerequisiteOutput,
     });
     const {files, inventory, materializedPayloadClasses, reusedPayloadClasses} = production;
     const producerRunId = String(input.producerRunId);
@@ -337,6 +481,7 @@ export async function producePrerequisiteRelease(input = {}) {
       producerSuccess: true,
       producerEnvironmentFingerprint: input.producerEnvironmentFingerprint ?? `${environment.os}-${environment.architecture}-${environment.capacityPool}`,
       compatibility: normalizeCompatibility(environment, input.compatibility),
+      ...(enginePrerequisite ? {enginePrerequisite: structuredClone(enginePrerequisite)} : {}),
       inventory,
       production: {
         event: 'prerequisite-release-produced',
@@ -879,6 +1024,7 @@ async function main(argv = process.argv.slice(2)) {
     producerRunId: argumentValue(argv, '--run-id'),
     producerAttempt: Number(argumentValue(argv, '--attempt')),
     producerEnvironmentFingerprint: process.env.CI_ENVIRONMENT_FINGERPRINT,
+    useEnvironment: true,
     environment: {
       bunVersion: process.env.CI_BUN_VERSION,
       nodeVersion: process.env.CI_NODE_VERSION,

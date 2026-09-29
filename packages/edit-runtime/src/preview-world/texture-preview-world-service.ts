@@ -9,14 +9,16 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   createTexturePreviewPrimitive,
   previewSnapshot,
-  type TexturePreviewPrimitive,
   type TextureBinding,
+  type TextureColorSpace,
+  type TexturePreviewPrimitive,
 } from '@forgeax/engine-preview';
 import type { TextureAsset } from '@forgeax/engine-types';
 import {
   createEngineFacade,
   getViewportRuntimeClientSnapshot,
   queryViewportRuntimeProjection,
+  type EngineFacade,
   type SelectedAsset,
 } from '@forgeax/editor-core';
 import {
@@ -113,7 +115,7 @@ function textureBindingFromPayload(guid: string, payload: Record<string, unknown
     width,
     height,
     format,
-    colorSpace,
+    colorSpace: colorSpace as TextureColorSpace,
     alpha: Boolean(payload.alpha ?? (format.includes('rgba') || format.includes('bgra'))),
     mipLevels,
     channels: textureChannels(format),
@@ -128,6 +130,7 @@ export class TexturePreviewWorldService {
   private host: HTMLDivElement | null = null;
   private canvas: HTMLCanvasElement | null = null;
   private app: App | null = null;
+  private facade: EngineFacade | null = null;
   private assembly: TexturePreviewAssembly | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private listener: TexturePreviewStateListener | null = null;
@@ -196,6 +199,7 @@ export class TexturePreviewWorldService {
     this.resizeObserver = null;
     try { this.app?.stop(); } catch { /* already stopped */ }
     this.app = null;
+    this.facade = null;
     this.assembly = null;
     if (this.canvas?.parentElement === this.host) this.host?.removeChild(this.canvas);
     this.canvas = null;
@@ -326,8 +330,7 @@ export class TexturePreviewWorldService {
       return;
     }
 
-    const textureHandle = this.app.world.allocSharedRef('TextureAsset', texture);
-    // Engine realizes referenced texture PODs through its render-owned residency path.
+    const textureHandle = this.facade!.allocSharedRef('TextureAsset', texture);
 
     const binding = textureBindingFromPayload(asset.guid, asset.payload);
     let primitive: TexturePreviewPrimitive | undefined;
@@ -345,8 +348,8 @@ export class TexturePreviewWorldService {
     this.emit({
       status: 'ready',
       assetGuid: asset.guid,
-      width: texture.width,
-      height: texture.height,
+      width: texture.shape.extent.width,
+      height: texture.shape.extent.height,
       format: String(texture.format),
       previewOperationId: 'texture.preview',
       previewSource: 'engine',
@@ -412,11 +415,17 @@ export class TexturePreviewWorldService {
       }
 
       this.app = created.value;
-      if (runtimeBinding !== undefined) {
-        this.app.assets?.configureRuntimeBinding(runtimeBinding);
+      const previewAssets = this.app.assets;
+      if (previewAssets === undefined) {
+        this.emit({
+          status: 'failed',
+          error: 'Preview App did not expose its AssetRegistry.',
+        });
+        return;
       }
-      const facade = createEngineFacade(this.app.world as never, this.app.assets);
-      this.assembly = assembleTexturePreviewWorld(facade);
+      previewAssets.configureRuntimeBinding(runtimeBinding);
+      this.facade = createEngineFacade(this.app.world as never, previewAssets);
+      this.assembly = assembleTexturePreviewWorld(this.facade);
 
       const syncSize = () => {
         const rect = host.getBoundingClientRect();

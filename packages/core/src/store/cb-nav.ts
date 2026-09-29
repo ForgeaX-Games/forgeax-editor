@@ -32,6 +32,11 @@ const cbNavListeners = new Set<() => void>();
 // stable reference within a render cycle when history/index have not mutated.
 let _snapshot = { path: history[0]!.path, canGoBack: false, canGoForward: false };
 
+/** Canonical game-relative folder path for Content Browser navigation (`''` = root). */
+export function normalizeCBPath(raw: string): string {
+  return raw.trim().replace(/\\/g, '/').replace(/\/+/g, '/').replace(/^\/+|\/+$/g, '');
+}
+
 function emit(): void {
   _snapshot = {
     path: history[index]?.path ?? '',
@@ -53,7 +58,7 @@ function emit(): void {
 //   (requirements §C3), even when the history stack does not grow.
 
 function applySetCBPath(op: EditorOp): { ok: true } {
-  const path = (op as { path: string }).path;
+  const path = normalizeCBPath((op as { path: string }).path);
   // Dedup: same path as current — skip history push and emit; ledger still written.
   if (path === history[index]?.path) {
     return { ok: true };

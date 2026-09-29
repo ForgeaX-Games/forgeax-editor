@@ -1,6 +1,7 @@
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import { afterEach, describe, expect, it } from 'bun:test';
-import { createAppHost, HostProvider } from '@forgeax/interface/core/app-shell';
+import { HostProvider, type AppHost as ApplicationHost } from '@forgeax/app-shell/application';
+import { createTestApplicationHost } from '../../../../scripts/test-support/application-host';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { World } from '@forgeax/engine-ecs';
@@ -79,10 +80,10 @@ describe('Hierarchy contextual keybindings', () => {
     const originalWorld = doc.world;
     doc.world = world;
     try {
-      const { host } = createAppHost();
+      const { host } = createTestApplicationHost();
       const html = renderToStaticMarkup(
         createElement(HostProvider, {
-          value: host,
+          value: host as unknown as ApplicationHost,
           children: createElement(HierarchyPanel),
         }),
       );
@@ -95,7 +96,7 @@ describe('Hierarchy contextual keybindings', () => {
   });
 
   it('runs focused-scope rename/delete/select-all command bodies', async () => {
-    const { host } = createAppHost();
+    const { host } = createTestApplicationHost();
     const root = document.createElement('div');
     document.body.append(root);
     const calls: string[] = [];
@@ -108,7 +109,7 @@ describe('Hierarchy contextual keybindings', () => {
     };
     cleanups.push(
       host.keybindings.registerScope(root, 'editor.hierarchy'),
-      ...registerHierarchyScopedCommands(host, () => actions),
+      ...registerHierarchyScopedCommands(host as unknown as ApplicationHost, () => actions),
     );
 
     const dispatch = (init: KeyboardEventInit) => {

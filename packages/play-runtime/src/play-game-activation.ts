@@ -17,9 +17,11 @@ export type PlayGameActivation =
   | { readonly kind: 'none' };
 
 function isNativeCordisPlugin(entry: unknown): entry is Plugin {
-  return typeof entry === 'object'
-    && entry !== null
-    && Array.isArray((entry as { readonly inject?: unknown }).inject);
+  return (
+    typeof entry === 'object' &&
+    entry !== null &&
+    Array.isArray((entry as { readonly inject?: unknown }).inject)
+  );
 }
 
 function normalizeLegacyGameEntry(module: unknown): LegacyPlayGameEntry | null {
@@ -28,9 +30,9 @@ function normalizeLegacyGameEntry(module: unknown): LegacyPlayGameEntry | null {
   const candidate = record.default ?? record.bootstrap;
   if (typeof candidate === 'function') return candidate as BootstrapEntry;
   if (
-    typeof candidate === 'object'
-    && candidate !== null
-    && typeof (candidate as { apply?: unknown }).apply === 'function'
+    typeof candidate === 'object' &&
+    candidate !== null &&
+    typeof (candidate as { apply?: unknown }).apply === 'function'
   ) {
     return candidate as LegacyApplyEntry;
   }
@@ -83,5 +85,5 @@ export async function activatePlayGame(args: {
     await args.app.pluginContext.plugin(activation.entry);
     return;
   }
-  await activation.entry.apply(args.ctx);
+  await (activation.entry as LegacyApplyEntry).apply(args.ctx);
 }

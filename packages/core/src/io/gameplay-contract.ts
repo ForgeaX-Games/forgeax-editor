@@ -60,8 +60,7 @@ export const GameplayOperationNameSchema = z.enum([
   'describe',
   'input',
   'query',
-  'capture',
-]);
+  'capture']);
 export type GameplayOperationName = z.infer<typeof GameplayOperationNameSchema>;
 
 export type GameplayOperationManifestEntry = {
@@ -74,14 +73,19 @@ export const GAMEPLAY_OPERATION_MANIFEST: readonly GameplayOperationManifestEntr
   GameplayOperationNameSchema.options.map((operation) => Object.freeze({
     version: GAMEPLAY_CARRIER_CONTRACT_VERSION,
     operation,
-  })),
+  }),
+  ),
 );
 
 export const GameplayOperationRequestSchema = z.discriminatedUnion('operation', [
-  z.object({ version: z.literal(GAMEPLAY_CARRIER_CONTRACT_VERSION), operation: z.literal('describe') }).strict(),
-  z.object({ version: z.literal(GAMEPLAY_CARRIER_CONTRACT_VERSION), operation: z.literal('input'), action: GameplayInputSchema }).strict(),
-  z.object({ version: z.literal(GAMEPLAY_CARRIER_CONTRACT_VERSION), operation: z.literal('query'), query: z.string() }).strict(),
-  z.object({ version: z.literal(GAMEPLAY_CARRIER_CONTRACT_VERSION), operation: z.literal('capture') }).strict(),
+  z.object({ version: z.literal(GAMEPLAY_CARRIER_CONTRACT_VERSION), operation: z.literal('describe'),
+    }).strict(),
+  z.object({ version: z.literal(GAMEPLAY_CARRIER_CONTRACT_VERSION), operation: z.literal('input'), action: GameplayInputSchema,
+    }).strict(),
+  z.object({ version: z.literal(GAMEPLAY_CARRIER_CONTRACT_VERSION), operation: z.literal('query'), query: z.string(),
+    }).strict(),
+  z.object({ version: z.literal(GAMEPLAY_CARRIER_CONTRACT_VERSION), operation: z.literal('capture'),
+    }).strict(),
 ]);
 export type GameplayOperationRequest = z.infer<typeof GameplayOperationRequestSchema>;
 
@@ -89,16 +93,28 @@ export type GameplayOperationRequest = z.infer<typeof GameplayOperationRequestSc
 export const GAMEPLAY_CONTRACT_DESCRIPTION = Object.freeze({
   version: GAMEPLAY_CARRIER_CONTRACT_VERSION,
   operations: Object.freeze([
-    { operation: 'describe', purpose: 'Read this live contract.', request: { version: 1, operation: 'describe' } },
-    { operation: 'query', purpose: 'Read a game-published state projection.', request: { version: 1, operation: 'query', query: '<read-id>' } },
-    { operation: 'capture', purpose: 'Capture the authoritative live game canvas and viewport-local HUD. Requires runtime.playPhase=play and runtime.captureAvailable=true in the describe projections. It never starts Play. Application DOM screenshots cannot establish game rendering, including whether its canvas is blank.', evidenceType: 'gameplay-canvas', statusQuery: { kind: 'viewport.status' }, request: { version: 1, operation: 'capture' } },
-    { operation: 'input', purpose: 'Send a key transition.', request: { version: 1, operation: 'input', action: { type: 'key', key: 'ArrowLeft', phase: 'down' } } },
+    { operation: 'describe', purpose: 'Read this live contract.', request: { version: 1, operation: 'describe' },
+    },
+    { operation: 'query', purpose: 'Read a game-published state projection.', request: { version: 1, operation: 'query', query: '<read-id>' },
+    },
+    { operation: 'capture', purpose:
+        'Capture the authoritative live game canvas and viewport-local HUD. Requires runtime.playPhase=play and runtime.captureAvailable=true in the describe projections. It never starts Play. Application DOM screenshots cannot establish game rendering, including whether its canvas is blank.',
+      evidenceType: 'gameplay-canvas',
+      statusQuery: { kind: 'viewport.status' }, request: { version: 1, operation: 'capture' },
+    },
+    { operation: 'input', purpose: 'Send a key transition.', request: { version: 1, operation: 'input', action: { type: 'key', key: 'ArrowLeft', phase: 'down' },
+      },
+    },
     {
       operation: 'input',
       purpose: 'Send pointer transitions as a gesture with one pointerId.',
       requestSequence: [
-        { version: 1, operation: 'input', action: { type: 'pointer', x: 120, y: 240, phase: 'down', pointerId: 1, pointerType: 'touch', button: 'left' } },
-        { version: 1, operation: 'input', action: { type: 'pointer', x: 320, y: 240, phase: 'up', pointerId: 1, pointerType: 'touch', button: 'left' } },
+        { version: 1, operation: 'input', action: { type: 'pointer', x: 120, y: 240, phase: 'down', pointerId: 1, pointerType: 'touch', button: 'left',
+          },
+        },
+        { version: 1, operation: 'input', action: { type: 'pointer', x: 320, y: 240, phase: 'up', pointerId: 1, pointerType: 'touch', button: 'left',
+          },
+        },
       ],
     },
   ]),
@@ -155,7 +171,8 @@ export type GameplayIdentityMatch =
   };
 
 /** Compare every carrier identity field and report the first precise mismatch. */
-export function sameGameplayIdentity(expected: GameplayIdentity, actual: GameplayIdentity): GameplayIdentityMatch {
+export function sameGameplayIdentity(expected: GameplayIdentity, actual: GameplayIdentity,
+): GameplayIdentityMatch {
   const scalarFields: Array<['runtimeId' | 'pageIdentity' | 'canvasIdentity' | 'rendererGeneration', string | number]> = [
     ['runtimeId', expected.runtimeId],
     ['pageIdentity', expected.pageIdentity],
@@ -167,10 +184,12 @@ export function sameGameplayIdentity(expected: GameplayIdentity, actual: Gamepla
     if (actualValue !== expectedValue) return { matches: false, dimension: field, expected: expectedValue, actual: actualValue };
   }
   if (expected.scope.projectId !== actual.scope.projectId) {
-    return { matches: false, dimension: 'scope.projectId', expected: expected.scope.projectId, actual: actual.scope.projectId };
+    return { matches: false, dimension: 'scope.projectId', expected: expected.scope.projectId, actual: actual.scope.projectId,
+    };
   }
   if (expected.scope.gameId !== actual.scope.gameId) {
-    return { matches: false, dimension: 'scope.gameId', expected: expected.scope.gameId, actual: actual.scope.gameId };
+    return { matches: false, dimension: 'scope.gameId', expected: expected.scope.gameId, actual: actual.scope.gameId,
+    };
   }
   return { matches: true };
 }

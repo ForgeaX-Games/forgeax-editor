@@ -133,7 +133,13 @@ function normalizeFieldValue(value: unknown, shape: InspectorFieldShape, schema:
     }
     return { snapshot: Object.freeze(snapshot), bytes };
   }
-  const input = shape.kind === 'quaternion' && ArrayBuffer.isView(value)
+  const arrayLikeShape =
+    shape.kind === 'quaternion'
+    || shape.kind === 'array'
+    || shape.kind === 'vector'
+    || shape.kind === 'tuple'
+    || shape.kind === 'color';
+  const input = arrayLikeShape && ArrayBuffer.isView(value)
     ? Array.from(value as unknown as ArrayLike<number>)
     : value;
   return normalizeSelectorValue(input, schema);

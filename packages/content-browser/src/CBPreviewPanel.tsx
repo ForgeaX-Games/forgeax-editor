@@ -11,11 +11,13 @@ import { useTranslation } from '@forgeax/editor-core/i18n';
 import { ResizeHandle } from '@forgeax/editor-core';
 import { AssetThumbnail } from '@forgeax/editor-ui';
 import { FilePreview } from '@forgeax/editor-file-preview';
-import { colorForAssetKind, ContentBrowserIcon, FileFamilyIcon, iconNameForAssetKind } from './content-browser-icons';
+import { colorForAssetKind, colorForFolder, ContentBrowserIcon, FileFamilyIcon, iconNameForAssetKind,
+} from './content-browser-icons';
 import { CBUiAssetPreview } from './CBUiAssetPreview';
 import { dirOfPath, type PreviewFileInfo } from './content-browser-format';
 import { realPayload } from './hooks';
-import { fileSupportsDualPreview, type CBFilePreviewMode } from './preview-file-source';
+import { fileSupportsDualPreview, resolveDualPreviewFile, type CBFilePreviewMode,
+} from './preview-file-source';
 import type { CBAsset, CBFile, CBFolder, CBViewItem } from './types';
 
 export interface CBPreviewPanelProps {
@@ -45,12 +47,20 @@ function assetRowName(assets: readonly CBAsset[], asset: CBAsset): string {
 function FileAssetList({ file }: { file: CBFile }): ReactNode {
   return (
     <div className="cb-preview-asset-list">
-      {file.assets.map(asset => (
+      {file.assets.map((asset) => (
         <div className="cb-preview-asset-row" key={asset.guid}>
-          <AssetThumbnail kind={asset.kind} payload={realPayload(asset.guid, asset.payload)} thumbnailUrl={asset.thumbnailUrl} packPath={asset.packPath} size={30} />
+          <AssetThumbnail
+            kind={asset.kind}
+            payload={realPayload(asset.guid, asset.payload)}
+            thumbnailUrl={asset.thumbnailUrl}
+            packPath={asset.packPath}
+            size={30}
+          />
           <div>
             <div>{assetRowName(file.assets, asset)}</div>
-            <div className="kind" style={{ color: colorForAssetKind(asset.kind) }}>{asset.kind}</div>
+            <div className="kind" style={{ color: colorForAssetKind(asset.kind) }}>
+              {asset.kind}
+            </div>
           </div>
           <span className="guid">{asset.guid.slice(0, 10)}...</span>
         </div>
@@ -59,7 +69,13 @@ function FileAssetList({ file }: { file: CBFile }): ReactNode {
   );
 }
 
-function FileSourcePreview({ file, previewInfo }: { file: CBFile; previewInfo: PreviewFileInfo | null }): ReactNode {
+function FileSourcePreview({
+  file,
+  previewInfo,
+}: {
+  file: CBFile;
+  previewInfo: PreviewFileInfo | null;
+}): ReactNode {
   const rawUrl = `/api/files/raw?path=${encodeURIComponent(file.diskPath)}`;
   const dotIndex = file.name.lastIndexOf('.');
   const ext = dotIndex >= 0 ? file.name.slice(dotIndex + 1).toLowerCase() : '';
@@ -92,43 +108,60 @@ export function CBPreviewPanel({
   const [previewInfo, setPreviewInfo] = useState<PreviewFileInfo | null>(null);
   const [filePreviewMode, setFilePreviewMode] = useState<CBFilePreviewMode>('assets');
   const previewKey = previewItemKey(previewItem);
+  const dualPreviewFile = previewItem ? resolveDualPreviewFile(previewItem, diskFiles) : undefined;
 
   useEffect(() => {
     setFilePreviewMode('assets');
   }, [previewKey]);
 
   useEffect(() => {
-    if (!previewItem || previewItem.type !== 'file') {
+    if (!dualPreviewFile) {
       setPreviewInfo(null);
       return;
     }
-    const needsSource = previewItem.assets.length === 0
-      || (fileSupportsDualPreview(previewItem) && filePreviewMode === 'source');
+    const needsSource =
+      dualPreviewFile.assets.length === 0 ||
+      (fileSupportsDualPreview(dualPreviewFile) && filePreviewMode === 'source');
     if (!needsSource) {
       setPreviewInfo(null);
       return;
     }
     let cancelled = false;
-    void fetch(`/api/files?path=${encodeURIComponent(previewItem.diskPath)}`, { cache: 'no-store' })
-      .then(r => r.ok ? r.json() : null)
+    void fetch(`/api/files?path=${encodeURIComponent(dualPreviewFile.diskPath)}`, {
+      cache: 'no-store',
+    })
+      .then((r) => (r.ok ? r.json() : null))
       .then((info: PreviewFileInfo | null) => {
         if (!cancelled) setPreviewInfo(info);
       })
       .catch(() => {
         if (!cancelled) setPreviewInfo(null);
       });
-    return () => { cancelled = true; };
-  }, [previewItem, filePreviewMode]);
+    return () => {
+      cancelled = true;
+    };
+  }, [dualPreviewFile, filePreviewMode]);
 
   // Empty placeholder — keeps the panel (and its resize handle) mounted so the
   // layout is identical whether or not something is selected.
   if (!previewItem) {
     return (
       <>
-        <ResizeHandle orientation="col" onDrag={onDrag} onDragEnd={onDragEnd} title={t('editor.contentBrowser.actions.resizePreview')} />
-        <aside className="cb-preview-panel cb-preview-empty" data-facts="product" data-projection-source="editor-product">
+        <ResizeHandle
+          orientation="col"
+          onDrag={onDrag}
+          onDragEnd={onDragEnd}
+          title={t('editor.contentBrowser.actions.resizePreview')}
+        />
+        <aside
+          className="cb-preview-panel cb-preview-empty"
+          data-facts="product"
+          data-projection-source="editor-product"
+        >
           <div className="cb-preview-body">
-            <div className="cb-preview-note">{t('editor.contentBrowser.preview.nothingSelected')}</div>
+            <div className="cb-preview-note">
+              {t('editor.contentBrowser.preview.nothingSelected')}
+            </div>
           </div>
         </aside>
       </>
@@ -136,72 +169,122 @@ export function CBPreviewPanel({
   }
 
   const name = previewItem.name;
-  const meta = previewItem.type === 'folder'
-    ? t('editor.contentBrowser.preview.folderMeta', { path: previewItem.path || gameSlug })
-    : previewItem.type === 'file'
-      ? t('editor.contentBrowser.preview.fileMeta', { kind: previewItem.kindLabel, path: previewItem.path })
-      : t('editor.contentBrowser.preview.assetMeta', { kind: previewItem.kind, path: previewItem.packPath });
-  const icon = previewItem.type === 'folder'
-    ? <ContentBrowserIcon name="folder-open" />
-    : previewItem.type === 'file'
-      ? <FileFamilyIcon family={previewItem.family} />
-      : <ContentBrowserIcon name={iconNameForAssetKind(previewItem.kind)} />;
-  const showDualPreview = previewItem.type === 'file' && fileSupportsDualPreview(previewItem);
+  const meta =
+    previewItem.type === 'folder'
+      ? t('editor.contentBrowser.preview.folderMeta', {
+          path: previewItem.path || gameSlug,
+        })
+      : previewItem.type === 'file'
+        ? t('editor.contentBrowser.preview.fileMeta', {
+            kind: previewItem.kindLabel,
+            path: previewItem.path,
+          })
+        : t('editor.contentBrowser.preview.assetMeta', {
+            kind: previewItem.kind,
+            path: previewItem.packPath,
+          });
+  const isFolderPreview = previewItem.type === 'folder';
+  const icon = isFolderPreview ? (
+    <ContentBrowserIcon name="folder-open" />
+  ) : previewItem.type === 'file' ? (
+    <FileFamilyIcon family={previewItem.family} />
+  ) : (
+    <ContentBrowserIcon name={iconNameForAssetKind(previewItem.kind)} />
+  );
+  const showDualPreview = dualPreviewFile !== undefined && fileSupportsDualPreview(dualPreviewFile);
 
   let body: ReactNode;
   if (previewItem.type === 'folder') {
     const kids = [
-      ...foldersInPath.filter(folder => dirOfPath(folder.path) === previewItem.path),
-      ...diskFiles.filter(file => dirOfPath(file.path) === previewItem.path),
+      ...foldersInPath.filter((folder) => dirOfPath(folder.path) === previewItem.path),
+      ...diskFiles.filter((file) => dirOfPath(file.path) === previewItem.path),
     ].slice(0, 40);
-    body = kids.length === 0 ? (
-      <div className="cb-preview-note">{t('editor.contentBrowser.preview.emptyFolder')}</div>
-    ) : (
-      <div className="cb-preview-list">
-        {kids.map(child => (
-          <div className="cb-preview-list-item" key={child.path}>
-            <span className="cb-preview-list-ico">
-              {child.type === 'folder' ? <ContentBrowserIcon name="folder" /> : <FileFamilyIcon family={child.family} />}
-            </span>
-            <span>{child.name}</span>
-            <span className="sub">{child.type === 'folder' ? t('editor.contentBrowser.preview.items', { count: child.childCount }) : child.kindLabel}</span>
-          </div>
-        ))}
-      </div>
-    );
+    body =
+      kids.length === 0 ? (
+        <div className="cb-preview-note">{t('editor.contentBrowser.preview.emptyFolder')}</div>
+      ) : (
+        <div className="cb-preview-list">
+          {kids.map((child) => (
+            <div className="cb-preview-list-item" key={child.path}>
+              <span
+                className={`cb-preview-list-ico${child.type === 'folder' ? ' cb-folder-icon' : ''}`}
+                style={child.type === 'folder' ? { color: colorForFolder() } : undefined}
+              >
+                {child.type === 'folder' ? (
+                  <ContentBrowserIcon name="folder" />
+                ) : (
+                  <FileFamilyIcon family={child.family} />
+                )}
+              </span>
+              <span>{child.name}</span>
+              <span className="sub">
+                {child.type === 'folder'
+                  ? t('editor.contentBrowser.preview.items', {
+                      count: child.childCount,
+                    })
+                  : child.kindLabel}
+              </span>
+            </div>
+          ))}
+        </div>
+      );
   } else if (previewItem.type === 'file') {
     if (previewItem.assets.length > 0) {
-      body = filePreviewMode === 'source' && showDualPreview
-        ? <FileSourcePreview file={previewItem} previewInfo={previewInfo} />
-        : <FileAssetList file={previewItem} />;
+      body =
+        filePreviewMode === 'source' && showDualPreview ? (
+          <FileSourcePreview file={previewItem} previewInfo={previewInfo} />
+        ) : (
+          <FileAssetList file={previewItem} />
+        );
     } else {
       body = <FileSourcePreview file={previewItem} previewInfo={previewInfo} />;
     }
   } else {
-    body = previewItem.kind === 'ui' ? (
-      <CBUiAssetPreview asset={previewItem} gameSlug={gameSlug} />
-    ) : (
-      <>
-        <div className="cb-preview-media cb-preview-asset-hero">
-          <AssetThumbnail kind={previewItem.kind} payload={realPayload(previewItem.guid, previewItem.payload)} thumbnailUrl={previewItem.thumbnailUrl} packPath={previewItem.packPath} size={168} fit="contain" />
-        </div>
-        <div className="cb-preview-asset-list">
-          <div className="cb-preview-asset-row">
-            <AssetThumbnail kind={previewItem.kind} payload={realPayload(previewItem.guid, previewItem.payload)} thumbnailUrl={previewItem.thumbnailUrl} packPath={previewItem.packPath} size={30} />
-            <div>
-              <div>{previewItem.name}</div>
-              <div className="kind">{previewItem.packPath}</div>
-            </div>
-            <span className="guid">{previewItem.guid.slice(0, 10)}...</span>
+    body =
+      previewItem.kind === 'ui' ? (
+        <CBUiAssetPreview asset={previewItem} gameSlug={gameSlug} />
+      ) : showDualPreview && filePreviewMode === 'source' && dualPreviewFile ? (
+        <FileSourcePreview file={dualPreviewFile} previewInfo={previewInfo} />
+      ) : (
+        <>
+          <div className="cb-preview-media cb-preview-asset-hero">
+            <AssetThumbnail
+              kind={previewItem.kind}
+              payload={realPayload(previewItem.guid, previewItem.payload)}
+              thumbnailUrl={previewItem.thumbnailUrl}
+              packPath={previewItem.packPath}
+              size={168}
+              fit="contain"
+            />
           </div>
-        </div>
-      </>
-    );
+          <div className="cb-preview-asset-list">
+            <div className="cb-preview-asset-row">
+              <AssetThumbnail
+                kind={previewItem.kind}
+                payload={realPayload(previewItem.guid, previewItem.payload)}
+                thumbnailUrl={previewItem.thumbnailUrl}
+                packPath={previewItem.packPath}
+                size={30}
+              />
+              <div>
+                <div>{previewItem.name}</div>
+                <div className="kind">{previewItem.packPath}</div>
+              </div>
+              <span className="guid">{previewItem.guid.slice(0, 10)}...</span>
+            </div>
+          </div>
+        </>
+      );
   }
 
   return (
     <>
-      <ResizeHandle orientation="col" onDrag={onDrag} onDragEnd={onDragEnd} title={t('editor.contentBrowser.actions.resizePreview')} />
+      <ResizeHandle
+        orientation="col"
+        onDrag={onDrag}
+        onDragEnd={onDragEnd}
+        title={t('editor.contentBrowser.actions.resizePreview')}
+      />
       <aside
         className="cb-preview-panel"
         data-facts="product"
@@ -209,15 +292,26 @@ export function CBPreviewPanel({
         data-subject-id={previewItem.type === 'asset' ? previewItem.guid : previewItem.path}
       >
         <div className="cb-preview-head">
-          <span className="cb-preview-ico">{icon}</span>
+          <span
+            className={`cb-preview-ico${isFolderPreview ? ' cb-folder-icon' : ''}`}
+            style={isFolderPreview ? { color: colorForFolder() } : undefined}
+          >
+            {icon}
+          </span>
           <div className="cb-preview-title">
             <div className="name">{name}</div>
             <div className="meta">{meta}</div>
           </div>
-          <button className="cb-preview-close" type="button" onClick={onClose}>×</button>
+          <button className="cb-preview-close" type="button" onClick={onClose}>
+            ×
+          </button>
         </div>
         {showDualPreview && (
-          <div className="cb-preview-mode-bar" role="tablist" aria-label={t('editor.contentBrowser.preview.modeAssets')}>
+          <div
+            className="cb-preview-mode-bar"
+            role="tablist"
+            aria-label={t('editor.contentBrowser.preview.modeAssets')}
+          >
             <button
               type="button"
               role="tab"

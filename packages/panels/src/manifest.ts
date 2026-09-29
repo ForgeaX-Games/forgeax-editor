@@ -16,8 +16,7 @@ export type { EditorPanelId };
 
 // ── Panel component lookup — injected by panels, not carried by core ──
 import React from 'react';
-import type { AppExtension } from '@forgeax/interface/core/app-shell/types';
-import { createPanelsEditorExtension } from '@forgeax/interface/core/extensions/panels-editor';
+import type { AppExtension } from '@forgeax/app-shell/application';
 import { AssetsPanel } from './Assets';
 import { CapabilitiesPanel } from './Capabilities';
 import { HierarchyPanel } from './Hierarchy';
@@ -155,9 +154,27 @@ export function createEditorPanelsExtension(
     }]),
   );
 
-  return createPanelsEditorExtension({
-    editorPanelIds: [...EDITOR_PANELS],
-    panels,
-    surfaces: { SceneEditor: options.SceneEditor },
-  });
+  return {
+    id: 'panels.editor',
+    version: '1.0.0',
+    requires: ['commands'],
+    contributes: {
+      panels: {
+        editorPanelIds: [...EDITOR_PANELS],
+        panels,
+        surfaces: { SceneEditor: options.SceneEditor },
+      },
+    },
+    setup(context) {
+      return context.registerCommand({
+        id: 'app.editor.focus',
+        title: 'Focus an editor panel by short id (hierarchy / assets / mesh / ...)',
+        execute: (args) => {
+          const panel = (args as { panel?: string } | undefined)?.panel;
+          if (!panel) throw new Error('app.editor.focus: missing { panel }');
+          return context.host.commands.execute('app.panel.focus', { id: `ep:${panel}` });
+        },
+      });
+    },
+  };
 }

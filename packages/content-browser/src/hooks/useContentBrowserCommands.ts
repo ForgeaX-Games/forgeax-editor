@@ -7,7 +7,7 @@
 // renders.
 
 import { useEffect, type Dispatch, type SetStateAction } from 'react';
-import type { AppHost } from '@forgeax/interface/core/app-shell';
+import type { AppHost } from '@forgeax/app-shell/application';
 import type { TFunction } from '@forgeax/editor-core/i18n';
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from '../creatable-asset-kinds';
 import { labelForAssetKind } from '../content-browser-icons';

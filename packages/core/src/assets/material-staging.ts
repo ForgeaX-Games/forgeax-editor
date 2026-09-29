@@ -103,20 +103,33 @@ export function listDirtyMaterialStagingGuids(): readonly string[] {
   return dirty;
 }
 
+/** Merge catalog-resolved flat values under explicit pack `values` (pack wins). */
+export function mergeMaterialStagingSeedValues(
+  packValues: Record<string, unknown>,
+  catalogFlat?: Record<string, unknown>,
+): Record<string, unknown> {
+  return { ...(catalogFlat ?? {}), ...packValues };
+}
+
 /** Open or refresh a staging buffer from a pack/catalog payload. */
 export function openMaterialStaging(args: {
   readonly guid: string;
   readonly packPath: string;
   readonly name: string;
   readonly payload?: unknown;
+  /** Resolved MaterialAsset.values from catalog (fills sparse pack payloads on first open). */
+  readonly catalogFlatValues?: Record<string, unknown>;
 }): MaterialStagingEntry {
   const key = args.guid.toLowerCase();
   const raw = (args.payload && typeof args.payload === 'object')
     ? (args.payload as Record<string, unknown>)
     : {};
+  const packValues = (raw.values && typeof raw.values === 'object')
+    ? { ...(raw.values as Record<string, unknown>) }
+    : {};
 
   const payload: MaterialStagingPayload = {
-    values: (raw.values && typeof raw.values === 'object') ? { ...(raw.values as Record<string, unknown>) } : {},
+    values: mergeMaterialStagingSeedValues(packValues, args.catalogFlatValues),
     textureGuids: {},
     colorSpace: raw.colorSpace === 'linear' ? 'linear' : 'srgb',
     parent: typeof raw.parent === 'string' ? raw.parent : undefined,

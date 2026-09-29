@@ -1,4 +1,4 @@
-import type { ContentBrowserRevealTarget } from '@forgeax/interface/core/app-shell/types';
+import type { ContentBrowserRevealTarget } from '@forgeax/app-shell/application';
 import { catalogPathToRoot, type CatalogAssetRoot } from './catalog-root';
 import { dirOfPath, isResourceGroup } from './content-browser-format';
 import type { CBAsset, CBFile } from './types';
@@ -18,8 +18,8 @@ export interface ResolveContentBrowserRevealContext {
   readonly catalogAssetRoots: readonly CatalogAssetRoot[];
 }
 
-function cssEscape(value: string): string {
-  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
+/** Escape a value embedded in a double-quoted attribute selector (`[attr="…"]`). */
+function attrSelectorEscape(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
@@ -37,8 +37,8 @@ export function resolveContentBrowserReveal(
     return {
       dir: dirOfPath(target.path),
       selector: kind === 'dir'
-        ? `[data-folder-path="${cssEscape(target.path)}"]`
-        : `[data-file-path="${cssEscape(target.path)}"]`,
+        ? `[data-folder-path="${attrSelectorEscape(target.path)}"]`
+        : `[data-file-path="${attrSelectorEscape(target.path)}"]`,
       folderSelection: { path: target.path, kind },
     };
   }
@@ -72,7 +72,7 @@ export function resolveContentBrowserReveal(
 
   return {
     dir,
-    selector: `[data-asset-guid="${cssEscape(guid)}"]`,
+    selector: `[data-asset-guid="${attrSelectorEscape(guid)}"]`,
     ...(expandPackPath ? { expandPackPath } : {}),
   };
 }

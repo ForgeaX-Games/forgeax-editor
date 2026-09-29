@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import {
-  PLAY_RUNTIME_STATIC_WATCH_IGNORES,
+import { PLAY_RUNTIME_STATIC_WATCH_IGNORES,
   PLAY_VITE_HMR_PATH,
   playViteHmrSocketPath,
 } from '../watch-policy';
@@ -17,8 +16,13 @@ describe('play-runtime watch policy', () => {
   });
 
   it('ignores native agent plugin configs while preserving authored game source', () => {
-    const ignored = (path: string) => PLAY_RUNTIME_STATIC_WATCH_IGNORES.some(pattern => new Bun.Glob(pattern).match(path));
-    expect(ignored('/workspace/play/.forgeax/user/codex/session/forge/plugins/cache/template/tsconfig.json')).toBe(true);
+    const ignored = (path: string) =>
+      PLAY_RUNTIME_STATIC_WATCH_IGNORES.some((pattern) => new Bun.Glob(pattern).match(path));
+    expect(
+      ignored(
+        '/workspace/play/.forgeax/user/codex/session/forge/plugins/cache/template/tsconfig.json',
+      ),
+    ).toBe(true);
     expect(ignored('/workspace/.forgeax/games/bubble/src/main.ts')).toBe(false);
     expect(ignored('/workspace/.forgeax/games/bubble/assets/arena.pack.ts')).toBe(false);
   });

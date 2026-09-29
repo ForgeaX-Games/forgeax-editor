@@ -52,14 +52,15 @@ export function projectCatalogPathToRoots(
 export function catalogStoragePath(locator: CatalogStorageLocator): string | null {
   const sourcePath = locator.sourcePath?.replace(/^\//, '');
   if (sourcePath?.endsWith('.pack.json') || sourcePath?.endsWith('.pack.ts')) return sourcePath;
-  if (sourcePath) return `${sourcePath}.meta.json`;
+  if (sourcePath) return /\.meta\.json$/i.test(sourcePath) ? sourcePath : `${sourcePath}.meta.json`;
 
   const packageUrl = locator.packageUrl.replace(/^\//, '');
   if (
-    packageUrl.endsWith('.pack.json')
-    && !packageUrl.includes('__forgeax-ddc')
-    && !packageUrl.startsWith('preview/')
-  ) return packageUrl;
+    packageUrl.endsWith('.pack.json') &&
+    !packageUrl.includes('__forgeax-ddc') &&
+    !packageUrl.startsWith('preview/')
+  )
+    return packageUrl;
   return null;
 }
 
@@ -71,7 +72,7 @@ export function catalogStoragePath(locator: CatalogStorageLocator): string | nul
  * declared root (caller keeps the catalog-space fallback).
  */
 /**
- * Map a host storage sidecar path (`.forgeax/games/<slug>/assets/.../*.meta.json`)
+ * Map a host storage sidecar path for an asset metadata file
  * into the producer catalog coordinate space (`host-games/<slug>/assets/...`).
  */
 export function storagePathToCatalogSourceKey(

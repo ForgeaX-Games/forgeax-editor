@@ -1,21 +1,33 @@
 import { describe, expect, it } from 'bun:test';
 import { createRuntimeUiGraph } from '@forgeax/editor-core';
-import { createLiveWorldFrameEndPublisher, subscribeRendererFrameOpportunity } from '../run-lifecycle';
+import { createLiveWorldFrameEndPublisher,
+  subscribeRendererFrameOpportunity,
+} from '../run-lifecycle';
 
 describe('live world FrameEnd publisher lifecycle', () => {
   it('subscribes one renderer-owned publisher for the active World and publishes only at frame end', () => {
     const calls: string[] = [];
     const graph = {
-      bindWorld: (world: unknown) => { calls.push(`bind:${String(world)}`); return 4; },
-      unbindWorld: (world: unknown) => { calls.push(`unbind:${String(world)}`); return true; },
-      publish: () => { calls.push('publish'); return 'published' as const; },
+      bindWorld: (world: unknown) => { calls.push(`bind:${String(world)}`);
+        return 4;
+      },
+      unbindWorld: (world: unknown) => {
+        calls.push(`unbind:${String(world)}`);
+        return true;
+      },
+      publish: () => {
+        calls.push('publish');
+        return 'published' as const;
+      },
     };
     let frameEnd: (() => void) | undefined;
     let unsubscribeCalls = 0;
     const world = {};
     const publisher = createLiveWorldFrameEndPublisher(graph, (listener) => {
       frameEnd = listener;
-      return () => { unsubscribeCalls += 1; };
+      return () => {
+        unsubscribeCalls += 1;
+      };
     });
     publisher.bind(world);
     expect(calls).toEqual(['bind:[object Object]']);
@@ -27,11 +39,16 @@ describe('live world FrameEnd publisher lifecycle', () => {
   });
 
   it('keeps cleanup running when an adjacent teardown operation throws', () => {
-    const publisher = createLiveWorldFrameEndPublisher({
-      bindWorld: () => 1,
-      unbindWorld: () => { throw new Error('teardown'); },
-      publish: () => 'published' as const,
-    }, () => () => {});
+    const publisher = createLiveWorldFrameEndPublisher(
+      {
+        bindWorld: () => 1,
+        unbindWorld: () => {
+          throw new Error('teardown');
+        },
+        publish: () => 'published' as const,
+      },
+      () => () => {},
+    );
     expect(() => publisher.unbind({})).not.toThrow();
   });
 
@@ -54,7 +71,12 @@ describe('live world FrameEnd publisher lifecycle', () => {
       read: (world: unknown) => (world as { value: number }).value,
     });
     const assertBaseline = (): void => {
-      expect(graph.stats()).toMatchObject({ status: 'unbound', cacheEntries: 0, listeners: 0, snapshotBytes: 0 });
+      expect(graph.stats()).toMatchObject({
+        status: 'unbound',
+        cacheEntries: 0,
+        listeners: 0,
+        snapshotBytes: 0,
+      });
     };
 
     assertBaseline();
@@ -63,18 +85,27 @@ describe('live world FrameEnd publisher lifecycle', () => {
       const generationA = graph.stats().worldGeneration;
       const first = graph.mount(selector(`cycle-a-${round}`));
       let firstNotifications = 0;
-      first.subscribe(() => { firstNotifications += 1; });
+      first.subscribe(() => {
+        firstNotifications += 1;
+      });
       frameEndA?.();
       expect(first.getSnapshot()).toBe(1);
       expect(firstNotifications).toBe(1);
       first.unsubscribe();
-      expect(graph.stats()).toMatchObject({ status: 'bound', cacheEntries: 0, listeners: 0, snapshotBytes: 0 });
+      expect(graph.stats()).toMatchObject({
+        status: 'bound',
+        cacheEntries: 0,
+        listeners: 0,
+        snapshotBytes: 0,
+      });
 
       publisher.bind(worldB);
       const generationB = graph.stats().worldGeneration;
       const second = graph.mount(selector(`cycle-b-${round}`));
       let secondNotifications = 0;
-      second.subscribe(() => { secondNotifications += 1; });
+      second.subscribe(() => {
+        secondNotifications += 1;
+      });
       frameEndB?.();
       expect(second.getSnapshot()).toBe(2);
       expect(secondNotifications).toBe(1);
@@ -100,14 +131,19 @@ describe('live world FrameEnd publisher lifecycle', () => {
     const subscribe = subscribeRendererFrameOpportunity({
       subscribe: (listener) => {
         events.push(listener);
-        return () => { events.length = 0; };
+        return () => {
+          events.length = 0;
+        };
       },
     });
     const calls: string[] = [];
     const graph = {
       bindWorld: () => 1,
       unbindWorld: () => true,
-      publish: () => { calls.push('publish'); return 'published' as const; },
+      publish: () => {
+        calls.push('publish');
+        return 'published' as const;
+      },
     };
     const publisher = createLiveWorldFrameEndPublisher(graph, subscribe);
     const world = {};

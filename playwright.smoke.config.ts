@@ -36,7 +36,7 @@ function viteCommand(configPath: string, args = ''): string {
 
 const requestedGame = process.env.FORGEAX_SMOKE_GAME ?? (createGameMode ? 'game-default' : 'sample');
 const gameSources: Record<string, string> = {
-  'game-default': resolve(root, 'packages/engine/templates/game-default'),
+  'game-default': resolve(root, 'packages/engine/templates/game-3d'),
   'gameplay-gate': resolve(root, 'e2e/fixtures/gameplay-gate'),
   sample: resolve(root, 'games/sample'),
 };
@@ -55,7 +55,7 @@ if (sourceDir === undefined || !existsSync(resolve(sourceDir, 'forge.json'))) {
   );
 }
 
-const gameId = process.env.FORGEAX_SMOKE_GAME_ID ?? basename(sourceDir);
+const gameId = process.env.FORGEAX_SMOKE_GAME_ID ?? requestedGame;
 const inheritedCreateGameDir = createGameMode && process.env.FORGEAX_SMOKE_GAME_DIR
   ? resolve(process.env.FORGEAX_SMOKE_GAME_DIR)
   : undefined;
@@ -63,6 +63,13 @@ const tempRoot = inheritedCreateGameDir === undefined
   ? mkdtempSync(join(process.env.TMPDIR ?? '/tmp', `forgeax-editor-smoke-${gameId}-`))
   : dirname(inheritedCreateGameDir);
 const gameDir = inheritedCreateGameDir ?? join(tempRoot, gameId);
+// Host, edit-runtime, and play-runtime are independent Vite producers. They
+// must not commit concurrent builds into the same DDC project, otherwise the
+// strict CAS correctly rejects one producer as stale. Keep the roots under the
+// smoke temp directory so each run remains disposable and isolated.
+const smokeDdcRoot = join(tempRoot, 'ddc');
+const hostDdcRoot = join(smokeDdcRoot, 'host');
+const playDdcRoot = join(smokeDdcRoot, 'play-runtime');
 if (createGameMode && inheritedCreateGameDir === undefined) {
   // Create mode starts with an empty slot. The browser smoke then submits
   // File → New Game with template=game-default; apps/standalone/game-backend.ts
@@ -102,7 +109,7 @@ if (!createGameMode) {
 const fixtureNodeModules = join(gameDir, 'node_modules');
 if (!existsSync(fixtureNodeModules)) {
   symlinkSync(
-    resolve(root, 'packages/play-runtime/node_modules'),
+    resolve(root, 'node_modules'),
     fixtureNodeModules,
     // Keep this as a directory symlink on every platform. A Windows junction
     // to Play Runtime's node_modules makes its relative package links resolve
@@ -133,13 +140,26 @@ process.env.FORGEAX_SMOKE_HOST_PORT = hostPort;
 process.env.FORGEAX_SMOKE_EDIT_PORT = editPort;
 process.env.FORGEAX_SMOKE_API_PORT = apiPort;
 process.env.FORGEAX_SMOKE_ENGINE_PORT = enginePort;
+process.env.FORGEAX_E2E_ENGINE_PORT = process.env.FORGEAX_E2E_ENGINE_PORT ?? enginePort;
+process.env.FORGEAX_ENGINE_PORT = process.env.FORGEAX_ENGINE_PORT ?? enginePort;
 process.env.FORGEAX_RUNTIME_SCOPE_SECRET = runtimeScopeSecret;
 process.env.FORGEAX_RUNTIME_SCOPE_ID = runtimeScopeId;
 process.env.FORGEAX_RUNTIME_GENERATION = runtimeGeneration;
 
+const editCatalogUrl = `http://127.0.0.1:${editPort}/editor/__pack/scopes/${encodeURIComponent(runtimeScopeId)}/${runtimeGeneration}/catalog.json`;
+const smokeViteCacheRoot = join(tempRoot, 'vite-cache');
+mkdirSync(smokeViteCacheRoot, { recursive: true });
+
+/** games/sample ScriptablePack specs require the inputs pack before showcase rebuild. */
+const sampleScriptableCatalogSources = gameId === 'sample'
+  ? ['assets/procedural-inputs.pack.ts', 'assets/procedural-showcase.pack.ts'] as const
+  : [] as const;
+
 const hostEnv = {
   ...process.env as Record<string, string>,
   FORGEAX_GAME_DIR: gameDir,
+  FORGEAX_DDC_PROJECT_ROOT: hostDdcRoot,
+  FORGEAX_DDC_BUILD_CACHE_ROOT: join(hostDdcRoot, 'build'),
   FORGEAX_ENGINE_PORT: enginePort,
   FORGEAX_INTERFACE_PORT: hostPort,
   FORGEAX_STANDALONE_PORT: hostPort,
@@ -151,10 +171,42 @@ const hostEnv = {
   FORGEAX_RUNTIME_GENERATION: runtimeGeneration,
   FORGEAX_GAMES_URL_PREFIX: 'host-games',
   FORGEAX_HMR_CLIENT_PORT: hostPort,
+  FORGEAX_VITE_CACHE_ROOT: join(smokeViteCacheRoot, 'standalone-host'),
   FORGEAX_BRIDGE: '0',
   // TEMPORARY: force iframe carrier for smoke tests until single-realm mode
   // handles GPU device-lost gracefully during page reloads.
   FORGEAX_STANDALONE_FORCE_IFRAME: '1',
+};
+
+const catalogGateEnv = sampleScriptableCatalogSources.length > 0
+  ? {
+      FORGEAX_CATALOG_REQUIRED_SOURCES: sampleScriptableCatalogSources.join(','),
+      FORGEAX_CATALOG_REQUIRE_PUBLISHED: '1',
+    }
+  : {};
+
+const standaloneStackEnv = {
+  ...hostEnv,
+  ...catalogGateEnv,
+  ...(useNodeViteRuntime
+    ? { FORGEAX_SMOKE_VITE_RUNTIME: 'node', FORGEAX_SMOKE_NODE_BIN: nodeExecutable }
+    : {}),
+};
+const playViteCacheRoot = join(smokeViteCacheRoot, 'play-runtime');
+mkdirSync(playViteCacheRoot, { recursive: true });
+
+const playRuntimeEnv: Record<string, string> = {
+  FORGEAX_GAME_DIR: gameDir,
+  FORGEAX_GAME_ID: gameId,
+  FORGEAX_ENGINE_PORT: enginePort,
+  FORGEAX_RUNTIME_SCOPE_SECRET: runtimeScopeSecret,
+  FORGEAX_RUNTIME_SCOPE_ID: runtimeScopeId,
+  FORGEAX_RUNTIME_GENERATION: runtimeGeneration,
+  FORGEAX_GAMES_URL_PREFIX: 'smoke-games',
+  FORGEAX_HMR_CLIENT_PORT: hostPort,
+  FORGEAX_GAME_API_PORT: apiPort,
+  FORGEAX_VITE_CACHE_ROOT: playViteCacheRoot,
+  ...(useNodeViteRuntime ? { FORGEAX_SMOKE_VITE_RUNTIME: 'node' } : {}),
 };
 
 export default defineConfig({
@@ -164,7 +216,7 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   reporter: 'list',
-  timeout: 120_000,
+  timeout: 180_000,
   expect: { timeout: 10_000 },
   use: {
     baseURL: `http://127.0.0.1:${hostPort}`,
@@ -173,37 +225,18 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: useNodeViteRuntime
-        ? viteCommand(resolve(root, 'vite.config.ts'))
-        : 'bun run dev',
+      // dev:standalone owns host + game-backend + edit-runtime (same as bun fx start).
+      // Do not add a second edit-runtime webServer — it races the same :editPort URL.
+      command: 'bun run dev:standalone',
       cwd: root,
-      env: hostEnv,
-      url: `http://127.0.0.1:${hostPort}`,
+      env: standaloneStackEnv,
+      url: sampleScriptableCatalogSources.length > 0 ? editCatalogUrl : `http://127.0.0.1:${editPort}/editor/`,
       reuseExistingServer: false,
-      timeout: 90_000,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    },
-    {
-      command: useNodeViteRuntime
-        ? viteCommand(resolve(root, 'packages/edit-runtime/vite.config.ts'))
-        : 'bun run dev:edit-runtime',
-      cwd: root,
-      env: {
-        ...process.env as Record<string, string>,
-        FORGEAX_GAME_DIR: gameDir,
-        FORGEAX_EDITOR_PORT: editPort,
-        FORGEAX_INTERFACE_PORT: hostPort,
-        FORGEAX_HMR_CLIENT_PORT: hostPort,
-        FORGEAX_GAME_API_PORT: apiPort,
-        FORGEAX_SERVER_PORT: apiPort,
-        FORGEAX_RUNTIME_SCOPE_SECRET: runtimeScopeSecret,
-        FORGEAX_RUNTIME_SCOPE_ID: runtimeScopeId,
-        FORGEAX_RUNTIME_GENERATION: runtimeGeneration,
-      },
-      url: `http://127.0.0.1:${editPort}/editor/`,
-      reuseExistingServer: false,
-      timeout: 90_000,
+      timeout: sampleScriptableCatalogSources.length > 0 ? 180_000 : 90_000,
+      // dev-standalone supervises host + game-backend + edit-runtime process groups.
+      // SIGTERM lets installCleanup() tear children down before the next CI loop
+      // iteration starts another webServer with reuseExistingServer:false.
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
       stdout: 'pipe',
       stderr: 'pipe',
     },
@@ -215,33 +248,14 @@ export default defineConfig({
       cwd: resolve(root, 'packages/play-runtime'),
       env: {
         ...process.env,
-        FORGEAX_GAME_DIR: gameDir,
-        FORGEAX_GAME_ID: gameId,
-        FORGEAX_ENGINE_PORT: enginePort,
-        FORGEAX_RUNTIME_SCOPE_SECRET: runtimeScopeSecret,
-        FORGEAX_RUNTIME_SCOPE_ID: runtimeScopeId,
-        FORGEAX_RUNTIME_GENERATION: runtimeGeneration,
-        FORGEAX_GAMES_URL_PREFIX: 'smoke-games',
-        FORGEAX_HMR_CLIENT_PORT: hostPort,
-        FORGEAX_GAME_API_PORT: apiPort,
+        ...playRuntimeEnv,
+        FORGEAX_DDC_PROJECT_ROOT: playDdcRoot,
+        FORGEAX_DDC_BUILD_CACHE_ROOT: join(playDdcRoot, 'build'),
       },
       url: `http://127.0.0.1:${enginePort}/preview/`,
       reuseExistingServer: false,
       timeout: 90_000,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    },
-    {
-      command: 'bun apps/standalone/game-backend.ts',
-      cwd: root,
-      env: {
-        ...process.env,
-        FORGEAX_GAME_DIR: gameDir,
-        FORGEAX_GAME_API_PORT: apiPort,
-      },
-      url: `http://127.0.0.1:${apiPort}/api/health`,
-      reuseExistingServer: false,
-      timeout: 90_000,
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
       stdout: 'pipe',
       stderr: 'pipe',
     },

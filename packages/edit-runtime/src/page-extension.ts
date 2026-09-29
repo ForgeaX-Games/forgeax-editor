@@ -1,5 +1,5 @@
 import { createElement, type ReactNode } from 'react';
-import type { AppExtension, AppHost, ContentBrowserRevealTarget } from '@forgeax/interface/core/app-shell/types';
+import type { AppExtension, AppHost, ContentBrowserRevealTarget } from '@forgeax/app-shell/application';
 import type {
   ActivityRegistration,
   PageController,
@@ -8,8 +8,8 @@ import type {
   PageTypeRegistration,
   PanelTypeRegistration,
   ResourceEditorRegistration,
-} from '@forgeax/interface/core/page-platform';
-import { registerPageDirtyProbe } from '@forgeax/interface/core/page-platform';
+} from '@forgeax/app-shell/application';
+import { registerPageDirtyProbe } from '@forgeax/app-shell/application';
 import {
   configureEditorPageNavigation,
   gateway,

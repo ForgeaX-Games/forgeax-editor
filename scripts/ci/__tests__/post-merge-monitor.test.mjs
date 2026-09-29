@@ -76,7 +76,7 @@ function portabilityAggregate() {
   const platforms = ['linux', 'windows', 'macos'];
   const stages = ['checkout', 'install', 'setup', 'wasm', 'zero-binary', 'type-static', 'capability-probe', 'smoke'];
   const platformReports = platforms.map((os) => {
-    const platform = {os, architecture: 'x64', runnerImage: `${os}-runner`, toolchain: {bun: '1.3.14', bunRevision: 'bun-revision', node: '22.13.0', pnpm: '11.7.0', rust: 'rustc 1.93.0', wasmPack: 'wasm-pack 0.14.0', emscripten: 'emcc 4.0.15'}};
+    const platform = {os, architecture: 'x64', runnerImage: `${os}-runner`, toolchain: {bun: '1.4.0', bunRevision: 'bun-revision', node: '22.13.0', pnpm: '11.7.0', rust: 'rustc 1.93.0', wasmPack: 'wasm-pack 0.14.0', emscripten: 'emcc 4.0.15'}};
     const reports = stages.map((stage) => ({
       $schema: 'forgeax-editor-ci-report/v1',
       contractVersion: 'forgeax-editor-ci-report/v1',

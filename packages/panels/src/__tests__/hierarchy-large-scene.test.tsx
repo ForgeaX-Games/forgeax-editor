@@ -13,7 +13,8 @@ describe('Hierarchy large-scene viewport', () => {
   });
 
   it('does not let a lagging runtime projection hide freshly authored world entities', () => {
-    expect(panel).toContain('projection.rows.length === worldEntityIds.length');
+    expect(panel).toContain('hierarchyProjectionMatchesWorld(projection, activeWorld, worldEntityIds.length)');
+    expect(panel).toContain('childrenOf(activeWorld, null)');
     expect(panel).toContain('flattenVisibleRows(roots, view.collapsed, activeWorld, usableProjection)');
   });
 

@@ -48,7 +48,9 @@ const KIND_GLYPHS: Record<string, LucideIcon> = {
 };
 
 /** Renders the vector glyph for an asset kind (falls back to a generic box). */
-export function AssetKindGlyph({ kind, size = 16, className }: { kind: string; size?: number; className?: string }) {
+export function AssetKindGlyph({ kind, size = 16, className,
+}: { kind: string; size?: number; className?: string;
+}) {
   const Glyph = KIND_GLYPHS[kind] ?? Package;
   return <Glyph size={size} className={className} aria-hidden="true" />;
 }
@@ -61,12 +63,13 @@ const KIND_COLORS: Record<string, string> = {
   'render-pipeline': '#8a6a6a', tileset: '#6a8a6a', ui: '#8a6a8a',
 };
 
-function extractBaseColor(payload: Record<string, unknown>): [number, number, number, number] | null {
+function extractBaseColor(payload: Record<string, unknown>,
+): [number, number, number, number] | null {
   const pv = payload.values as Record<string, unknown> | undefined;
   if (!pv) return null;
   const bc = pv.baseColor;
   if (!Array.isArray(bc) || bc.length < 3) return null;
-  return [bc[0] as number, bc[1] as number, bc[2] as number, bc[3] as number ?? 1];
+  return [bc[0] as number, bc[1] as number, bc[2] as number, (bc[3] as number) ?? 1];
 }
 
 function toCSS(rgba: [number, number, number, number]): string {
@@ -77,7 +80,12 @@ function materialGradient(payload: Record<string, unknown>): string {
   const bc = extractBaseColor(payload);
   if (!bc) return 'radial-gradient(circle at 35% 35%, #aaa 0%, #444 70%, #222 100%)';
   const base = toCSS(bc);
-  const light = toCSS([Math.min(1, bc[0] + 0.3), Math.min(1, bc[1] + 0.3), Math.min(1, bc[2] + 0.3), 1]);
+  const light = toCSS([
+    Math.min(1, bc[0] + 0.3),
+    Math.min(1, bc[1] + 0.3),
+    Math.min(1, bc[2] + 0.3),
+    1,
+  ]);
   const dark = toCSS([bc[0] * 0.3, bc[1] * 0.3, bc[2] * 0.3, 1]);
   return `radial-gradient(circle at 35% 35%, ${light} 0%, ${base} 50%, ${dark} 100%)`;
 }
@@ -164,24 +172,47 @@ export interface AssetThumbnailProps extends AssetThumbnailInput {
 }
 
 /** Compact self-styled preview square: image / material sphere / kind glyph. */
-export function AssetThumbnail({ kind, payload, thumbnailUrl, packPath, size = 16, fit = 'cover', title, className, style }: AssetThumbnailProps) {
+export function AssetThumbnail({
+  kind,
+  payload,
+  thumbnailUrl,
+  packPath,
+  size = 16,
+  fit = 'cover',
+  title,
+  className,
+  style,
+}: AssetThumbnailProps) {
   const [failedImageUrl, setFailedImageUrl] = useState<string>();
   const thumb = getThumbnailData({ kind, payload, thumbnailUrl, packPath });
   const box: CSSProperties = {
-    width: size, height: size, minWidth: size, flex: '0 0 auto',
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    overflow: 'hidden', borderRadius: Math.max(2, Math.round(size * 0.2)),
+    width: size,
+    height: size,
+    minWidth: size,
+    flex: '0 0 auto',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    borderRadius: Math.max(2, Math.round(size * 0.2)),
     border: '1px solid var(--color-border-default, rgba(255,255,255,0.14))',
-    fontSize: Math.round(size * 0.6), lineHeight: 1,
+    fontSize: Math.round(size * 0.6),
+    lineHeight: 1,
     ...style,
   };
   if (thumb.type === 'image' && thumb.imageUrl && failedImageUrl !== thumb.imageUrl) {
     // Checkerboard backdrop so transparent textures read clearly (esp. under
     // `contain`, where the box is not fully covered).
-    const checker = 'repeating-conic-gradient(rgba(255,255,255,0.09) 0% 25%, rgba(0,0,0,0.18) 0% 50%) 50% / 12px 12px';
+    const checker =
+      'repeating-conic-gradient(rgba(255,255,255,0.09) 0% 25%, rgba(0,0,0,0.18) 0% 50%) 50% / 12px 12px';
     return (
       <span className={className} style={{ ...box, background: checker }} title={title}>
-        <img src={thumb.imageUrl} alt="" onError={() => setFailedImageUrl(thumb.imageUrl)} style={{ width: '100%', height: '100%', objectFit: fit }} />
+        <img
+          src={thumb.imageUrl}
+          alt=""
+          onError={() => setFailedImageUrl(thumb.imageUrl)}
+          style={{ width: '100%', height: '100%', objectFit: fit }}
+        />
       </span>
     );
   }
@@ -189,12 +220,25 @@ export function AssetThumbnail({ kind, payload, thumbnailUrl, packPath, size = 1
     // Keep the material sphere perfectly round regardless of box proportions.
     return (
       <span className={className} style={box} title={title}>
-        <span style={{ width: '82%', aspectRatio: '1 / 1', borderRadius: '50%', background: thumb.gradient, boxShadow: 'inset -3px -3px 6px rgba(0,0,0,0.4), inset 2px 2px 5px rgba(255,255,255,0.15)' }} />
+        <span
+          style={{
+            width: '82%',
+            aspectRatio: '1 / 1',
+            borderRadius: '50%',
+            background: thumb.gradient,
+            boxShadow:
+              'inset -3px -3px 6px rgba(0,0,0,0.4), inset 2px 2px 5px rgba(255,255,255,0.15)',
+          }}
+        />
       </span>
     );
   }
   return (
-    <span className={className} style={{ ...box, color: 'var(--color-text-tertiary, #8a8a8a)' }} title={title}>
+    <span
+      className={className}
+      style={{ ...box, color: 'var(--color-text-tertiary, #8a8a8a)' }}
+      title={title}
+    >
       <AssetKindGlyph kind={kind} size={Math.round(size * 0.6)} />
     </span>
   );

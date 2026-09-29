@@ -82,7 +82,7 @@ The harness owns its own commit, push, and remote reachability evidence. An exte
 
 ## smoke-play shard 运行证据
 
-九个 heavy shard（`scriptable`、`broad-core`、`template`、`broad-play`、`broad-assets`、`vfx`、`editor`、`create`、`repro`）都必须经 `scripts/ci/smoke-shard-runtime.mjs` 执行。workflow 中的 `--shard`、`--ports` 和 `--` 后原始命令共同构成该 shard 的可重放契约；不得改变测试文件顺序、headed/WebGPU 参数、`workers=1`、`retries=0` 或 `max-parallel: 2`。
+九个 heavy shard（`scriptable`、`broad-core`、`template`、`broad-play`、`broad-assets`、`vfx`、`editor`、`create`、`repro`）按三个 bundle（`core`、`breadth`、`editor`）分组；每个 bundle job 只准备一次 browser-smoke 环境，并在同一 job 内串行经 `scripts/ci/smoke-shard-runtime.mjs` 执行其子 shard。workflow 中的 `--shard`、`--ports` 和 `--` 后原始命令共同构成该 shard 的可重放契约；不得改变测试文件顺序、headed/WebGPU 参数、`workers=1`、`retries=0` 或 bundle 矩阵的 `max-parallel: 2` / `fail-fast: true`。
 
 每个 shard 的 `.ci/smoke-shard-runtime/<shard>/runtime.json` 是 `forgeax-smoke-shard-runtime/v1` 运行报告，包含 identity、lock、端口、资源快照、子进程命令和 `classification`。`lifecycle.jsonl` 由 `FORGEAX_DEV_STACK_EVENT_LOG` 接收 host 的 started、exited、restart 和 shutdown 事件。runtime evidence 无论成功或失败都上传；失败时另上传 lifecycle 与 Playwright `test-results`。
 

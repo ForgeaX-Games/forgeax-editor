@@ -5,6 +5,9 @@ import { isGuidCompatibleWithAssetType } from './asset-ref-contract';
 
 export const ASSET_DRAG_MIME = 'application/x-forgeax-asset';
 
+/** Catalog kinds accepted by material texture slots (drag + picker). */
+export const DROPPABLE_TEXTURE_KINDS: ReadonlySet<string> = new Set(['texture', 'image']);
+
 export type AssetDropVerdict = 'none' | 'accept' | 'reject';
 
 export function carriesAssetMime(dataTransfer: DataTransfer | null): boolean {
@@ -29,7 +32,7 @@ export function resolveAssetDropVerdict(
 ): AssetDropVerdict {
   if (!drag?.guid) return 'none';
   if (acceptKinds) {
-    return drag.kind !== undefined && acceptKinds.has(drag.kind) ? 'accept' : 'reject';
+    return acceptKinds.has(drag.kind ?? '') ? 'accept' : 'reject';
   }
   return isGuidCompatibleWithAssetType(drag.guid, assetType) ? 'accept' : 'reject';
 }

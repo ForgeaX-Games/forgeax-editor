@@ -1,19 +1,24 @@
-import { afterEach, expect, test } from 'bun:test';
-import { AssetIOFacade } from '@forgeax/editor-core';
+import { expect, test } from 'bun:test';
+import type { CommandError } from '@forgeax/editor-core';
 import { RunJournal, createTransportService, createTransportSecurityPolicy, TRANSPORT_PROTOCOL_VERSION } from '@forgeax/editor-product';
 import { createSourceAuthoringTransport } from '../source-authoring-transport';
 
-const originalFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = originalFetch; });
-
 test('producer HTTP failure stays structured through source dispatch and its journal record', async () => {
-  const producer = { code: 'produce-failed', hint: 'repair declarations', cause: { code: 'pack-source-external-closure-mismatch', detail: { sourcePath: 'assets/scene.pack.ts', unusedDeclaredGuids: ['unused'] } } };
-  globalThis.fetch = (async () => Response.json(producer, { status: 503 })) as unknown as typeof fetch;
-  const io = new AssetIOFacade();
-  io.setRuntimeBinding({ schemaVersion: 'runtime-asset-binding-v1', gameId: 'test', scopeId: 'studio-test', generation: 7, status: 'degraded', catalogUrl: '/scopes/studio-test/7/catalog.json', importUrlBase: '/scopes/studio-test/7/import', packageUrlBase: '/scopes/studio-test/7/asset' });
+  const producer = {
+    code: 'produce-failed' as CommandError['code'],
+    hint: 'repair declarations',
+    owner: 'engine',
+    category: 'resource',
+    retryable: false,
+    recoveryActions: ['asset.preflight'],
+    cause: { code: 'pack-source-external-closure-mismatch', detail: { sourcePath: 'assets/scene.pack.ts', unusedDeclaredGuids: ['unused'] } },
+  };
   const source = createSourceAuthoringTransport({
-    fetch: async () => Response.json({ ok: true, value: { sourcePath: 'assets/scene.pack.ts', revision: 'a'.repeat(64), meta: { subAssets: [{ guid: '11111111-1111-4111-8111-111111111111' }] } } }),
-    triggerCook: (guid, mode) => io.triggerCook(guid, undefined, mode),
+    fetch: async () => Response.json({ ok: true, value: { sourcePath: 'assets/scene.pack.ts', revision: 'a'.repeat(64), assets: [{ guid: '11111111-1111-4111-8111-111111111111' }] } }),
+    triggerCook: async () => ({
+      ok: false,
+      error: { kind: 'http', status: 503, hint: 'repair declarations', producerError: producer },
+    }),
     observePublication: async () => { throw new Error('must not observe failed production'); },
   });
   const service = createTransportService({

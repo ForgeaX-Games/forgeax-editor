@@ -27,7 +27,7 @@
 // Anchors:
 //   plan-tasks.json m2-w11
 
-import { describe, expect, it, beforeEach } from 'bun:test';
+import { describe, expect, it, beforeEach, afterEach } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import { EditGateway } from '../io/gateway';
 import type { EditorOp, EditSession } from '../types';
@@ -47,6 +47,9 @@ describe('D-11 play/stop seam — three states (m2-w11)', () => {
   const cleanups: Array<() => void> = [];
   beforeEach(() => {
     gw = new EditGateway(createSession());
+    while (cleanups.length) cleanups.pop()!();
+  });
+  afterEach(() => {
     while (cleanups.length) cleanups.pop()!();
   });
 
@@ -75,11 +78,11 @@ describe('D-11 play/stop seam — three states (m2-w11)', () => {
 
     const ledgerBefore = gw.ledger.length;
     const undoBefore = gw.appliedCount();
-    const r = gw.dispatch({ kind: 'play' } as EditorOp, 'ai');
+    const r = gw.dispatch({ kind: 'play', requestId: 'seam-play' } as EditorOp, 'ai');
     expect(r.ok).toBe(true);
     expect(called).toBe(1);
-    if (r.ok && r.result?.operationRun?.requestId) await gw.waitOperationRun(r.result.operationRun.requestId);
-    // session tier: ledger grows after terminal success, undo does not
+    await gw.waitOperationRun('seam-play');
+    // session tier: the terminal run appends the ledger; undo does not change
     expect(gw.ledger.length).toBe(ledgerBefore + 1);
     expect(gw.origins[gw.origins.length - 1]).toBe('ai');
     expect(gw.appliedCount()).toBe(undoBefore);
@@ -119,10 +122,10 @@ describe('D-11 play/stop seam — three states (m2-w11)', () => {
     cleanups.push(unreg);
     const ledgerBefore = gw.ledger.length;
     const undoBefore = gw.appliedCount();
-    gw.dispatch({ kind: 'play' } as EditorOp, 'ai');
-    gw.dispatch({ kind: 'play' } as EditorOp, 'ai');
-    gw.dispatch({ kind: 'play' } as EditorOp, 'ai');
-    await Promise.resolve();
+    for (const requestId of ['seam-1', 'seam-2', 'seam-3']) {
+      expect(gw.dispatch({ kind: 'play', requestId } as EditorOp, 'ai').ok).toBe(true);
+      await gw.waitOperationRun(requestId);
+    }
     expect(gw.ledger.length).toBe(ledgerBefore + 3);
     expect(gw.appliedCount()).toBe(undoBefore);
   });
@@ -138,7 +141,8 @@ describe('D-11 play/stop seam — three states (m2-w11)', () => {
   });
 
   it('a failing test-double applier surfaces its structured error', () => {
-    const unreg = registerSessionApplier('play', () => ({ ok: false, error: { code: 'PLAN_FAILED', hint: 'boom' } }));
+    const unreg = registerSessionApplier('play', () => ({ ok: false, error: { code: 'PLAN_FAILED', hint: 'boom' },
+    }));
     cleanups.push(unreg);
     const ledgerBefore = gw.ledger.length;
     const r = gw.dispatch({ kind: 'play' } as EditorOp);

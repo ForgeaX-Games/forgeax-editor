@@ -22,7 +22,8 @@ const sourceFile: CBFile = {
   name: 'model.glb', family: 'model', assets: [{
     type: 'asset', guid: '11111111-1111-4111-8111-111111111111', kind: 'mesh', name: 'model.glb',
     payload: {}, packPath: 'assets/model.pack.json', packIndex: 0, refs: [],
-}], isAssetPackage: true, kindLabel: 'Asset Package', isFavorite: false,
+},
+  ], isAssetPackage: true, kindLabel: 'Asset Package', isFavorite: false,
 };
 const packFile: CBFile = {
   type: 'file', path: 'assets/materials.pack.json', diskPath: '/projects/demo/assets/materials.pack.json',
@@ -32,7 +33,8 @@ const packFile: CBFile = {
   }, {
     type: 'asset', guid: '44444444-4444-4444-8444-444444444444', kind: 'material', name: 'Wood',
     payload: {}, packPath: 'assets/materials.pack.json', packIndex: 1, refs: [],
-  }], isAssetPackage: true, kindLabel: 'Asset Pack', isFavorite: false,
+  },
+  ], isAssetPackage: true, kindLabel: 'Asset Pack', isFavorite: false,
 };
 const textFile: CBFile = {
   type: 'file', path: 'assets/readme.md', diskPath: '/projects/demo/assets/readme.md',
@@ -42,30 +44,37 @@ const asset: CBAsset = {
   type: 'asset', guid: '22222222-2222-4222-8222-222222222222', kind: 'material', name: 'Metal',
   payload: {}, packPath: 'assets/materials.pack.json', packIndex: 0, refs: [],
 };
-const catalogImage = registryEntryToCBAsset({
-  guid: '55555555-5555-4555-8555-555555555555',
-  kind: 'texture',
-  name: 'Catalog Logo',
-  packageUrl: '/__forgeax-ddc/catalog-logo.pack.json',
-  sourcePath: 'assets/catalog logo.png.meta.json',
-}, 0);
+const catalogImage = registryEntryToCBAsset(
+  {
+    guid: '55555555-5555-4555-8555-555555555555',
+    kind: 'texture',
+    name: 'Catalog Logo',
+    packageUrl: '/__forgeax-ddc/catalog-logo.pack.json',
+    sourcePath: 'assets/catalog logo.png.meta.json',
+  },
+  0,
+);
 
 let container: HTMLDivElement;
 let root: Root;
 let originalFetch: typeof globalThis.fetch;
 
-function renderPreview(previewItem: CBPreviewPanelProps['previewItem']): void {
+function renderPreview(
+  previewItem: CBPreviewPanelProps['previewItem'],
+  diskFiles: CBPreviewPanelProps['diskFiles'] = [],
+): void {
   act(() => root.render(
     <CBPreviewPanel
       previewItem={previewItem}
       foldersInPath={[folder]}
-      diskFiles={[]}
+      diskFiles={diskFiles}
       gameSlug="demo"
       onClose={() => {}}
       onDrag={() => {}}
       onDragEnd={() => {}}
     />,
-  ));
+  ),
+  );
 }
 
 beforeEach(() => {
@@ -76,7 +85,8 @@ beforeEach(() => {
   globalThis.fetch = (async () => new Response(JSON.stringify({
     path: '/projects/demo/assets/model.glb', kind: 'model', mime: 'model/gltf-binary', size: 2, mtime: 1,
     content: 'preview text',
-  }), { headers: { 'content-type': 'application/json' } })) as unknown as typeof globalThis.fetch;
+  }), { headers: { 'content-type': 'application/json' } },
+    )) as unknown as typeof globalThis.fetch;
 });
 
 afterEach(() => {
@@ -89,6 +99,7 @@ describe('Content Browser preview panel', () => {
   it('projects folders, files with source assets, and registry assets', async () => {
     renderPreview(folder);
     expect(container.querySelector('.cb-preview-panel')).not.toBeNull();
+    expect(container.querySelector('.cb-preview-ico.cb-folder-icon')).not.toBeNull();
     expect(container.textContent).toContain('hello');
     expect(container.textContent).toContain('Empty folder');
 
@@ -100,7 +111,7 @@ describe('Content Browser preview panel', () => {
     expect(container.querySelector('.cb-preview-asset-row')).not.toBeNull();
     expect(container.querySelector('.cb-preview-mode-bar')).toBeNull();
 
-    renderPreview(packFile);
+    renderPreview(packFile, [packFile]);
     expect(container.querySelector('.cb-preview-mode-bar')).not.toBeNull();
     expect(container.textContent).toContain('Assets');
     act(() => {
@@ -116,6 +127,23 @@ describe('Content Browser preview panel', () => {
     renderPreview(asset);
     expect(container.textContent).toContain('Metal');
     expect(container.textContent).toContain('assets/materials.pack.json');
+
+    const inputMapAsset: CBAsset = {
+      type: 'asset', guid: '55555555-5555-4555-8555-555555555555', kind: 'input-map', name: 'IM_5',
+      payload: {}, packPath: 'assets/IM_5.pack.json', packIndex: 0, refs: [],
+    };
+    const inputMapFile: CBFile = {
+      type: 'file', path: 'assets/IM_5.pack.json', diskPath: '/projects/demo/assets/IM_5.pack.json',
+      name: 'IM_5.pack.json', family: 'pack', assets: [inputMapAsset], isAssetPackage: false,
+      kindLabel: 'Asset Pack', isFavorite: false,
+    };
+    renderPreview(inputMapAsset, [inputMapFile]);
+    expect(container.querySelector('.cb-preview-mode-bar')).not.toBeNull();
+    act(() => {
+      container.querySelector<HTMLButtonElement>('.cb-preview-mode-btn:last-child')?.click();
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(container.textContent).toContain('preview text');
   });
 
   it('renders a cataloged image asset from its source URL without cooked payload.source', () => {
@@ -133,6 +161,8 @@ describe('Content Browser preview panel', () => {
       />,
     );
     expect(markup.match(/<img /g)).toHaveLength(2);
-    expect(markup.match(/src="\/api\/files\/raw\?path=assets%2Fcatalog%20logo\.png"/g)).toHaveLength(2);
+    expect(
+      markup.match(/src="\/api\/files\/raw\?path=assets%2Fcatalog%20logo\.png"/g),
+    ).toHaveLength(2);
   });
 });

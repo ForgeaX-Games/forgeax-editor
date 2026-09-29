@@ -64,6 +64,14 @@
     "signature": "() => GizmoSpace"
   },
   {
+    "name": "getLastVisibilityCommandEntityIds",
+    "signature": "() => readonly EntityHandle[]"
+  },
+  {
+    "name": "getLastVisibilityCommandState",
+    "signature": "() => VisibilityCommandState | null"
+  },
+  {
     "name": "getLoadedSceneEntities",
     "signature": "() => number[]"
   },
@@ -100,6 +108,10 @@
     "signature": "() => readonly SessionDirtyAsset[]"
   },
   {
+    "name": "getVisibilityRevision",
+    "signature": "() => number"
+  },
+  {
     "name": "GizmoPivot",
     "signature": "GizmoPivot"
   },
@@ -130,6 +142,10 @@
   {
     "name": "loadDocFromStorage",
     "signature": "() => boolean"
+  },
+  {
+    "name": "materializeGeneratedDefaultScene",
+    "signature": "() => Promise<boolean>"
   },
   {
     "name": "MeshStats",
@@ -242,6 +258,10 @@
   {
     "name": "subscribeSessionDirtyAssets",
     "signature": "(listener: () => void) => () => void"
+  },
+  {
+    "name": "subscribeVisibilityRevision",
+    "signature": "(fn: () => void) => () => void"
   },
   {
     "name": "switchSceneFile",

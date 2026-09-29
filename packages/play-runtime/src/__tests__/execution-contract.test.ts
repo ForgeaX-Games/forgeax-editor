@@ -33,13 +33,15 @@ describe('Play thick execution contract', () => {
       gameId: 'sample',
       gameEntryUrl: 'data:text/javascript,export default 1',
       gamePluginModules: [],
-    })).rejects.toThrow('default-export an ExecutionBootstrapEntry');
+    }),
+    ).rejects.toThrow('default-export an ExecutionBootstrapEntry');
     await expect(executionBootstrap({
       protocol: PLAY_EXECUTION_PROTOCOL,
       gameId: 'sample',
       gameEntryUrl: 'data:text/javascript,export default async()=>null',
       gamePluginModules: [],
-    })).rejects.toThrow('prepare an object with run(context)');
+    }),
+    ).rejects.toThrow('prepare an object with run(context)');
   });
 
   test('accepts structured-clone bootstrap data and rejects missing identity', () => {
@@ -48,12 +50,14 @@ describe('Play thick execution contract', () => {
       gameId: 'sample',
       gameEntryUrl: 'https://runtime.test/sample/execution.ts',
       gamePluginModules: [],
-    })).toMatchObject({ gameId: 'sample' });
+    }),
+    ).toMatchObject({ gameId: 'sample' });
     expect(() => parsePlayExecutionBootstrapData({
       protocol: PLAY_EXECUTION_PROTOCOL,
       gameEntryUrl: 'https://runtime.test/sample/execution.ts',
       gamePluginModules: [],
-    })).toThrow('invalid');
+    }),
+    ).toThrow('invalid');
   });
 
   test('fences malformed realm messages instead of treating a kind string as readiness', () => {
@@ -66,13 +70,15 @@ describe('Play thick execution contract', () => {
         backend: 'webgpu',
         caps: ['compute', 'indirect'],
       },
-    })).toBe(true);
+    }),
+    ).toBe(true);
     expect(isPlayExecutionRealmMessage({
       protocol: PLAY_EXECUTION_PROTOCOL,
       kind: 'heartbeat',
       fps: 60,
       sentinel: 3,
-    })).toBe(true);
+    }),
+    ).toBe(true);
     expect(isPlayExecutionRealmMessage({
       protocol: PLAY_EXECUTION_PROTOCOL,
       kind: 'runtime-diagnostics',
@@ -86,19 +92,24 @@ describe('Play thick execution contract', () => {
           meshFilter: { hasAsset: true },
           meshRenderer: { materialCount: 2 },
           childOf: { parent: 1 },
-        }],
+        },
+          ],
         vfxRuntimePresent: true,
         queuedIntents: 1,
         runtimeDiagnostics: [],
         featureStatus: 'active',
       },
-    })).toBe(true);
-    expect(isPlayExecutionRealmMessage({ protocol: PLAY_EXECUTION_PROTOCOL, kind: 'heartbeat' })).toBe(false);
+    }),
+    ).toBe(true);
+    expect(isPlayExecutionRealmMessage({ protocol: PLAY_EXECUTION_PROTOCOL, kind: 'heartbeat',
+      }),
+    ).toBe(false);
     expect(isPlayExecutionRealmMessage({
       protocol: PLAY_EXECUTION_PROTOCOL,
       kind: 'runtime-diagnostics',
       diagnostics: { entityCount: -1 },
-    })).toBe(false);
+    }),
+    ).toBe(false);
     expect(isPlayExecutionRealmMessage({
       protocol: PLAY_EXECUTION_PROTOCOL,
       kind: 'runtime-diagnostics',
@@ -110,7 +121,8 @@ describe('Play thick execution contract', () => {
         queuedIntents: 0,
         runtimeDiagnostics: [],
       },
-    })).toBe(false);
+    }),
+    ).toBe(false);
     expect(isPlayExecutionRealmMessage({
       protocol: PLAY_EXECUTION_PROTOCOL,
       kind: 'runtime-diagnostics',
@@ -122,7 +134,8 @@ describe('Play thick execution contract', () => {
         queuedIntents: 0,
         runtimeDiagnostics: [],
       },
-    })).toBe(false);
+    }),
+    ).toBe(false);
     expect(isPlayExecutionRealmMessage({
       protocol: PLAY_EXECUTION_PROTOCOL,
       kind: 'runtime-diagnostics',
@@ -134,7 +147,8 @@ describe('Play thick execution contract', () => {
         queuedIntents: 0,
         runtimeDiagnostics: [],
       },
-    })).toBe(false);
+    }),
+    ).toBe(false);
     expect(isPlayExecutionRealmMessage({
       protocol: PLAY_EXECUTION_PROTOCOL,
       kind: 'realm-ready',
@@ -144,7 +158,8 @@ describe('Play thick execution contract', () => {
         backend: 'webgpu',
         caps: ['compute', 'indirect'],
       },
-    })).toBe(false);
+    }),
+    ).toBe(false);
     expect(isPlayExecutionRealmMessage({
       protocol: PLAY_EXECUTION_PROTOCOL,
       kind: 'realm-ready',
@@ -154,7 +169,8 @@ describe('Play thick execution contract', () => {
         backend: 'webgpu',
         caps: ['compute', 'indirect'],
       },
-    })).toBe(false);
+    }),
+    ).toBe(false);
     expect(isPlayExecutionRealmMessage({
       protocol: PLAY_EXECUTION_PROTOCOL,
       kind: 'realm-ready',
@@ -164,7 +180,8 @@ describe('Play thick execution contract', () => {
         backend: '',
         caps: ['compute', 'indirect'],
       },
-    })).toBe(false);
+    }),
+    ).toBe(false);
     expect(isPlayExecutionRealmMessage({
       protocol: PLAY_EXECUTION_PROTOCOL,
       kind: 'realm-ready',
@@ -174,16 +191,21 @@ describe('Play thick execution contract', () => {
         backend: 'webgpu',
         caps: ['indirect', 'compute'],
       },
-    })).toBe(false);
+    }),
+    ).toBe(false);
   });
 
   test('mints complete producer provenance from live renderer facts', () => {
-    const renderer = (backendKind: string, capabilities: Record<string, unknown>) => ({
-      inspect: () => ({ capabilities: { backendKind, ...capabilities } }),
-    }) as unknown as Parameters<typeof createPlayRendererProvenance>[0];
-    const provenance = createPlayRendererProvenance(
-      renderer('webgpu', { indirect: true, compute: true }),
-      1,
+    const renderer = (backendKind: string, capabilities: Record<string, unknown>) =>
+      ({
+        inspect: () => ({ capabilities: { backendKind, ...capabilities } }),
+      }) as unknown as Parameters<typeof createPlayRendererProvenance>[0];
+    const provenance = createPlayRendererProvenance({
+      inspect: () => ({
+        capabilities: { backendKind: 'webgpu', indirect: true, compute: true,
+          },
+      }),
+    } as never, 1,
     );
     expect(provenance).toMatchObject({
       generation: 1,
@@ -191,8 +213,11 @@ describe('Play thick execution contract', () => {
       caps: ['compute', 'indirect'],
     });
     expect(provenance?.identity).toMatch(/^renderer-[0-9a-f-]{36}$/u);
-    expect(createPlayRendererProvenance(renderer('webgpu', {}), 0)).toBeNull();
-    expect(createPlayRendererProvenance(renderer('', {}), 1)).toBeNull();
+    expect(createPlayRendererProvenance({
+      inspect: () => ({ capabilities: { backendKind: 'webgpu' } }),
+    } as never, 0,
+      ),
+    ).toBeNull();
   });
 
   test('projects borrowed Worker query rows before the engine rebinds them', () => {
@@ -201,8 +226,10 @@ describe('Play thick execution contract', () => {
       diagnostics: () => [{ code: 'vfx-ready' }],
     };
     const sourceRows = [
-      { entity: 41, name: 'Reference Upper', assetHandle: 7, materials: [3, 5], parent: 42 },
-      { entity: 42, name: 'Reference Root', assetHandle: 9, materials: [11], parent: 99 },
+      { entity: 41, name: 'Reference Upper', assetHandle: 7, materials: [3, 5], parent: 42,
+      },
+      { entity: 42, name: 'Reference Root', assetHandle: 9, materials: [11], parent: 99,
+      },
     ];
     const row = {
       entity: 0,
@@ -233,19 +260,22 @@ describe('Play thick execution contract', () => {
     };
     const context = {
       world: {
-        inspect: () => ({ entityCount: 7, activeComponents: ['ParticleEffectPlayer'] }),
+        inspect: () => ({ entityCount: 7, activeComponents: ['ParticleEffectPlayer'],
+        }),
         query: () => ({ unwrap: () => borrowedRows }),
         hasResource: (name: string) => name === 'VfxGpuRuntime',
         getResource: () => vfxRuntime,
       },
-      renderer: { inspect: () => ({
-        perFramePassNames: ['forgeax.vfx-render.gpu-particles::gpu.main.draw.regular'],
-        featureDiagnostics: [{
-          identity: 'forgeax.vfx-render.gpu-particles',
-          status: 'active',
-          latestError: { code: 'none' },
-        }],
-      }) },
+      renderer: {
+        inspect: () => ({
+          featureDiagnostics: [{
+            identity: 'forgeax.vfx-render.gpu-particles',
+            status: 'active',
+          },
+          ],
+          perFramePassNames: ['forgeax.vfx-render.gpu-particles::gpu.main.draw.regular'],
+        }),
+      },
     } as unknown as PlayExecutionRealmContext;
 
     expect(projectRuntimeDiagnostics(context)).toEqual({
@@ -273,7 +303,6 @@ describe('Play thick execution contract', () => {
       runtimeDiagnostics: [{ code: 'vfx-ready' }],
       featurePass: 'forgeax.vfx-render.gpu-particles::gpu.main.draw.regular',
       featureStatus: 'active',
-      featureError: { code: 'none' },
     });
   });
 
@@ -284,10 +313,9 @@ describe('Play thick execution contract', () => {
         query: () => ({ unwrap: () => [] }),
         hasResource: () => false,
       },
-      renderer: { inspect: () => ({
-        perFramePassNames: [],
-        featureDiagnostics: [],
-      }) },
+      renderer: {
+        inspect: () => ({ features: [], perFramePassNames: [] }),
+      },
     } as unknown as PlayExecutionRealmContext;
 
     expect(projectRuntimeDiagnostics(context)).toEqual({
@@ -297,8 +325,36 @@ describe('Play thick execution contract', () => {
       vfxRuntimePresent: false,
       queuedIntents: -1,
       runtimeDiagnostics: [],
-      featureError: undefined,
     });
+  });
+
+  test('projects the current raw VFX raster pass naming', () => {
+    const passes = ['vfx.w-a.a-1.r-2.p-2a.charge-hex-seal.g-3.renderer-0.raster'];
+    const context = {
+      world: {
+        inspect: () => ({ entityCount: 0, activeComponents: [] }),
+        query: () => ({ unwrap: () => [] }),
+        hasResource: (name: string) => name === 'VfxGpuRuntime',
+        getResource: () => ({ snapshot: () => [], diagnostics: () => [] }),
+      },
+      renderer: {
+        inspect: () => ({
+          featureDiagnostics: [{
+            identity: 'forgeax.vfx-render.gpu-particles',
+            status: 'active',
+          },
+          ],
+          perFramePassNames: passes,
+        }),
+      },
+    } as unknown as PlayExecutionRealmContext;
+
+    expect(projectRuntimeDiagnostics(context)).toMatchObject({
+      featurePass: 'vfx.w-a.a-1.r-2.p-2a.charge-hex-seal.g-3.renderer-0.raster',
+      featureStatus: 'active',
+    });
+    passes[0] = passes[0]!.replace('.raster', '.project');
+    expect(projectRuntimeDiagnostics(context).featurePass).toBeUndefined();
   });
 
   test('keeps one disposable host snapshot and ignores control messages', () => {
@@ -345,16 +401,20 @@ describe('Play thick execution contract', () => {
           name: 'Reference Root',
           meshFilter: { hasAsset: true },
           meshRenderer: { materialCount: 1 },
-        }],
+        },
+        ],
         vfxRuntimePresent: false,
         queuedIntents: 0,
-        runtimeDiagnostics: [{ ownerCommit: priorOwnerCommit, projection: 'Worker entity diagnostics' }],
+        runtimeDiagnostics: [{ ownerCommit: priorOwnerCommit, projection: 'Worker entity diagnostics',
+          },
+        ],
       },
     };
 
     expect(store.accept(diagnostics)).toBe(true);
     expect(store.snapshot()?.runtimeDiagnostics).toEqual([
-      { ownerCommit: priorOwnerCommit, projection: 'Worker entity diagnostics' },
+      { ownerCommit: priorOwnerCommit, projection: 'Worker entity diagnostics',
+      },
     ]);
   });
 

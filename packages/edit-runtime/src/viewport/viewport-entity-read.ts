@@ -21,7 +21,7 @@
 //              nested entities lag by tens of units and end up mispositioned.
 
 import type { World, EntityHandle } from '@forgeax/engine-ecs';
-import { ChildOf, Transform } from '@forgeax/engine-scene';
+import { ChildOf, Transform, GlobalTransform } from '@forgeax/engine-scene';
 import type { Quat } from '@forgeax/engine-math';
 import { mat4, vec3, quat as quatMath } from '@forgeax/engine-math';
 import { entComponent, quatToEuler, readEntityVisibility, readVisibilityIntent } from '@forgeax/editor-core';
@@ -73,7 +73,8 @@ export function readWorldTransform(world: World, handle: EntityHandle): EditorTr
   const r = world.get(handle, Transform);
   if (!r.ok) return undefined;
   const t = r.value as Record<string, unknown>;
-  const w = t.world as ArrayLike<number> | undefined;
+  const global = world.get(handle, GlobalTransform);
+  const w = global.ok ? global.value.world : undefined;
   if (!w || w.length < 16) return readLocalTransform(world, handle);
   const e = quatToEuler(ax(t.quat, 0, 0), ax(t.quat, 1, 0), ax(t.quat, 2, 0), ax(t.quat, 3, 1));
   return {
@@ -102,7 +103,7 @@ export function worldPositionToLocal(world: World, handle: EntityHandle, target:
   if (!childOf.ok) return target;
   const parent = (childOf.value as { parent?: number }).parent;
   if (parent === undefined) return target;
-  const parentTransform = world.get(parent as EntityHandle, Transform);
+  const parentTransform = world.get(parent as EntityHandle, GlobalTransform);
   if (!parentTransform.ok) return target;
   const parentWorld = (parentTransform.value as Record<string, unknown>).world as ArrayLike<number> | undefined;
   if (!parentWorld || parentWorld.length < 16) return target;
@@ -115,7 +116,8 @@ export function readWorldQuat(world: World, handle: EntityHandle): [number, numb
   const r = entComponent(world, handle, 'Transform');
   if (!r.ok) return null;
   const t = r.value as Record<string, unknown>;
-  const w = t.world as ArrayLike<number> | undefined;
+  const global = world.get(handle, GlobalTransform);
+  const w = global.ok ? global.value.world : undefined;
   if (!w || w.length < 16) {
     const q = t.quat as ArrayLike<number> | undefined;
     if (!q || q.length < 4) return null;

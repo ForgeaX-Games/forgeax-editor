@@ -4,11 +4,12 @@ import { createEngineExecutionDiagnostics } from '../execution-diagnostics-provi
 
 function report(patch: Partial<ExecutionReport> = {}): ExecutionReport {
   return {
-    schemaVersion: 1,
-    requestedTier: 'auto',
-    actualTier: 'engine-worker',
-    selectionReason: 'auto-engine-worker',
-    sharedEvidencePassed: false,
+    schemaVersion: 2,
+    workers: {
+      engine: { requested: 'auto', enabled: true, reason: 'enabled', missingCapabilities: [] },
+      render: { requested: 'auto', enabled: false, reason: 'capability-unavailable', missingCapabilities: ['workerWebGpu'] },
+      kernels: { requested: 'auto', enabled: false, reason: 'capability-unavailable', missingCapabilities: ['sharedArrayBuffer'] },
+    },
     capabilities: {
       worker: { available: true, reason: 'available' },
       offscreenCanvas: { available: true, reason: 'available' },
@@ -21,6 +22,7 @@ function report(patch: Partial<ExecutionReport> = {}): ExecutionReport {
     engine: { realm: 'worker', health: 'running' },
     world: { identity: 'world-1', health: 'healthy', partialWrite: false, retryable: false },
     kernelDispatch: { eligible: false, usedShared: false, reason: 'no-eligible-kernel', dispatched: 0, completed: 0 },
+    frame: { submitted: 0, completed: 0, inFlight: 0, highWater: 0, throttledTicks: 0 },
     performance: { hostFrameMs: null, engineUpdateMs: null, kernelWaitMs: null, hostAudioMs: null },
     audio: { owner: 'host', contextState: 'suspended', activeSourceCount: 0, lastError: null },
     fault: null,
@@ -36,14 +38,17 @@ describe('engine execution diagnostics projection', () => {
 
     expect(bridge.provider.snapshot()[0]).toMatchObject({
       severity: 'info',
-      code: 'engine-execution-engine-worker',
-      title: 'Engine execution: engine-worker',
+      code: 'engine-execution-worker',
+      title: 'Engine execution: worker',
       detail: { unavailableCapabilities: ['crossOriginIsolated', 'sharedArrayBuffer'] },
     });
 
-    current = report({ actualTier: 'shared', selectionReason: 'auto-shared', sharedEvidencePassed: true });
-    expect(bridge.report().actualTier).toBe('shared');
-    expect(bridge.provider.snapshot()[0]?.title).toBe('Engine execution: shared');
+    current = report({
+      engine: { realm: 'host', health: 'running' },
+      workers: { ...current.workers, engine: { requested: false, enabled: false, reason: 'disabled', missingCapabilities: [] } },
+    });
+    expect(bridge.report().engine.realm).toBe('host');
+    expect(bridge.provider.snapshot()[0]?.title).toBe('Engine execution: host');
   });
 
   test('projects producer faults as retry-aware errors', () => {

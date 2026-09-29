@@ -124,6 +124,7 @@ export interface SourceAuthoringRuntimeDependencies {
   readonly catalog: () => readonly SourceCatalogRow[];
   readonly readMetaSidecar: (metaPath: string) => ReturnType<typeof assetIO.readMetaSidecar>;
   readonly triggerCook: (guid: string, signal?: AbortSignal) => ReturnType<typeof assetIO.triggerCook>;
+  readonly reconcileCatalog?: () => Promise<unknown>;
   readonly activeSceneReferences: () => readonly ActiveSceneSourceReference[];
   readonly observePublication: NonNullable<SourceAuthoringRuntime['observePublication']>;
   readonly preflightSource?: (input: {
@@ -132,6 +133,18 @@ export interface SourceAuthoringRuntimeDependencies {
   }) => Promise<SourceAuthoringProducerPreflight>;
   readonly structuredOperations?: readonly SourceAuthoringOperationDescriptor[];
   readonly executeStructured?: (op: EditorOp) => Promise<SourceAuthoringRuntimeResult>;
+}
+
+export async function reconcileCatalogAfterCookFailure(
+  reconcileCatalog: (() => Promise<unknown>) | undefined,
+): Promise<void> {
+  if (reconcileCatalog === undefined) return;
+  try {
+    await reconcileCatalog();
+  } catch {
+    // Preserve the producer's structured cook error. Catalog reconciliation is
+    // best-effort here; the normal recovery action remains catalog.reconcile.
+  }
 }
 
 function activeSceneReferencesFromGateway(): readonly ActiveSceneSourceReference[] {
@@ -316,6 +329,7 @@ export function createSourceAuthoringRuntime(
     catalog: () => gateway.assetCatalog() as readonly SourceCatalogRow[],
     readMetaSidecar: (metaPath) => assetIO.readMetaSidecar(metaPath),
     triggerCook: (guid, signal) => assetIO.triggerCook(guid, signal),
+    reconcileCatalog: () => gateway.doc.registry?.reconcileCatalog?.() ?? Promise.resolve(),
     activeSceneReferences: activeSceneReferencesFromGateway,
     observePublication: observeSourcePublication,
     ...overrides,
@@ -330,6 +344,7 @@ export function createSourceAuthoringRuntime(
       const guid = (op as { readonly guid: string }).guid;
       const cooked = await deps.triggerCook(guid, signal);
       if (cooked.ok) return cooked.value;
+      await reconcileCatalogAfterCookFailure(deps.reconcileCatalog);
       const error = new Error(cooked.error.hint) as Error & { readonly code?: string };
       Object.defineProperty(error, 'code', { value: 'asset-cook-failed' });
       throw error;

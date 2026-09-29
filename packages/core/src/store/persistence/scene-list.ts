@@ -262,7 +262,7 @@ export function createSceneList(deps: SceneListDeps): SceneList {
    * raw object because forge.json may carry fields outside the strict engine
    * project schema; publish the in-memory read model only after read-back. */
   async function setDefaultScene(sceneGuid: string, requestId: string): Promise<SetDefaultSceneEffect> {
-    if (ctx.currentSceneId === 'default') {
+    if (ctx.currentSceneId === 'default' && ctx.currentSceneGuid === null) {
       return {
         ok: false,
         error: {
@@ -672,7 +672,13 @@ export function createSceneList(deps: SceneListDeps): SceneList {
     dirtyPolicy?: SceneSwitchDirtyPolicy,
     origin: CommandOrigin = 'human',
   ): Promise<boolean> {
-    if (id === ctx.currentSceneFile) return true;
+    if (
+      id === ctx.currentSceneFile
+      && (
+        ctx.currentSceneGuid === null
+        || ctx.sceneList.find((scene) => scene.id === id)?.guid === ctx.currentSceneGuid
+      )
+    ) return true;
     if (!ctx.sceneList.some((s) => s.id === id)) return false;
     if (ctx.isDirty) {
       if (dirtyPolicy === 'save') {
@@ -696,6 +702,12 @@ export function createSceneList(deps: SceneListDeps): SceneList {
       const loadedFromDisk = await deps.loadDocFromDisk();
       const loaded = loadedFromDisk || deps.loadDocFromStorage();
       if (!loaded) {
+        console.warn('[editor-core] scene switch load returned false:', JSON.stringify({
+          id,
+          currentSceneFile: ctx.currentSceneFile,
+          currentSceneGuid: ctx.currentSceneGuid,
+          sceneList: ctx.sceneList,
+        }));
         // `loadSceneByGuid` resolves bytes before tearing down the old authored
         // tree, so a failed load can safely restore the previous identity and
         // let the Gateway publish a terminal failure instead of a false success.

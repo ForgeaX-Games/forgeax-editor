@@ -10,7 +10,7 @@
 // renders, never WHAT it does.
 
 import { useEffect, useSyncExternalStore, type ReactElement } from 'react';
-import { useHost } from '@forgeax/interface/core/app-shell';
+import { useHost } from '@forgeax/app-shell/application';
 import { Bone, Box, Focus, ListTree, RotateCcw } from 'lucide-react';
 import './mesh-preview-toolbar.css';
 

@@ -328,7 +328,7 @@ function collectSubtree(handle: EntityHandle): SceneAsset | null {
 // offsets can preserve the clipboard's relative layout. The root is the entity
 // with no ChildOf (rootsToSceneAsset strips ChildOf on roots).
 function assetRootPos(asset: SceneAsset): [number, number, number] {
-  for (const e of asset.entities) {
+  for (const e of Object.values(asset.entities)) {
     const comps = e.components as Record<string, Record<string, unknown>> | undefined;
     if (comps && !comps.ChildOf) {
       const pos = (comps.Transform?.pos as number[] | undefined) ?? [0, 0, 0];

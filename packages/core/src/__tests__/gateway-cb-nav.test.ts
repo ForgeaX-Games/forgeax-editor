@@ -79,9 +79,9 @@ describe('AC-3.2: setCBPath dispatch records in ledger and origins', () => {
     expect(gw.origins[gw.origins.length - 1]).toBe('human');
   });
 
-  it('getCBNavState() reflects path after dispatch', () => {
+  it('getCBNavState() reflects canonical path after dispatch', () => {
     gw.dispatch({ kind: 'setCBPath', path: '/state-check' });
-    expect(getCBNavState().path).toBe('/state-check');
+    expect(getCBNavState().path).toBe('state-check');
   });
 
   it('duplicate setCBPath dispatch still appends to ledger (dedup only in stack)', () => {

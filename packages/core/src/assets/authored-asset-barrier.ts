@@ -73,11 +73,12 @@ function revisionDigest(row: CatalogRevisionFacts | undefined): string | undefin
   return typeof digest === 'string' ? digest : undefined;
 }
 
-function publicationLocator(row: CatalogRevisionFacts | undefined): Record<string, unknown> | undefined {
+function publicationLocator(row: CatalogRevisionFacts | undefined,
+): Record<string, unknown> | undefined {
   if (row?.publication === null || typeof row?.publication !== 'object') return undefined;
   const current = (row.publication as { readonly current?: unknown }).current;
   return current !== null && typeof current === 'object'
-    ? current as Record<string, unknown>
+    ? (current as Record<string, unknown>)
     : undefined;
 }
 
@@ -88,6 +89,7 @@ async function refreshPublicationCatalog(registry: AssetRegistry): Promise<void>
   // catalog, not its stale flag, determines which refresh contract owns it.
   if (registry.catalogSnapshot?.() !== undefined) {
     await registry.reconcileCatalog().catch(() => undefined);
+    await registry.refreshCatalog?.().catch(() => false);
   } else {
     await registry.refreshCatalog?.().catch(() => false);
   }
@@ -115,25 +117,29 @@ async function packBodyContainsGuid(packageUrl: string, key: string): Promise<bo
     const response = await fetch(packageUrl, { cache: 'no-store' });
     if (!response.ok) return false;
     const body = (await response.json()) as { assets?: { guid?: unknown }[] };
-    return Array.isArray(body.assets)
-      && body.assets.some((asset) => typeof asset?.guid === 'string' && asset.guid.toLowerCase() === key);
+    return (
+      Array.isArray(body.assets)
+      && body.assets.some((asset) => typeof asset?.guid === 'string' && asset.guid.toLowerCase() === key,
+      )
+    );
   } catch {
     return false;
   }
 }
 
 /** Resolve a catalog row candidate; callers must prove the pack body before pinning cache. */
-function resolveVisibleCatalogRow(registry: AssetRegistry, key: string): VisibleCatalogRow | undefined {
-  const snapshot = registry.catalogSnapshot?.();
-  if (snapshot !== undefined) {
-    // A payload cache cannot override the current scoped publication, including
-    // a removal. In particular its abbreviated rows omit revision facts.
-    return snapshot.entries.find((entry) => entry.guid.toLowerCase() === key);
-  }
+function resolveVisibleCatalogRow(registry: AssetRegistry, key: string,
+): VisibleCatalogRow | undefined {
+  const snapshotRow = registry.catalogSnapshot?.()?.entries.find((entry) => entry.guid.toLowerCase() === key);
   const cached = registry.packIndexCache?.get(key) as VisibleCatalogRow | undefined;
-  if (cached !== undefined && typeof cached.packageUrl === 'string' && cached.packageUrl.length > 0) {
-    return cached;
+  if (registry.runtimeBinding !== undefined) {
+    // Preserve the bound transport URL while retaining the replica revision facts.
+    return cached !== undefined && typeof cached.packageUrl === 'string'
+      ? { ...snapshotRow, ...cached }
+      : undefined;
   }
+  if (snapshotRow !== undefined && typeof snapshotRow.packageUrl === 'string' && snapshotRow.packageUrl.length > 0) return snapshotRow;
+  if (cached !== undefined && typeof cached.packageUrl === 'string' && cached.packageUrl.length > 0) return cached;
   const listed = registry.listCatalog().find((entry) => entry.guid.toLowerCase() === key);
   if (listed !== undefined && typeof listed.packageUrl === 'string' && listed.packageUrl.length > 0) {
     return listed;
@@ -149,7 +155,7 @@ function rowMatchesExpectation(
   const currentPublication = publicationLocator(row);
   const revisionChanged =
     expectation.previousRevision === undefined ||
-    currentRevision !== undefined && currentRevision !== expectation.previousRevision;
+    (currentRevision !== undefined && currentRevision !== expectation.previousRevision);
   const publicationChanged =
     expectation.previousPublication === undefined ||
     currentPublication === undefined ||
@@ -218,7 +224,8 @@ export function createAuthoredAssetCatalogBarrier(
       await sleep(rowPollMs);
     }
     if (packageUrl === null) {
-      throw new Error(`Asset catalog did not expose imported GUID ${guid} (pack-index row with packageUrl) before the visibility deadline.`);
+      throw new Error(`Asset catalog did not expose imported GUID ${guid} (pack-index row with packageUrl) before the visibility deadline.`,
+      );
     }
 
     // Phase 3 — registry LOAD succeeds from the (re-fetched) Pack v2 body.
@@ -239,6 +246,8 @@ export function createAuthoredAssetCatalogBarrier(
       lastError = loaded.error?.code ?? 'unknown';
       await sleep(bodyPollMs);
     }
-    throw new Error(`Asset catalog row ${guid} was visible and present in ${packageUrl} but loadByGuid never succeeded (last load error: ${lastError ?? 'unknown'}).`);
+    throw new Error(
+      `Asset catalog row ${guid} was visible and present in ${packageUrl} but loadByGuid never succeeded (last load error: ${lastError ?? 'unknown'}).`,
+    );
   };
 }

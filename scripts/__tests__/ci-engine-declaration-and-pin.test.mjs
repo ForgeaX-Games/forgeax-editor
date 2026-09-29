@@ -8,13 +8,20 @@ const workflow = readFileSync(resolve(scriptsDir, '../../.github/workflows/ci.ym
 const pinGate = readFileSync(resolve(scriptsDir, '../check-submodule-pins.mjs'), 'utf8');
 
 describe('fresh CI Engine closure', () => {
-  it('delegates Engine package build and correctness to the exact-SHA Engine CI artifact', () => {
+  it('builds the exact pinned Engine source through its canonical producer', () => {
     const producerStart = workflow.indexOf('  prerequisite-release:');
     const producerEnd = workflow.indexOf('\n  docs-policy:', producerStart);
     const producer = workflow.slice(producerStart, producerEnd);
-    expect(producer).toContain('scripts/ci/hydrate-engine-artifact.mjs');
-    expect(producer).toContain('ENGINE_WORKFLOW_PATH: .github/workflows/ci.yml');
-    expect(producer).toContain('submodules: true');
+    expect(producer).toContain('./packages/engine/.github/actions/editor-prerequisite-build');
+    expect(producer).toContain('engine-sha: ${{ steps.engine_identity.outputs.sha }}');
+    expect(producer).toContain('payload-classes: engine-dist,wgpu-wasm,fbx-wasm');
+    expect(producer).toContain('output: ${{ runner.temp }}/forgeax-engine-prerequisite-build');
+    expect(producer).toContain('submodules: recursive');
+    expect(producer).not.toContain('actions: write');
+    expect(producer).not.toContain('GH_TOKEN:');
+    expect(producer).not.toContain('ENGINE_REPOSITORY');
+    expect(producer).not.toContain('ENGINE_WORKFLOW_PATH');
+    expect(producer).not.toContain('hydrate-engine-artifact.mjs');
     expect(producer).not.toContain('pnpm -r --filter');
     expect(producer).not.toContain('tsc -b');
     expect(producer).not.toContain('Build wgpu-wasm');
@@ -25,7 +32,8 @@ describe('fresh CI Engine closure', () => {
     expect(workflow).toContain('payload/wgpu-wasm');
     expect(workflow).toContain('Typecheck (all editor packages)');
     expect(workflow).toContain('run typecheck');
-    expect(workflow).toContain('core-build artifact selected by the exact `packages/engine` gitlink SHA');
+    expect(workflow).toContain('prerequisite built from the exact `packages/engine` gitlink SHA');
+    expect(workflow).not.toContain('Engine core-build artifact');
   });
 
   it('fetches the shallow Engine main history before checking its baseline', () => {

@@ -1,8 +1,8 @@
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { ScriptablePackDefinition } from '@forgeax/engine-pack/source';
+import { definePackageId, type ScriptablePackDefinition } from '@forgeax/engine-pack/source';
 import type { SceneAsset } from '@forgeax/engine-types';
 import { ok } from '@forgeax/engine-types';
-import { createShardMesh, material } from './procedural-showcase.pack-lib.ts';
+import { createShardMesh, material, SAMPLE_SCENE_COMPONENTS } from './procedural-showcase.pack-lib.ts';
 
 function guid(value: string) {
   const parsed = AssetGuid.parse(value);
@@ -11,49 +11,44 @@ function guid(value: string) {
 }
 
 export const INPUT_ASSET_IDS = {
-  'mesh/template-shard': { guid: guid('019ffdb4-0000-7000-8000-000000000001'), kind: 'mesh', name: 'Scriptable Input / Template Shard' },
-  'material/accent': { guid: guid('019ffdb4-0000-7000-8000-000000000002'), kind: 'material', name: 'Scriptable Input / Accent' },
-  'mesh/pylon': { guid: guid('019ffdb4-0000-7000-8000-000000000003'), kind: 'mesh', name: 'Scriptable Input / Pylon' },
-  'scene/crystal-cluster': { guid: guid('019ffdb4-0000-7000-8000-000000000004'), kind: 'scene', name: 'Scriptable Input / Crystal Cluster' },
+  'mesh/template-shard': { guid: guid('3e915dea-1871-5b8d-b182-e4c8d1663194'), kind: 'mesh', name: 'Scriptable Input / Template Shard' },
+  'material/accent': { guid: guid('b6b811da-3b1e-5087-96c6-d5f835fbddb3'), kind: 'material', name: 'Scriptable Input / Accent' },
+  'mesh/pylon': { guid: guid('0e8300db-2525-57c4-aefd-c7309fe02bbd'), kind: 'mesh', name: 'Scriptable Input / Pylon' },
+  'scene/crystal-cluster': { guid: guid('73f94bbf-1b57-58d1-afbf-023bdaab0b6d'), kind: 'scene', name: 'Scriptable Input / Crystal Cluster' },
 } as const;
-
-const assets = INPUT_ASSET_IDS;
 
 const CRYSTAL_CLUSTER: SceneAsset = {
   kind: 'scene',
-  entities: [
-    {
-      localId: 0 as never,
+  entities: {
+    'entity-0': {
       components: {
         Name: { value: 'Crystal Cluster Root' },
         Transform: { pos: [0, 0.4, 0], quat: [0, 0, 0, 1], scale: [1.2, 1.2, 1.2] },
-        MeshFilter: { assetHandle: '019ffdb4-0000-7000-8000-000000000003' },
-        MeshRenderer: { materials: ['019ffdb4-0000-7000-8000-000000000002'] },
+        MeshFilter: { assetHandle: '0e8300db-2525-57c4-aefd-c7309fe02bbd' },
+        MeshRenderer: { materials: ['b6b811da-3b1e-5087-96c6-d5f835fbddb3'] },
       },
     },
-    {
-      localId: 1 as never,
+    'entity-1': {
       components: {
         Name: { value: 'Crystal Cluster Child' },
         Transform: { pos: [0.55, 0.2, 0], quat: [0, 0, 0, 1], scale: [0.65, 0.65, 0.65] },
-        ChildOf: { parent: 0 },
-        MeshFilter: { assetHandle: '019ffdb4-0000-7000-8000-000000000001' },
-        MeshRenderer: { materials: ['019ffdb4-0000-7000-8000-000000000002'] },
+        ChildOf: { parent: 'entity-0' },
+        MeshFilter: { assetHandle: '3e915dea-1871-5b8d-b182-e4c8d1663194' },
+        MeshRenderer: { materials: ['b6b811da-3b1e-5087-96c6-d5f835fbddb3'] },
       },
     },
-  ],
+  },
 };
 
 export default {
-  schemaVersion: '1.0.0',
-  packageId: guid('019ffdb4-0000-7000-8000-000000000000'),
+  schemaVersion: '2.0.0',
+  packageId: definePackageId('019ffdb4-0000-7000-8000-000000000000'),
   name: 'Sample Scriptable Inputs',
-  assets,
-  externalAssets: {},
+  sceneComponents: SAMPLE_SCENE_COMPONENTS,
   build: () => ok({
     'mesh/template-shard': createShardMesh(1),
     'material/accent': material([0.48, 0.22, 0.95, 1], 0.25, 0.28),
-    'mesh/pylon': createShardMesh(0.62, '019ffdb4-0000-7000-8000-000000000002'),
+    'mesh/pylon': createShardMesh(0.62, 'b6b811da-3b1e-5087-96c6-d5f835fbddb3'),
     'scene/crystal-cluster': CRYSTAL_CLUSTER,
   }),
-} satisfies ScriptablePackDefinition<typeof assets>;
+} satisfies ScriptablePackDefinition;

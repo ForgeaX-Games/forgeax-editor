@@ -124,6 +124,10 @@ export function colorForFileFamily(family: CBFileFamily): string {
   return FILE_FAMILY_COLORS[family] ?? FILE_FAMILY_COLORS.other;
 }
 
+export function colorForFolder(): string {
+  return FILE_FAMILY_COLORS.dir;
+}
+
 export function colorForAssetKind(kind: string): string {
   return ASSET_KIND_COLORS[kind] ?? 'var(--text-mute, rgba(255, 255, 255, 0.30))';
 }

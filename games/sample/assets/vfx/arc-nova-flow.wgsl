@@ -10,9 +10,6 @@ struct VertexInput {
   @location(6) up: vec3<f32>,
   @location(7) forward: vec3<f32>,
   @location(8) particleColor: vec4<f32>,
-  @location(9) baseColor: vec4<f32>,
-  @location(10) emissiveIntensity: vec4<f32>,
-  @location(11) surface: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -27,7 +24,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
   var output: VertexOutput;
   let offset = input.right * input.position.x + input.up * input.position.y + input.forward * input.position.z;
   output.position = vec4<f32>(input.center + offset, 1.0);
-  output.color = input.particleColor * input.baseColor * material.tint;
+  output.color = input.particleColor * material.tint;
   output.uv = input.uv;
   output.local = input.uv * 2.0 - vec2<f32>(1.0);
   return output;

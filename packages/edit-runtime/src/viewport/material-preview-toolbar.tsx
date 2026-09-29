@@ -11,7 +11,7 @@
 // the header only decides WHERE the control renders, never WHAT it does.
 
 import { useEffect, useSyncExternalStore, type ReactElement } from 'react';
-import { useHost } from '@forgeax/interface/core/app-shell';
+import { useHost } from '@forgeax/app-shell/application';
 import {
   DropdownMenu,
   DropdownMenuContent,

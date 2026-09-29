@@ -30,14 +30,12 @@ const expected = {
   admitted: {
     editorSha: 'a'.repeat(40),
     engineSha: 'b'.repeat(40),
-    interfaceSha: 'c'.repeat(40),
     platformIoSha: 'd'.repeat(40),
     assetsSha: 'e'.repeat(40),
   },
   admittedPins: {
     'forgeax-editor-assets': 'e'.repeat(40),
     'packages/engine': 'b'.repeat(40),
-    'packages/interface': 'c'.repeat(40),
     'packages/platform-io': 'd'.repeat(40),
   },
   unitId: 'browser-release-unit-a',
@@ -143,6 +141,44 @@ function createTestAdmission(directory) {
   writeFileSync(path, `${JSON.stringify(created.envelope)}\n`);
   return {path, expected: admissionExpected(path, {}) .value};
 }
+
+test('admission preserves remaining recursive pins without vendored Interface provenance', () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'forgeax-interface-admission-'));
+  const input = JSON.parse(readFileSync(resolve('scripts/ci/fixtures/editor-ci-contract-envelope-cases.json'), 'utf8')).approvedInput;
+  assert.equal(input.submodulePins.some((pin) => pin.path === 'packages/interface'), false);
+  input.submodulePins.push(
+    {path: 'forgeax-editor-assets', sha: 'e'.repeat(40)},
+    {path: 'packages/platform-io', sha: 'd'.repeat(40)},
+    {path: 'packages/engine/vendor/third-party', sha: 'f'.repeat(40)},
+  );
+  const created = createAdmissionEnvelope(input);
+  assert.equal(created.ok, true, JSON.stringify(created));
+  const path = resolve(directory, 'admission.json');
+  writeFileSync(path, `${JSON.stringify(created.envelope)}\n`);
+  const result = admissionExpected(path, {});
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(result.value.admitted, {
+    editorSha: input.sourceSha,
+    engineSha: '1'.repeat(40),
+    platformIoSha: 'd'.repeat(40),
+    assetsSha: 'e'.repeat(40),
+  });
+  assert.deepEqual(result.value.admittedPins, Object.fromEntries(input.submodulePins.map((pin) => [pin.path, pin.sha])));
+  assert.equal(Object.hasOwn(result.value.admittedPins, 'packages/interface'), false);
+  for (const [pinPath, field] of [
+    ['packages/engine', 'engineSha'],
+    ['packages/platform-io', 'platformIoSha'],
+    ['forgeax-editor-assets', 'assetsSha'],
+  ]) {
+    const missing = createAdmissionEnvelope({...input, submodulePins: input.submodulePins.filter((pin) => pin.path !== pinPath)});
+    assert.equal(missing.ok, true, JSON.stringify(missing));
+    writeFileSync(path, `${JSON.stringify(missing.envelope)}\n`);
+    const rejected = admissionExpected(path, {});
+    assert.equal(rejected.ok, false, pinPath);
+    assert.equal(rejected.error.code, 'measurement-admission-submodule-pins-invalid');
+    assert.deepEqual(rejected.error.observed.missing, [field]);
+  }
+});
 
 function createTestAttestor(directory) {
   const attestor = createMeasurementAttestor();

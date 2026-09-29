@@ -23,8 +23,8 @@ export interface CompletedFrameHeartbeatSource {
  */
 export function createCompletedFrameHeartbeat(options: {
   readonly heartbeatMs?: number;
-  readonly sampleMs?: number;
-} = {}): (completedAtMs: number) => CompletedFrameHeartbeat | undefined {
+  readonly sampleMs?: number } = {},
+): (completedAtMs: number) => CompletedFrameHeartbeat | undefined {
   const heartbeatMs = options.heartbeatMs ?? 100;
   const sampleMs = options.sampleMs ?? 1000;
   let frames = 0;

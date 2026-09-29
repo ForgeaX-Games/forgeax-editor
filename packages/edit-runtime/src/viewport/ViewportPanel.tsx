@@ -1,4 +1,5 @@
-import { forwardRef, useEffect, useReducer, useSyncExternalStore, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { forwardRef, useEffect, useReducer, useSyncExternalStore, type ButtonHTMLAttributes, type ReactNode,
+} from 'react';
 import {
   Axis3d,
   Box,
@@ -12,9 +13,8 @@ import {
   RotateCcw,
   SlidersHorizontal,
 } from 'lucide-react';
-import type { AppExtension, AppHost } from '@forgeax/interface/core/app-shell/types';
-import { useHost } from '@forgeax/interface/core/app-shell';
-import { APP_EVENTS } from '@forgeax/interface/lib/storageKeys';
+import type { AppExtension, AppHost } from '@forgeax/app-shell/application';
+import { useHost } from '@forgeax/app-shell/application';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -54,11 +54,8 @@ import {
   type ViewportPreferencesPatch,
 } from '@forgeax/editor-core';
 import { getLocale, useTranslation, type Locale } from '@forgeax/editor-core/i18n';
-import {
-  getViewportQuadrant,
-  type DisplayMode,
-  type RunMode,
-} from './viewport-quadrant';
+import { getViewportQuadrant, type DisplayMode,
+  type RunMode } from './viewport-quadrant';
 import { getFps, onFpsChange } from '../fps-store';
 import './viewport-panel.css';
 
@@ -66,6 +63,7 @@ type ContextKeyValue = string | number | boolean;
 type GizmoMode = ReturnType<typeof getGizmoMode>;
 type GizmoSpace = ReturnType<typeof getGizmoSpace>;
 type GizmoPivot = ReturnType<typeof getGizmoPivot>;
+const VIEWPORT_RUN_CHANGED_EVENT = 'forgeax:viewport-run-changed';
 
 function setContextKeys(host: AppHost, values: Record<string, ContextKeyValue>): void {
   for (const [key, value] of Object.entries(values)) host.contextKeys.set(key, value);
@@ -176,12 +174,13 @@ function localViewportStatus(): ViewportStatusProjection {
 }
 
 function isViewportPlaying(status: ViewportStatusProjection): boolean {
-  return status.quadrant.run === 'play'
-    || status.playPhase === 'play'
-    || status.playPhase === 'starting';
+  return (
+    status.quadrant.run === 'play' || status.playPhase === 'play' || status.playPhase === 'starting'
+  );
 }
 
-function syncViewportContext(host: AppHost, status: ViewportStatusProjection, mounted: boolean): void {
+function syncViewportContext(host: AppHost, status: ViewportStatusProjection, mounted: boolean,
+): void {
   if (syncProjectedGizmo(status)) syncEditorContext(host);
   const q = status.quadrant;
   const playing = isViewportPlaying(status);
@@ -193,9 +192,11 @@ function syncViewportContext(host: AppHost, status: ViewportStatusProjection, mo
   if (viewportContextSignatures.get(host) === signature) return;
   viewportContextSignatures.set(host, signature);
   document.documentElement.dataset.forgeaxViewportRunning = String(playing);
-  window.dispatchEvent(new CustomEvent(APP_EVENTS.viewportRunChanged, {
-    detail: { running: playing },
-  }));
+  window.dispatchEvent(
+    new CustomEvent(VIEWPORT_RUN_CHANGED_EVENT, {
+      detail: { running: playing },
+    }),
+  );
   setContextKeys(host, {
     'panel.viewport.mounted': mounted,
     'panel.viewport.run': q.run,
@@ -223,7 +224,9 @@ async function refreshViewportContext(host: AppHost): Promise<void> {
     return;
   }
   try {
-    const envelope = await queryViewportRuntimeProjection<ViewportStatusProjection>({ kind: 'viewport.status' });
+    const envelope = await queryViewportRuntimeProjection<ViewportStatusProjection>({
+      kind: 'viewport.status',
+    });
     if (envelope.status === 'ready' && envelope.value !== null) {
       syncViewportContext(host, envelope.value, true);
       return;
@@ -244,9 +247,12 @@ function syncEditorContext(host: AppHost): void {
     'panel.viewport.dirty': hasPendingDiskSave(),
     'panel.viewport.fps': getFps(),
     'panel.viewport.sceneId': getSceneFile() ?? getSceneId(),
-    'panel.viewport.rhiCaptureAvailable': typeof (globalThis as {
-      __forgeax?: { captureFrame?: unknown };
-    }).__forgeax?.captureFrame === 'function',
+    'panel.viewport.rhiCaptureAvailable':
+      typeof (
+        globalThis as {
+          __forgeax?: { captureFrame?: unknown };
+        }
+      ).__forgeax?.captureFrame === 'function',
   });
 }
 
@@ -283,11 +289,14 @@ function currentText(text: LocalizedText): string {
   return pickText(text, getLocale());
 }
 
-const VISUAL_QUALITY_META: Record<VisualQualityPreset, {
-  readonly swatch: string;
-  readonly name: LocalizedText;
-  readonly desc: LocalizedText;
-}> = {
+const VISUAL_QUALITY_META: Record<
+  VisualQualityPreset,
+  {
+    readonly swatch: string;
+    readonly name: LocalizedText;
+    readonly desc: LocalizedText;
+  }
+> = {
   draft: {
     swatch: '#61afef',
     name: L('草稿', 'Draft'),
@@ -314,13 +323,43 @@ interface LayoutItem {
   readonly active: boolean;
 }
 
-const ACTIVE_LAYOUT: LayoutItem = { id: 'single', icon: 'laySingle', name: L('单视口', 'Single'), cells: 1, active: true };
+const ACTIVE_LAYOUT: LayoutItem = {
+  id: 'single',
+  icon: 'laySingle',
+  name: L('单视口', 'Single'),
+  cells: 1,
+  active: true,
+};
 const LAYOUT_ITEMS: readonly LayoutItem[] = [
   ACTIVE_LAYOUT,
-  { id: 'h2', icon: 'layCols', name: L('左右分屏', 'Side by side'), cells: 2, active: false },
-  { id: 'v2', icon: 'layRows', name: L('上下分屏', 'Stacked'), cells: 2, active: false },
-  { id: 'quad', icon: 'layoutGrid', name: L('四分屏', 'Quad'), cells: 4, active: false },
-  { id: 'triL', icon: 'layTri', name: L('一大两小', '1 + 2'), cells: 3, active: false },
+  {
+    id: 'h2',
+    icon: 'layCols',
+    name: L('左右分屏', 'Side by side'),
+    cells: 2,
+    active: false,
+  },
+  {
+    id: 'v2',
+    icon: 'layRows',
+    name: L('上下分屏', 'Stacked'),
+    cells: 2,
+    active: false,
+  },
+  {
+    id: 'quad',
+    icon: 'layoutGrid',
+    name: L('四分屏', 'Quad'),
+    cells: 4,
+    active: false,
+  },
+  {
+    id: 'triL',
+    icon: 'layTri',
+    name: L('一大两小', '1 + 2'),
+    cells: 3,
+    active: false,
+  },
 ];
 
 interface RhiCaptureResult {
@@ -335,9 +374,11 @@ let rhiCaptureCanceled = false;
 function isRhiCaptureResult(value: unknown): value is RhiCaptureResult {
   if (typeof value !== 'object' || value === null) return false;
   const result = value as Record<string, unknown>;
-  return typeof result.runId === 'string'
-    && typeof result.tapePath === 'string'
-    && typeof result.reportPath === 'string';
+  return (
+    typeof result.runId === 'string' &&
+    typeof result.tapePath === 'string' &&
+    typeof result.reportPath === 'string'
+  );
 }
 
 async function captureRhiFrame(host: AppHost): Promise<void> {
@@ -348,8 +389,11 @@ async function captureRhiFrame(host: AppHost): Promise<void> {
   rhiCaptureInFlight = true;
   rhiCaptureCanceled = false;
   host.contextKeys.set('panel.viewport.rhiCapturing', true);
-  const capture = (globalThis as { __forgeax?: { captureFrame?: (frames: number) => Promise<unknown> } })
-    .__forgeax?.captureFrame;
+  const capture = (
+    globalThis as {
+      __forgeax?: { captureFrame?: (frames: number) => Promise<unknown> };
+    }
+  ).__forgeax?.captureFrame;
   try {
     if (!capture) throw new Error('RHI capture unavailable — start with bun fx start --rhi-debug');
 
@@ -380,7 +424,10 @@ async function captureRhiFrame(host: AppHost): Promise<void> {
 
 function setRunMode(mode: RunMode): void {
   if (mode === 'play') {
-    void dispatchActiveEditorOperation({ kind: 'play', dirtyPolicy: 'last-saved' }).then((result) => {
+    void dispatchActiveEditorOperation({
+      kind: 'play',
+      dirtyPolicy: 'last-saved',
+    }).then((result) => {
       if (!result.ok) console.warn('[viewport-panel] play blocked', result.error);
     });
     return;
@@ -404,8 +451,30 @@ function possessGameFromSceneView(): void {
 
 function openStandalonePreview(): void {
   const slug = getSceneId();
-  const url = slug && slug !== 'default' ? `/preview/?game=${encodeURIComponent(slug)}` : '/preview/';
+  const url =
+    slug && slug !== 'default' ? `/preview/?game=${encodeURIComponent(slug)}` : '/preview/';
   window.open(url, '_blank', 'noopener');
+}
+
+const VIEWPORT_KEYBINDING_SCOPE = 'editor.viewport';
+
+export function registerViewportScopedKeybindings(host: AppHost): Array<() => void> {
+  const deleteKeys =
+    typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
+      ? ['Delete', 'Backspace']
+      : ['Delete'];
+  return [
+    host.keybindings.register({
+      keys: deleteKeys,
+      commandId: 'editor.delete',
+      scope: VIEWPORT_KEYBINDING_SCOPE,
+    }),
+    host.keybindings.register({
+      keys: 'Mod+A',
+      commandId: 'editor.selectAll',
+      scope: VIEWPORT_KEYBINDING_SCOPE,
+    }),
+  ];
 }
 
 function registerViewportCommands(host: AppHost): Array<() => void> {
@@ -413,12 +482,18 @@ function registerViewportCommands(host: AppHost): Array<() => void> {
     host.commands.register({
       id: 'viewport.run.edit',
       title: 'Viewport: Edit mode',
-      execute: () => { setRunMode('edit'); return commandResult(); },
+      execute: () => {
+        setRunMode('edit');
+        return commandResult();
+      },
     }),
     host.commands.register({
       id: 'viewport.run.play',
       title: 'Viewport: Play mode',
-      execute: () => { setRunMode('play'); return commandResult(); },
+      execute: () => {
+        setRunMode('play');
+        return commandResult();
+      },
     }),
     host.commands.register({
       id: 'viewport.run.simulate',
@@ -428,27 +503,42 @@ function registerViewportCommands(host: AppHost): Array<() => void> {
     host.commands.register({
       id: 'viewport.run.stop',
       title: 'Viewport: Stop play mode',
-      execute: () => { setRunMode('edit'); return commandResult(); },
+      execute: () => {
+        setRunMode('edit');
+        return commandResult();
+      },
     }),
     host.commands.register({
       id: 'viewport.display.scene',
       title: 'Viewport: Scene display',
-      execute: () => { setDisplay('scene'); return commandResult(); },
+      execute: () => {
+        setDisplay('scene');
+        return commandResult();
+      },
     }),
     host.commands.register({
       id: 'viewport.display.game',
       title: 'Viewport: Game display',
-      execute: () => { setDisplay('game'); return commandResult(); },
+      execute: () => {
+        setDisplay('game');
+        return commandResult();
+      },
     }),
     host.commands.register({
       id: 'viewport.control.grantGame',
       title: 'Viewport: Possess game controls',
-      execute: () => { possessGameFromSceneView(); return commandResult(); },
+      execute: () => {
+        possessGameFromSceneView();
+        return commandResult();
+      },
     }),
     host.commands.register({
       id: 'viewport.control.releaseGame',
       title: 'Viewport: Eject player controller',
-      execute: () => { releaseGameToSceneView(); return commandResult(); },
+      execute: () => {
+        releaseGameToSceneView();
+        return commandResult();
+      },
     }),
     host.commands.register({
       id: 'viewport.gizmo.select',
@@ -458,37 +548,58 @@ function registerViewportCommands(host: AppHost): Array<() => void> {
     host.commands.register({
       id: 'viewport.gizmo.move',
       title: 'Viewport: Move tool',
-      execute: () => { void dispatchActiveEditorOperation({ kind: 'setGizmoMode', mode: 'translate' }, 'human'); return commandResult(); },
+      execute: () => {
+        void dispatchActiveEditorOperation({ kind: 'setGizmoMode', mode: 'translate' }, 'human');
+        return commandResult();
+      },
     }),
     host.commands.register({
       id: 'viewport.gizmo.rotate',
       title: 'Viewport: Rotate tool',
-      execute: () => { void dispatchActiveEditorOperation({ kind: 'setGizmoMode', mode: 'rotate' }, 'human'); return commandResult(); },
+      execute: () => {
+        void dispatchActiveEditorOperation({ kind: 'setGizmoMode', mode: 'rotate' }, 'human');
+        return commandResult();
+      },
     }),
     host.commands.register({
       id: 'viewport.gizmo.scale',
       title: 'Viewport: Scale tool',
-      execute: () => { void dispatchActiveEditorOperation({ kind: 'setGizmoMode', mode: 'scale' }, 'human'); return commandResult(); },
+      execute: () => {
+        void dispatchActiveEditorOperation({ kind: 'setGizmoMode', mode: 'scale' }, 'human');
+        return commandResult();
+      },
     }),
     host.commands.register({
       id: 'viewport.undo',
       title: 'Viewport: Undo',
-      execute: () => { gateway.undo(); return commandResult(); },
+      execute: () => {
+        gateway.undo();
+        return commandResult();
+      },
     }),
     host.commands.register({
       id: 'viewport.redo',
       title: 'Viewport: Redo',
-      execute: () => { gateway.redo(); return commandResult(); },
+      execute: () => {
+        gateway.redo();
+        return commandResult();
+      },
     }),
     host.commands.register({
       id: 'viewport.rhi.capture',
       title: 'Viewport: Capture RHI frame',
-      execute: async () => { await captureRhiFrame(host); return commandResult(); },
+      execute: async () => {
+        await captureRhiFrame(host);
+        return commandResult();
+      },
     }),
     host.commands.register({
       id: 'viewport.preview.openStandalone',
       title: 'Viewport: Open standalone preview',
-      execute: () => { openStandalonePreview(); return commandResult(); },
+      execute: () => {
+        openStandalonePreview();
+        return commandResult();
+      },
     }),
   ];
 }
@@ -499,7 +610,9 @@ function usePanelContext<T>(key: string, fallback: T): T {
   useDocVersion();
   useEffect(() => {
     const cleanup = host.contextKeys.onChange(key, () => bump());
-    return () => { cleanup(); };
+    return () => {
+      cleanup();
+    };
   }, [host, key]);
   return host.contextKeys.get<T>(key) ?? fallback;
 }
@@ -519,14 +632,10 @@ interface MenuTriggerProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   children: ReactNode;
 }
 
-const MenuTrigger = forwardRef<HTMLButtonElement, MenuTriggerProps>(function MenuTrigger({
-  title,
-  active = false,
-  running = false,
-  className,
-  children,
-  ...props
-}, ref) {
+const MenuTrigger = forwardRef<HTMLButtonElement, MenuTriggerProps>(function MenuTrigger(
+  { title, active = false, running = false, className, children, ...props },
+  ref,
+) {
   return (
     <button
       ref={ref}
@@ -633,7 +742,11 @@ function PopItem({
       aria-disabled={disabled ? 'true' : undefined}
       onClick={() => {
         if (disabled) return;
-        if (onClick) { onClick(); onClose?.(); return; }
+        if (onClick) {
+          onClick();
+          onClose?.();
+          return;
+        }
         if (!command) return;
         executeViewportCommand(host, command);
         onClose?.();
@@ -812,9 +925,12 @@ function FpsStatusControl(): ReactNode {
 function VfxReplayControl(): ReactNode {
   const { i18n } = useTranslation();
   const selection = useSelection();
-  const enabled = selection !== null
-    && 'ParticleEffectPlayer' in entComponents(gateway.activeWorld, selection);
-  const title = pickText(L('从头预览所选 VFX', 'Replay selected VFX from tick zero'), i18n.language);
+  const enabled =
+    selection !== null && 'ParticleEffectPlayer' in entComponents(gateway.activeWorld, selection);
+  const title = pickText(
+    L('从头预览所选 VFX', 'Replay selected VFX from tick zero'),
+    i18n.language,
+  );
 
   return (
     <TooltipProvider delayDuration={350} skipDelayDuration={100}>
@@ -828,7 +944,10 @@ function VfxReplayControl(): ReactNode {
             disabled={!enabled}
             onClick={() => {
               if (selection !== null) {
-                void dispatchActiveEditorOperation({ kind: 'replayParticleEffect', entity: selection }, 'human');
+                void dispatchActiveEditorOperation(
+                  { kind: 'replayParticleEffect', entity: selection },
+                  'human',
+                );
               }
             }}
           >
@@ -853,11 +972,42 @@ function CoordinateMenuControl(): ReactNode {
         {space === 'local' ? <Box size={15} /> : <Globe size={15} />}
       </ToolMenuTrigger>
       <PopPanel title={pickText(L('坐标系', 'Coordinate space'), locale)} width={180}>
-        <PopItem icon={<Globe size={14} />} label={pickText(L('世界', 'World'), locale)} active={space === 'world'} onClick={() => { void dispatchActiveEditorOperation({ kind: 'setGizmoSpace', space: 'world' }, 'human'); }} />
-        <PopItem icon={<Box size={14} />} label={pickText(L('本地', 'Local'), locale)} active={space === 'local'} onClick={() => { void dispatchActiveEditorOperation({ kind: 'setGizmoSpace', space: 'local' }, 'human'); }} />
+        <PopItem
+          icon={<Globe size={14} />}
+          label={pickText(L('世界', 'World'), locale)}
+          active={space === 'world'}
+          onClick={() => {
+            void dispatchActiveEditorOperation({ kind: 'setGizmoSpace', space: 'world' }, 'human');
+          }}
+        />
+        <PopItem
+          icon={<Box size={14} />}
+          label={pickText(L('本地', 'Local'), locale)}
+          active={space === 'local'}
+          onClick={() => {
+            void dispatchActiveEditorOperation({ kind: 'setGizmoSpace', space: 'local' }, 'human');
+          }}
+        />
         <PopSeparator />
-        <PopItem icon={<Crosshair size={14} />} label={pickText(L('多选中心点', 'Selection center'), locale)} active={pivot === 'center'} onClick={() => { void dispatchActiveEditorOperation({ kind: 'setGizmoPivot', pivot: 'center' }, 'human'); }} />
-        <PopItem icon={<MousePointer2 size={14} />} label={pickText(L('最后选中物体', 'Last selected'), locale)} active={pivot === 'lastSelected'} onClick={() => { void dispatchActiveEditorOperation({ kind: 'setGizmoPivot', pivot: 'lastSelected' }, 'human'); }} />
+        <PopItem
+          icon={<Crosshair size={14} />}
+          label={pickText(L('多选中心点', 'Selection center'), locale)}
+          active={pivot === 'center'}
+          onClick={() => {
+            void dispatchActiveEditorOperation({ kind: 'setGizmoPivot', pivot: 'center' }, 'human');
+          }}
+        />
+        <PopItem
+          icon={<MousePointer2 size={14} />}
+          label={pickText(L('最后选中物体', 'Last selected'), locale)}
+          active={pivot === 'lastSelected'}
+          onClick={() => {
+            void dispatchActiveEditorOperation(
+              { kind: 'setGizmoPivot', pivot: 'lastSelected' },
+              'human',
+            );
+          }}
+        />
       </PopPanel>
     </DropdownMenu>
   );
@@ -878,8 +1028,18 @@ function SnapMenuControl(): ReactNode {
         <PopToggle label={pickText(L('缩放吸附', 'Scale snap'), locale)} disabled />
         <PopToggle label={pickText(L('表面吸附', 'Surface snap'), locale)} disabled />
         <PopSeparator />
-        <PopRange label={pickText(L('网格步长', 'Grid step'), locale)} value={10} display="10 cm" disabled />
-        <PopRange label={pickText(L('角度步长', 'Angle step'), locale)} value={15} display="15°" disabled />
+        <PopRange
+          label={pickText(L('网格步长', 'Grid step'), locale)}
+          value={10}
+          display="10 cm"
+          disabled
+        />
+        <PopRange
+          label={pickText(L('角度步长', 'Angle step'), locale)}
+          value={15}
+          display="15°"
+          disabled
+        />
       </PopPanel>
     </DropdownMenu>
   );
@@ -890,7 +1050,9 @@ function CameraMenuControl(): ReactNode {
   const locale = i18n.language;
   const prefs = useViewportPreferences();
   const perspective = prefs.projection === 'perspective';
-  const setView = (view: 'perspective' | 'top' | 'bottom' | 'left' | 'right' | 'front' | 'back'): void => {
+  const setView = (
+    view: 'perspective' | 'top' | 'bottom' | 'left' | 'right' | 'front' | 'back',
+  ): void => {
     void dispatchActiveEditorOperation({ kind: 'cameraSetView', view }, 'human');
   };
 
@@ -899,7 +1061,10 @@ function CameraMenuControl(): ReactNode {
       <ToolMenuTrigger title={t(`editor.viewportView.${prefs.activeView}`)} testId="vp-view-label">
         <Camera size={15} />
       </ToolMenuTrigger>
-      <PopPanel title={pickText(L('相机 · 视角与镜头', 'Camera · view & lens'), locale)} testId="vp-view-dropdown">
+      <PopPanel
+        title={pickText(L('相机 · 视角与镜头', 'Camera · view & lens'), locale)}
+        testId="vp-view-dropdown"
+      >
         <PopItem
           icon={<Eye size={14} />}
           testId="vp-view-item-perspective"
@@ -913,14 +1078,61 @@ function CameraMenuControl(): ReactNode {
           label={pickText(L('正交', 'Orthographic'), locale)}
           desc={pickText(L('平行投影 · 无透视形变', 'Parallel projection'), locale)}
           active={prefs.activeView === 'orthographic'}
-          onClick={() => { void dispatchActiveEditorOperation({ kind: 'cameraSetProjection', projection: 'orthographic' }, 'human'); }}
+          onClick={() => {
+            void dispatchActiveEditorOperation(
+              { kind: 'cameraSetProjection', projection: 'orthographic' },
+              'human',
+            );
+          }}
         />
-        <PopItem icon={<Axis3d size={14} />} testId="vp-view-item-top" label={pickText(L('顶视', 'Top'), locale)} desc={pickText(L('正交 · 从上往下', 'Ortho · top-down'), locale)} active={prefs.activeView === 'top'} onClick={() => setView('top')} />
-        <PopItem icon={<Axis3d size={14} />} testId="vp-view-item-bottom" label={pickText(L('底视', 'Bottom'), locale)} desc={pickText(L('正交 · 从下往上', 'Ortho · bottom-up'), locale)} active={prefs.activeView === 'bottom'} onClick={() => setView('bottom')} />
-        <PopItem icon={<Box size={14} />} testId="vp-view-item-front" label={pickText(L('前视', 'Front'), locale)} desc={pickText(L('正交 · 从前', 'Ortho · front'), locale)} active={prefs.activeView === 'front'} onClick={() => setView('front')} />
-        <PopItem icon={<Box size={14} />} testId="vp-view-item-back" label={pickText(L('后视', 'Back'), locale)} desc={pickText(L('正交 · 从后', 'Ortho · back'), locale)} active={prefs.activeView === 'back'} onClick={() => setView('back')} />
-        <PopItem icon={<Box size={14} />} testId="vp-view-item-left" label={pickText(L('左视', 'Left'), locale)} desc={pickText(L('正交 · 从左', 'Ortho · left'), locale)} active={prefs.activeView === 'left'} onClick={() => setView('left')} />
-        <PopItem icon={<Box size={14} />} testId="vp-view-item-right" label={pickText(L('右视', 'Right'), locale)} desc={pickText(L('正交 · 从右', 'Ortho · right'), locale)} active={prefs.activeView === 'right'} onClick={() => setView('right')} />
+        <PopItem
+          icon={<Axis3d size={14} />}
+          testId="vp-view-item-top"
+          label={pickText(L('顶视', 'Top'), locale)}
+          desc={pickText(L('正交 · 从上往下', 'Ortho · top-down'), locale)}
+          active={prefs.activeView === 'top'}
+          onClick={() => setView('top')}
+        />
+        <PopItem
+          icon={<Axis3d size={14} />}
+          testId="vp-view-item-bottom"
+          label={pickText(L('底视', 'Bottom'), locale)}
+          desc={pickText(L('正交 · 从下往上', 'Ortho · bottom-up'), locale)}
+          active={prefs.activeView === 'bottom'}
+          onClick={() => setView('bottom')}
+        />
+        <PopItem
+          icon={<Box size={14} />}
+          testId="vp-view-item-front"
+          label={pickText(L('前视', 'Front'), locale)}
+          desc={pickText(L('正交 · 从前', 'Ortho · front'), locale)}
+          active={prefs.activeView === 'front'}
+          onClick={() => setView('front')}
+        />
+        <PopItem
+          icon={<Box size={14} />}
+          testId="vp-view-item-back"
+          label={pickText(L('后视', 'Back'), locale)}
+          desc={pickText(L('正交 · 从后', 'Ortho · back'), locale)}
+          active={prefs.activeView === 'back'}
+          onClick={() => setView('back')}
+        />
+        <PopItem
+          icon={<Box size={14} />}
+          testId="vp-view-item-left"
+          label={pickText(L('左视', 'Left'), locale)}
+          desc={pickText(L('正交 · 从左', 'Ortho · left'), locale)}
+          active={prefs.activeView === 'left'}
+          onClick={() => setView('left')}
+        />
+        <PopItem
+          icon={<Box size={14} />}
+          testId="vp-view-item-right"
+          label={pickText(L('右视', 'Right'), locale)}
+          desc={pickText(L('正交 · 从右', 'Ortho · right'), locale)}
+          active={prefs.activeView === 'right'}
+          onClick={() => setView('right')}
+        />
         <PopSeparator />
         <PopRange
           label={pickText(L('视野 FOV', 'FOV'), locale)}
@@ -928,7 +1140,7 @@ function CameraMenuControl(): ReactNode {
           min={FOV_MIN}
           max={FOV_MAX}
           step={Math.PI / 180}
-          display={`${Math.round(prefs.fov * 180 / Math.PI)}°`}
+          display={`${Math.round((prefs.fov * 180) / Math.PI)}°`}
           disabled={!perspective}
           onChange={(fov) => patchViewportPreferences({ fov })}
         />
@@ -945,10 +1157,17 @@ function ViewMenuControl(): ReactNode {
 
   return (
     <DropdownMenu>
-      <ToolMenuTrigger title={pickText(L('视图与视觉质量', 'View and visual quality'), locale)} testId="vp-visual-quality-control">
+      <ToolMenuTrigger
+        title={pickText(L('视图与视觉质量', 'View and visual quality'), locale)}
+        testId="vp-visual-quality-control"
+      >
         <Eye size={15} />
       </ToolMenuTrigger>
-      <PopPanel title={pickText(L('视图与视觉质量', 'View and visual quality'), locale)} width={270} align="end">
+      <PopPanel
+        title={pickText(L('视图与视觉质量', 'View and visual quality'), locale)}
+        width={270}
+        align="end"
+      >
         {VISUAL_QUALITY_PRESETS.map((preset) => {
           const meta = VISUAL_QUALITY_META[preset.id];
           return (
@@ -959,7 +1178,10 @@ function ViewMenuControl(): ReactNode {
               label={pickText(meta.name, locale)}
               desc={pickText(meta.desc, locale)}
               onClick={() => {
-                void dispatchActiveEditorOperation({ kind: 'applyVisualQualityPreset', preset: preset.id }, 'human');
+                void dispatchActiveEditorOperation(
+                  { kind: 'applyVisualQualityPreset', preset: preset.id },
+                  'human',
+                );
               }}
             />
           );
@@ -990,10 +1212,16 @@ function LayoutMenuControl(): ReactNode {
 
   return (
     <DropdownMenu>
-      <ToolMenuTrigger title={`${pickText(L('窗口布局 · ', 'Layout · '), locale)}${pickText(ACTIVE_LAYOUT.name, locale)}`}>
+      <ToolMenuTrigger
+        title={`${pickText(L('窗口布局 · ', 'Layout · '), locale)}${pickText(ACTIVE_LAYOUT.name, locale)}`}
+      >
         <LayoutIcon name={ACTIVE_LAYOUT.icon} size={15} />
       </ToolMenuTrigger>
-      <PopPanel title={pickText(L('窗口布局 · 分屏', 'Window layout · split'), locale)} width={216} align="end">
+      <PopPanel
+        title={pickText(L('窗口布局 · 分屏', 'Window layout · split'), locale)}
+        width={216}
+        align="end"
+      >
         {LAYOUT_ITEMS.map((layout) => {
           return (
             <PopItem
@@ -1082,7 +1310,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
   return {
     id: 'editor.viewport-panel-contributions',
     version: '1.0.0',
-    requires: ['commands', 'panelActions', 'panelControls', 'contextKeys'],
+    requires: ['commands', 'keybindings', 'panelActions', 'panelControls', 'contextKeys'],
     setup(ctx) {
       const host = ctx.host;
       syncViewportContext(host, DISCONNECTED_VIEWPORT_STATUS, false);
@@ -1090,6 +1318,7 @@ export function createEditorPanelContributionsExtension(): AppExtension {
       host.contextKeys.set('panel.viewport.rhiCapturing', false);
 
       const cleanups: Array<() => void> = [
+        ...registerViewportScopedKeybindings(host),
         ...registerViewportCommands(host),
         ctx.contributePanelControls([
           { id: 'viewport.vfxReplay', render: () => <VfxReplayControl /> },
@@ -1099,7 +1328,10 @@ export function createEditorPanelContributionsExtension(): AppExtension {
           { id: 'viewport.cameraMenu', render: () => <CameraMenuControl /> },
           { id: 'viewport.viewMenu', render: () => <ViewMenuControl /> },
           { id: 'viewport.layoutMenu', render: () => <LayoutMenuControl /> },
-          { id: 'viewport.settingsMenu', render: () => <SettingsMenuControl /> },
+          {
+            id: 'viewport.settingsMenu',
+            render: () => <SettingsMenuControl />,
+          },
           { id: 'viewport.separator', render: () => <SeparatorControl /> },
         ]),
         ctx.contributePanelActions([
@@ -1337,7 +1569,9 @@ export function createEditorPanelContributionsExtension(): AppExtension {
             enablement: 'panel.viewport.mounted',
           },
         ]),
-        subscribeViewportRuntimeClient(() => { void refreshViewportContext(host); }),
+        subscribeViewportRuntimeClient(() => {
+          void refreshViewportContext(host);
+        }),
         onGizmoModeChange(() => syncEditorContext(host)),
         onFpsChange(() => syncEditorContext(host)),
         onSceneListChange(() => syncEditorContext(host)),
@@ -1352,7 +1586,9 @@ export function createEditorPanelContributionsExtension(): AppExtension {
       const refreshProjectedViewport = (): void => {
         if (viewportRefreshInFlight) return;
         viewportRefreshInFlight = true;
-        void refreshViewportContext(host).finally(() => { viewportRefreshInFlight = false; });
+        void refreshViewportContext(host).finally(() => {
+          viewportRefreshInFlight = false;
+        });
       };
       refreshProjectedViewport();
       const viewportTimer = window.setInterval(refreshProjectedViewport, 250);

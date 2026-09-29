@@ -42,11 +42,11 @@
     }
   },
   "dependencies": {
+    "@forgeax/app-shell": "0.103.0",
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-file-preview": "workspace:*",
     "@forgeax/editor-ui": "workspace:*",
     "@forgeax/engine-ui": "workspace:*",
-    "@forgeax/interface": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@tanstack/react-virtual": "^3.14.3",
     "@tanstack/virtual-core": "^3.17.1",

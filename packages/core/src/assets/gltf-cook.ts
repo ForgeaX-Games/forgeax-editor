@@ -10,8 +10,8 @@
 //
 // WHY this lives on the frontend (not platform-io): the 6-layer model (see
 // architecture/layer-model.ts) classifies every `@forgeax/engine*` package as
-// frontend L1; `platform-io` is backend L1 and `isAllowed(backend → frontend)`
-// is false, so the backend cannot import engine-gltf. The editor (frontend L2)
+// frontend tier; `platform-io` is backend tier and `isAllowed(backend → frontend)`
+// is false, so the backend cannot import engine-gltf. The editor (frontend panel tier)
 // already depends on engine-gltf, and parse-gltf.ts is browser-clean (no
 // `node:` imports), so the cook belongs here.
 // Design: .forgeax-harness/docs/design/gltf-import-meta-ssot-via-toassetpack.md.

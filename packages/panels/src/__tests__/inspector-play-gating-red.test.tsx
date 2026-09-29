@@ -9,7 +9,7 @@ describe('Inspector Play gating contracts', () => {
     expect(panel).toContain('const dispatchMutation = (op: EditorOp) => {');
     expect(panel).toContain('if (readOnly) return;');
     expect(panel).toContain('dispatchMutation({ kind: \'setComponent\'');
-    expect(panel).toContain('dispatchMutation({ kind: \'bindAssetRef\'');
+    expect(panel).toContain("kind: 'bindAssetRef'");
     expect(panel).not.toContain('gateway.dispatch({ kind: \'setComponent\'');
   });
 

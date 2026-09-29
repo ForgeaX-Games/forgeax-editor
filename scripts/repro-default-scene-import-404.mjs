@@ -26,6 +26,7 @@ import net from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
+import { getEditorRuntime } from '../apps/standalone/e2e/editor-runtime.ts';
 import { BUN_EXECUTABLE } from './ci/bun-runtime.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -82,36 +83,30 @@ async function waitForHost(getLog) {
   throw new Error(`standalone host did not become ready\n${getLog().slice(-3000)}`);
 }
 
-async function waitForRuntimeEvalChannel(page) {
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    // Single-realm (in-process) mode: eval channel lives on the main page.
-    try {
-      const mainReady = await page.evaluate(() => (
-        typeof globalThis.__forgeaxEval?.eval === 'function'
-      ));
-      if (mainReady) return page.mainFrame();
-    } catch { /* page may still be loading */ }
-
-    // Legacy iframe mode: eval channel lives in the /editor/ iframe.
-    const frame = page.frames().find((candidate) => {
-      try {
-        return new URL(candidate.url()).pathname.startsWith('/editor/');
-      } catch {
-        return false;
-      }
-    });
-    if (frame) {
-      try {
-        const ready = await frame.evaluate(() => (
-          typeof globalThis.__forgeaxEval?.eval === 'function'
-        ));
-        if (ready) return frame;
-      } catch { /* frame may be navigating during cold startup */ }
-    }
-    await sleep(250);
+async function waitForRuntimeEvalChannel(page, getLog, pageErrors) {
+  try {
+    // Use the same cold-Vite reload boundary as the strict editor smoke. A
+    // ready shell and Catalog do not prove that the Runtime realm has mounted.
+    const runtime = await getEditorRuntime(page);
+    await runtime.waitForFunction(
+      () => typeof globalThis.__forgeaxEval?.eval === 'function',
+      undefined,
+      { timeout: 30_000 },
+    );
+    return runtime;
+  } catch (cause) {
+    const frames = page.frames().map((frame) => ({
+      url: frame.url(),
+      detached: frame.isDetached(),
+    }));
+    throw new Error(`authoritative Runtime eval channel unavailable: ${JSON.stringify({
+      cause: String(cause),
+      pageUrl: page.url(),
+      frames,
+      pageErrors,
+      fxLog: getLog().slice(-5000),
+    })}`);
   }
-  throw new Error('authoritative Runtime eval channel unavailable');
 }
 
 async function main() {
@@ -144,27 +139,32 @@ async function main() {
     ]);
     // fx owns the precise port cleanup; this is only a backstop if the parent
     // died before its SIGTERM handler ran.
-      spawnSync(BUN_EXECUTABLE, ['fx', 'stop'], {
-        cwd: ROOT,
-        stdio: 'ignore',
-        env: {
-          ...process.env,
-          FORGEAX_STANDALONE_PORT: String(HOST_PORT),
-          FORGEAX_EDIT_RUNTIME_PORT: String(EDIT_RUNTIME_PORT),
-          FORGEAX_GAME_API_PORT: String(GAME_API_PORT),
-          FORGEAX_PLAY_RUNTIME_PORT: String(PLAY_RUNTIME_PORT),
-          FORGEAX_RHI_REVIEWER_PORT: String(RHI_REVIEWER_PORT),
-          FORGEAX_BRIDGE_PORT: String(BRIDGE_PORT),
-        },
-      });
+    spawnSync(BUN_EXECUTABLE, ['fx', 'stop'], {
+      cwd: ROOT,
+      stdio: 'ignore',
+      timeout: 15_000,
+      killSignal: 'SIGKILL',
+      env: {
+        ...process.env,
+        FORGEAX_STANDALONE_PORT: String(HOST_PORT),
+        FORGEAX_EDIT_RUNTIME_PORT: String(EDIT_RUNTIME_PORT),
+        FORGEAX_GAME_API_PORT: String(GAME_API_PORT),
+        FORGEAX_PLAY_RUNTIME_PORT: String(PLAY_RUNTIME_PORT),
+        FORGEAX_RHI_REVIEWER_PORT: String(RHI_REVIEWER_PORT),
+        FORGEAX_BRIDGE_PORT: String(BRIDGE_PORT),
+      },
+    });
+    child.stdout.destroy();
+    child.stderr.destroy();
   };
 
+  let browser;
   try {
     await waitForHost(() => log);
 
     const browserChannel = process.env.FORGEAX_SMOKE_BROWSER_CHANNEL;
     const headless = process.env.FORGEAX_BROWSER_HEADLESS !== '0';
-    const browser = await chromium.launch({
+    browser = await chromium.launch({
       headless,
       ...(browserChannel ? { channel: browserChannel } : {}),
       args: [
@@ -227,7 +227,7 @@ async function main() {
     // load well beyond the catalog response, especially on CI runners.
     await page.waitForTimeout(30_000);
 
-    const runtimeFrame = await waitForRuntimeEvalChannel(page);
+    const runtimeFrame = await waitForRuntimeEvalChannel(page, () => log, pageErrors);
     const runtime = await runtimeFrame.evaluate(() => {
       const channel = globalThis.__forgeaxEval;
       if (!channel || typeof channel.eval !== 'function') {
@@ -273,6 +273,7 @@ async function main() {
       return result.ok ? { ok: true, value: result.value } : { ok: false, error: result.error };
     });
     await browser.close();
+    browser = undefined;
 
     const badImport = importResponses.filter((request) => request.startsWith('POST 404 '));
     if (badImport.length > 0) {
@@ -308,6 +309,7 @@ async function main() {
     console.log('defaultScene import fallback: no erroneous POST /__import 404 observed');
     console.log(`standalone scene/material probe: ${JSON.stringify(runtimeValue)}`);
   } finally {
+    await browser?.close().catch(() => {});
     await stop();
   }
 }

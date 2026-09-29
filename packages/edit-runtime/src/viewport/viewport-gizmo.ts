@@ -61,6 +61,14 @@ export interface GizmoDeps {
    *  distance; orthographic: derived from the ortho half-height). Read on
    *  every update, so fly/orbit/zoom changes apply live. */
   getViewScale(anchor: Vec3): number;
+  /** During rotate-axis drag: 0=X, 1=Y, 2=Z — only that ring is drawn. */
+  getActiveRotateAxis?(): number | null;
+}
+
+/** Which ring indices to render while a single rotate axis is being dragged. */
+export function rotateGizmoVisibleRingIndices(focusedAxis: number | null): readonly number[] {
+  if (focusedAxis === null || focusedAxis < 0 || focusedAxis > 2) return [0, 1, 2];
+  return [focusedAxis];
 }
 
 export interface GizmoPool {
@@ -129,8 +137,10 @@ function debugColor(color: readonly [number, number, number]): [number, number, 
  */
 export function createGizmoPool({
   getAnchor, getGizmoMode, getGizmoSpace,
-  isAuxVisible, getViewScale,
+  isAuxVisible, getViewScale, getActiveRotateAxis,
 }: GizmoDeps): GizmoPool {
+  const visibleRotateRings = (): readonly number[] =>
+    rotateGizmoVisibleRingIndices(getActiveRotateAxis?.() ?? null);
   let shape: Shape | null = null;
   let bars: { center: Vec3; half: Vec3 }[] = [];
   let planes: { center: Vec3; half: Vec3 }[] = [];
@@ -250,7 +260,7 @@ export function createGizmoPool({
 
     if (shape === 'rings') {
       const segmentSize = gizmoThickness * 1.3;
-      for (let i = 0; i < AXES.length; i++) {
+      for (const i of visibleRotateRings()) {
         const axis = rotatedAxes[i]!;
         const [u, v] = orthoBasis(axis);
         const color = overlayColorFromSrgb(AXES[i]!.color);
@@ -313,7 +323,7 @@ export function createGizmoPool({
     if (shape === null || !isAuxVisible()) return;
 
     if (shape === 'rings') {
-      for (let i = 0; i < AXES.length; i++) {
+      for (const i of visibleRotateRings()) {
         const axis = rotatedAxes[i]!;
         const [u, v] = orthoBasis(axis);
         const color = debugColor(AXES[i]!.color);

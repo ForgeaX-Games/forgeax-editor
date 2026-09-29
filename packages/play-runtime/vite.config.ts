@@ -5,13 +5,20 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import {
   engineVitePreset,
   ENGINE_EXECUTION_ISOLATION_HEADERS,
+  discoverMaterialPackages,
   resolveGameEngineEntry as resolveSharedGameEngineEntry,
 } from '../../scripts/vite/engine-vite-preset.ts';
 // Vite config bundling externalizes package subpaths, so Node would receive core's
 // raw TypeScript export. Import the same core helper relatively to bundle it first.
-import { resolveGameAssetRoots, resolveGameCatalogRoots, type ResolvedRoot } from '../core/src/asset-roots.ts';
+import {
+  createSourceIdentityFor,
+  resolveGameAssetRoots,
+  resolveGameCatalogRoots,
+  type ResolvedRoot,
+} from '../core/src/asset-roots.ts';
 import { PLAY_RUNTIME_STATIC_WATCH_IGNORES, PLAY_VITE_HMR_PATH } from './src/watch-policy.ts';
-import { createRuntimeScopeController, type RuntimeScopeCommand } from './src/runtime-scope-controller.ts';
+import { createRuntimeScopeController, type RuntimeScopeCommand,
+} from './src/runtime-scope-controller.ts';
 import { setupSingleGameRootFarm, stageSingleGameRootFarm } from './src/active-game-mount.ts';
 import {
   resolveExternalRootFarmRuntimeRoot,
@@ -21,20 +28,44 @@ import {
   resolveDdcBuildCacheRoot,
   resolveDdcRootPolicy,
 } from '../../scripts/vite/ddc-root-policy.ts';
+import { resolveViteFsAllowRoots } from '../../scripts/vite/vite-fs-allow.ts';
+import { listForgeEnginePluginModulePaths } from '../game-plugins/src/index.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const PLAY_PACKAGE_ROOT = resolve(here, '../../node_modules');
+
+/** Particle-effect declaration packs that fail native VFX cook in the Studio shell. */
+function isStudioIgnoredParticlePackJson(norm: string): boolean {
+  if (!norm.includes('/host-games/') || !norm.endsWith('.pack.json')) return false;
+  const base = norm.slice(norm.lastIndexOf('/') + 1);
+  return /^(hit-vfx-effect|charge-vfx-effect|boss-lightning-(flight|contact|telegraph|suite))\.pack\.json$/.test(
+    base,
+  );
+}
+
+/** Paths that must not fail-closed the Studio scoped catalog scan/produce pipeline. */
+function ignoreStudioPackScanPath(path: string): boolean {
+  const norm = path.replace(/\\/g, '/');
+  // game-3d (and current templates) declare scenes/meshes via *.pack.ts — do NOT
+  // blanket-ignore them or defaultScene GUIDs never enter the scoped catalog.
+  if (isStudioIgnoredParticlePackJson(norm)) return true;
+  if (norm.includes('/host-games/') && norm.endsWith('.vfx.wgsl')) return true;
+  if (norm.includes('/host-games/') && norm.includes('target-profile.json')) return true;
+  return false;
+}
+
 // Packaged Vite loads its immutable config from the app resource directory but
 // runs with a writable, project-owned cwd. Every mutable farm must live in that
 // workspace; attempting to recreate it next to the bundled config fails with
 // EROFS on a mounted DMG.
 const runtimeWorkspaceRoot = resolveExternalRootFarmRuntimeRoot(here);
-const PLAY_PACKAGE_ROOT = resolve(here, 'node_modules');
 
 // Keep the public Play test seam while making the actual resolver shared. Play
 // owns a small set of host-only packages (notably engine-npc), so it contributes
 // its package graph as data rather than carrying a second resolver algorithm.
 export function resolveGameEngineEntry(id: string): string | null {
-  return resolveSharedGameEngineEntry(id, { packageRoots: [PLAY_PACKAGE_ROOT] });
+  return resolveSharedGameEngineEntry(id, { packageRoots: [PLAY_PACKAGE_ROOT],
+  });
 }
 
 export function resolvePlayEngineEntry(id: string): string | null {
@@ -58,9 +89,9 @@ const engineWorktreeResolve = {
   name: 'forgeax:play-engine-worktree-resolve',
   enforce: 'pre' as const,
   resolveId(id: string): string | null {
-    return id === '@forgeax/engine' || id.startsWith('@forgeax/engine/') || id.startsWith('@forgeax/engine-')
-      ? resolvePlayEngineEntry(id)
-      : null;
+    return id === '@forgeax/engine' ||
+      id.startsWith('@forgeax/engine/') ||
+      id.startsWith('@forgeax/engine-') ? resolvePlayEngineEntry(id) : null;
   },
 };
 
@@ -180,8 +211,14 @@ const IMPLICIT_SHARED_SUBS = ['template-game-default'] as const;
 // files containing the target path, which breaks the Vite dev server — so we
 // (re)create a real symlink/junction on demand.
 function ensureExternalRootFarms(): void {
-  setupExternalRootFarm(runtimeWorkspaceRoot, 'shared-assets', SHARED_BASE);
-  setupExternalRootFarm(runtimeWorkspaceRoot, 'engine-assets', ENGINE_ASSETS_BASE);
+  // Public source checkouts omit the optional binary asset submodules. Mount
+  // them when present, including when they arrive before a later project bind.
+  if (existsSync(SHARED_BASE)) {
+    setupExternalRootFarm(runtimeWorkspaceRoot, 'shared-assets', SHARED_BASE);
+  }
+  if (existsSync(ENGINE_ASSETS_BASE)) {
+    setupExternalRootFarm(runtimeWorkspaceRoot, 'engine-assets', ENGINE_ASSETS_BASE);
+  }
 }
 
 ensureExternalRootFarms();
@@ -196,7 +233,8 @@ ensureExternalRootFarms();
 // Pack v2 scenes fall back to an incorrectly addressed import request. The
 // browser-visible URL must use the same host-games mount as the game entry.
 function farmGamePath(root: ResolvedRoot, gameDir: string, slug: string): string {
-  if (root.shared && root.sub !== undefined) return resolve(runtimeWorkspaceRoot, 'shared-assets', root.sub);
+  if (root.shared && root.sub !== undefined)
+    return resolve(runtimeWorkspaceRoot, 'shared-assets', root.sub);
   const rel = relative(gameDir, root.abs);
   return resolve(runtimeWorkspaceRoot, HOST_GAMES_FARM, slug, rel);
 }
@@ -222,7 +260,9 @@ function templateAudioRoots(): string[] {
 // engine-assets sources as the engine's own apps/preview host.
 function templateGameDefaultRuntimeRoots(gameDir: string): string[] {
   try {
-    const packageJson = JSON.parse(readFileSync(join(gameDir, 'package.json'), 'utf8')) as { name?: unknown };
+    const packageJson = JSON.parse(readFileSync(join(gameDir, 'package.json'), 'utf8')) as {
+      name?: unknown;
+    };
     if (packageJson.name !== '@forgeax/template-game-default') return [];
   } catch {
     return [];
@@ -230,9 +270,20 @@ function templateGameDefaultRuntimeRoots(gameDir: string): string[] {
   return [
     resolve(runtimeWorkspaceRoot, 'engine-assets', 'vendor', 'fbx-test'),
     resolve(runtimeWorkspaceRoot, 'engine-assets', 'khronos-gltf-samples', 'BoxTextured'),
-    resolve(runtimeWorkspaceRoot, 'engine-assets', 'demo-assets', 'hello-sprite', 'wood-container.jpg.meta.json'),
+    resolve(
+      runtimeWorkspaceRoot,
+      'engine-assets',
+      'demo-assets',
+      'hello-sprite',
+      'wood-container.jpg.meta.json',
+    ),
     resolve(runtimeWorkspaceRoot, 'engine-assets', 'dejavu-fonts', 'DejaVuSansMono.ttf.meta.json'),
-    resolve(runtimeWorkspaceRoot, 'engine-assets', 'dejavu-fonts', 'DejaVuSansMono.atlas.png.meta.json'),
+    resolve(
+      runtimeWorkspaceRoot,
+      'engine-assets',
+      'dejavu-fonts',
+      'DejaVuSansMono.atlas.png.meta.json',
+    ),
     resolve(runtimeWorkspaceRoot, 'engine-assets', 'dejavu-fonts', 'DejaVuSansMono.font.pack.json'),
     resolve(runtimeWorkspaceRoot, 'engine-assets', 'demo-assets', 'hello-sprite-atlas'),
   ].filter(existsSync);
@@ -255,8 +306,7 @@ const PORT = Number(process.env.FORGEAX_ENGINE_PORT ?? 15173);
 const HOST = process.env.FORGEAX_ENGINE_HOST ?? '0.0.0.0';
 
 export function assetCorsOrigins(env: Readonly<NodeJS.ProcessEnv> = process.env): string[] {
-  const configured = env.FORGEAX_ASSET_CORS_ORIGINS
-    ?.split(',')
+  const configured = env.FORGEAX_ASSET_CORS_ORIGINS?.split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
   if (configured && configured.length > 0) return configured;
@@ -290,27 +340,31 @@ function forgeaxRuntimeIdentity() {
   return {
     name: 'forgeax:runtime-identity',
     configureServer(server: { middlewares: { use(fn: Function): unknown } }) {
-      server.middlewares.use((
-        req: { url?: string },
-        res: {
-          statusCode: number;
-          setHeader(name: string, value: string): void;
-          end(body: string): void;
+      server.middlewares.use(
+        (
+          req: { url?: string },
+          res: {
+            statusCode: number;
+            setHeader(name: string, value: string): void;
+            end(body: string): void;
+          },
+          next: () => void,
+        ) => {
+          if (req.url?.split('?')[0] !== '/preview/__forgeax_health') {
+            next();
+            return;
+          }
+          res.statusCode = 200;
+          res.setHeader('content-type', 'application/json');
+          res.end(
+            JSON.stringify({
+              status: 'ok',
+              name: '@forgeax/play-runtime',
+              instanceRootAbs,
+            }),
+          );
         },
-        next: () => void,
-      ) => {
-        if (req.url?.split('?')[0] !== '/preview/__forgeax_health') {
-          next();
-          return;
-        }
-        res.statusCode = 200;
-        res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({
-          status: 'ok',
-          name: '@forgeax/play-runtime',
-          instanceRootAbs,
-        }));
-      });
+      );
     },
   };
 }
@@ -319,6 +373,21 @@ let activeGameDir = INITIAL_GAME_DIR;
 let activeGameId = INITIAL_GAME_ID;
 let committedGameDir = INITIAL_GAME_DIR;
 let committedGameId = INITIAL_GAME_ID;
+
+let sourceIdentityGameDir: string | null | undefined;
+let sourceIdentity: ((sourcePath: string) => string) | undefined;
+function sourceIdentityFor(sourcePath: string): string {
+  const gameDir = activeGameDir || null;
+  if (sourceIdentity === undefined || sourceIdentityGameDir !== gameDir) {
+    sourceIdentityGameDir = gameDir;
+    sourceIdentity = createSourceIdentityFor({
+      gameDirAbs: gameDir,
+      sharedBase: SHARED_BASE,
+      implicitSharedSubs: IMPLICIT_SHARED_SUBS,
+    });
+  }
+  return sourceIdentity(sourcePath);
+}
 
 // Shader publication compares the authored pack's resolved source path with
 // Vite's transform id. Play mounts the active game below this Vite root, so
@@ -342,10 +411,38 @@ function singleGamePackRoots(gameDir: string, gameId: string): string[] {
       roots.push(root);
     }
   };
+  const studioPlayHost = Boolean(process.env.FORGEAX_PROJECT_ROOT);
   if (existsSync(engineTemplateUiFarmPath())) push(engineTemplateUiFarmPath());
-  for (const root of templateAudioRoots()) push(root);
-  for (const root of templateGameDefaultRuntimeRoots(gameDir)) push(root);
-  if (!gameDir) return roots;
+  if (!gameDir) {
+    if (studioPlayHost) {
+      // Studio binds games later via scope; avoid engine-assets/sfx native-cook at boot.
+      const bootstrapMeta = resolve(
+        here,
+        'engine-assets',
+        'dejavu-fonts',
+        'DejaVuSansMono.ttf.meta.json',
+      );
+      if (existsSync(bootstrapMeta)) push(bootstrapMeta);
+    } else {
+      for (const root of templateAudioRoots()) push(root);
+    }
+    return roots;
+  }
+  // Template sfx/collectathon scopes are only part of standalone template bootstrap.
+  // Studio must not cold-import engine-assets/sfx for cloned @forgeax/template-game-default games.
+  try {
+    const packageJson = JSON.parse(readFileSync(join(gameDir, 'package.json'), 'utf8')) as {
+      name?: unknown;
+    };
+    if (!studioPlayHost && packageJson.name === '@forgeax/template-game-default') {
+      for (const root of templateAudioRoots()) push(root);
+    }
+  } catch {
+    /* no package.json — omit template audio roots */
+  }
+  if (!studioPlayHost) {
+    for (const root of templateGameDefaultRuntimeRoots(gameDir)) push(root);
+  }
   for (const root of resolveGameAssetRoots(gameDir, {
     sharedBase: SHARED_BASE,
     implicitSharedSubs: IMPLICIT_SHARED_SUBS,
@@ -356,9 +453,17 @@ function singleGamePackRoots(gameDir: string, gameId: string): string[] {
 }
 
 function collectPluginFiles(root: string, out: string[]): void {
-  let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+  let entries: Array<{
+    name: string;
+    isDirectory(): boolean;
+    isFile(): boolean;
+  }>;
   try {
-    entries = readdirSync(root, { withFileTypes: true }) as unknown as Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+    entries = readdirSync(root, { withFileTypes: true }) as unknown as Array<{
+      name: string;
+      isDirectory(): boolean;
+      isFile(): boolean;
+    }>;
   } catch {
     return;
   }
@@ -386,37 +491,80 @@ function collectStaticRuntimePluginFiles(gameDir: string, out: string[]): void {
 // preview host publishes a tiny URL manifest from the same local game roots
 // used by its pack catalog. The browser imports these URLs in the play-runtime
 // realm before defaultScene instantiation.
-function gamePluginModules(gameDir: string, slug: string): Array<{ clientPath: string; url: string }> {
+function forgeEnginePluginRelPaths(gameDir: string): string[] | null {
+  try {
+    const forge = JSON.parse(readFileSync(join(gameDir, 'forge.json'), 'utf8')) as {
+      schemaVersion?: string;
+      plugins?: Parameters<typeof listForgeEnginePluginModulePaths>[0];
+    };
+    if (forge.schemaVersion !== '2.0.0' || !Array.isArray(forge.plugins)) return null;
+    const paths = listForgeEnginePluginModulePaths(forge.plugins);
+    return paths.length > 0 ? paths : null;
+  } catch {
+    return null;
+  }
+}
+
+function gamePluginModules(
+  gameDir: string,
+  slug: string,
+): Array<{ clientPath: string; url: string }> {
+  const urlPrefix = GAMES_URL_PREFIX ? `${GAMES_URL_PREFIX}/${slug}` : slug;
+  const forgePaths = forgeEnginePluginRelPaths(gameDir);
+  if (forgePaths !== null) {
+    return forgePaths.map((clientPath) => ({
+      clientPath,
+      url: `/preview/${urlPrefix}/${clientPath}`,
+    }));
+  }
   const files: string[] = [];
-  for (const root of resolveGameAssetRoots(gameDir, { sharedBase: SHARED_BASE, implicitSharedSubs: IMPLICIT_SHARED_SUBS })) {
+  for (const root of resolveGameAssetRoots(gameDir, {
+    sharedBase: SHARED_BASE,
+    implicitSharedSubs: IMPLICIT_SHARED_SUBS,
+  })) {
     if (!root.shared) collectPluginFiles(root.abs, files);
   }
-  const urlPrefix = GAMES_URL_PREFIX ? `${GAMES_URL_PREFIX}/${slug}` : slug;
-  return files
-    .sort()
-    .map((file) => {
-      const rel = relative(gameDir, file).split('\\').join('/');
-      return { clientPath: rel, url: `/preview/${urlPrefix}/${rel}` };
-    });
+  return files.sort().map((file) => {
+    const rel = relative(gameDir, file).split('\\').join('/');
+    return { clientPath: rel, url: `/preview/${urlPrefix}/${rel}` };
+  });
 }
 
 function collectStaticGameFiles(root: string, current = root, out: string[] = []): string[] {
-  let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+  let entries: Array<{
+    name: string;
+    isDirectory(): boolean;
+    isFile(): boolean;
+  }>;
   try {
-    entries = readdirSync(current, { withFileTypes: true }) as unknown as Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+    entries = readdirSync(current, {
+      withFileTypes: true,
+    }) as unknown as Array<{
+      name: string;
+      isDirectory(): boolean;
+      isFile(): boolean;
+    }>;
   } catch {
     return out;
   }
   for (const entry of entries) {
-    if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '.forgeax' || entry.name === 'dist') continue;
+    if (
+      entry.name === 'node_modules' ||
+      entry.name === '.git' ||
+      entry.name === '.forgeax' ||
+      entry.name === 'dist'
+    )
+      continue;
     const abs = join(current, entry.name);
     if (entry.isDirectory()) collectStaticGameFiles(root, abs, out);
-    else if (entry.isFile() && (
-      entry.name === 'forge.json'
-      || entry.name === 'package.json'
-      || entry.name.endsWith('.pack.json')
-      || entry.name.endsWith('.meta.json')
-    )) out.push(abs);
+    else if (
+      entry.isFile() &&
+      (entry.name === 'forge.json' ||
+        entry.name === 'package.json' ||
+        entry.name.endsWith('.pack.json') ||
+        entry.name.endsWith('.meta.json'))
+    )
+      out.push(abs);
   }
   return out;
 }
@@ -446,24 +594,28 @@ function forgeaxStaticGame() {
           clientPath: relative(STATIC_GAME_DIR, file).split('\\').join('/'),
           url: `virtual:forgeax-static-plugin-${index}`,
         }));
-        const imports = staticPluginFiles.map((file, index) => (
-          `    if (url === ${JSON.stringify(`virtual:forgeax-static-plugin-${index}`)}) return import(${JSON.stringify(file)});`
-        ));
+        const imports = staticPluginFiles.map(
+          (file, index) =>
+            `    if (url === ${JSON.stringify(`virtual:forgeax-static-plugin-${index}`)}) return import(${JSON.stringify(file)});`,
+        );
         return [
           `export const modules = ${JSON.stringify(modules)};`,
           'export async function importModule(url) {',
           ...imports,
-          "    throw new Error(`unknown static plugin: ${url}`);",
+          '    throw new Error(`unknown static plugin: ${url}`);',
           '}',
         ].join('\n');
       }
       if (id === STATIC_GAME_RESOLVED_ID) {
-        if (!STATIC_BUILD || !existsSync(STATIC_GAME_ENTRY)) return 'export const bootstrap = null;';
+        if (!STATIC_BUILD || !existsSync(STATIC_GAME_ENTRY))
+          return 'export const bootstrap = null;';
         return `export { bootstrap } from ${JSON.stringify(STATIC_GAME_ENTRY)};`;
       }
       return null;
     },
-    generateBundle(this: { emitFile(opts: { type: 'asset'; fileName: string; source: string | Uint8Array }): void }) {
+    generateBundle(this: {
+      emitFile(opts: { type: 'asset'; fileName: string; source: string | Uint8Array }): void;
+    }) {
       if (!STATIC_BUILD) return;
       if (!existsSync(STATIC_GAME_ENTRY)) return;
       for (const file of collectStaticGameFiles(STATIC_GAME_DIR)) {
@@ -483,34 +635,52 @@ export function forgeaxGamePluginIndex() {
   return {
     name: 'forgeax:game-plugin-index',
     configureServer(server: { middlewares: { use(fn: Function): unknown } }) {
-      server.middlewares.use((req: { url?: string }, res: { statusCode: number; setHeader(k: string, v: string): void; end(data: string): void }, next: () => void) => {
-        const match = req.url?.match(ROUTE_RE);
-        if (!match || match[1] === undefined) { next(); return; }
-        if (committedGameId !== match[1]) {
-          res.statusCode = 404;
-          res.end(JSON.stringify({ error: 'runtime-scope-not-found' }));
-          return;
-        }
-        res.statusCode = 200;
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ modules: gamePluginModules(committedGameDir, match[1]) }));
-      });
+      server.middlewares.use(
+        (
+          req: { url?: string },
+          res: {
+            statusCode: number;
+            setHeader(k: string, v: string): void;
+            end(data: string): void;
+          },
+          next: () => void,
+        ) => {
+          const match = req.url?.match(ROUTE_RE);
+          if (!match || match[1] === undefined) {
+            next();
+            return;
+          }
+          if (committedGameId !== match[1]) {
+            res.statusCode = 404;
+            res.end(JSON.stringify({ error: 'runtime-scope-not-found' }));
+            return;
+          }
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(
+            JSON.stringify({
+              modules: gamePluginModules(committedGameDir, match[1]),
+            }),
+          );
+        },
+      );
     },
   };
 }
 
-const initialScopeCommand: RuntimeScopeCommand | undefined = (
-  INITIAL_GAME_DIR
-  && /^[a-z0-9][a-z0-9-]{0,40}$/.test(INITIAL_GAME_ID)
-  && /^[a-zA-Z0-9._:-]{1,256}$/.test(INITIAL_SCOPE_ID)
-  && Number.isSafeInteger(INITIAL_GENERATION)
-  && INITIAL_GENERATION > 0
-) ? {
-  gameId: INITIAL_GAME_ID,
-  scopeId: INITIAL_SCOPE_ID,
-  generation: INITIAL_GENERATION,
-  gameDir: INITIAL_GAME_DIR,
-} : undefined;
+const initialScopeCommand: RuntimeScopeCommand | undefined =
+  INITIAL_GAME_DIR &&
+  /^[a-z0-9][a-z0-9-]{0,40}$/.test(INITIAL_GAME_ID) &&
+  /^[a-zA-Z0-9._:-]{1,256}$/.test(INITIAL_SCOPE_ID) &&
+  Number.isSafeInteger(INITIAL_GENERATION) &&
+  INITIAL_GENERATION > 0
+    ? {
+        gameId: INITIAL_GAME_ID,
+        scopeId: INITIAL_SCOPE_ID,
+        generation: INITIAL_GENERATION,
+        gameDir: INITIAL_GAME_DIR,
+      }
+    : undefined;
 
 // Play owns one active game realm. The engine plumbing itself is shared with
 // Edit/Standalone; this host contributes only the exact roots and the dynamic
@@ -519,12 +689,15 @@ const initialScopeCommand: RuntimeScopeCommand | undefined = (
 // selected game's roots later. Native VFX cooking uses this same current-root
 // resolver, so a late game bind cannot leave the cooker on the empty startup
 // snapshot.
-const resolveActivePackRoots = (): string[] =>
-  singleGamePackRoots(activeGameDir, activeGameId);
-const resolveActiveCatalogRoots = (gameDir: string, gameId: string) => resolveGameCatalogRoots(gameDir, {
-  sharedBase: SHARED_BASE,
-  catalogPrefixFor: (root) => relative(runtimeWorkspaceRoot, farmGamePath(root, gameDir, gameId)).replace(/\\/g, '/'),
-});
+const resolveActivePackRoots = (): string[] => singleGamePackRoots(activeGameDir, activeGameId);
+const resolveActiveCatalogRoots = (gameDir: string, gameId: string) =>
+  resolveGameCatalogRoots(gameDir, {
+    sharedBase: SHARED_BASE,
+    catalogPrefixFor: (root) =>
+      relative(runtimeWorkspaceRoot, farmGamePath(root, gameDir, gameId)).replace(/\\/g, '/'),
+  });
+/** Studio Play (:15173 under forgeax-studio); standalone/editor smoke must keep default readiness. */
+const studioPlayHost = Boolean(process.env.FORGEAX_PROJECT_ROOT);
 const enginePreset = engineVitePreset({
   base: '/preview/',
   gameDirAbs: INITIAL_GAME_DIR || null,
@@ -538,7 +711,17 @@ const enginePreset = engineVitePreset({
     roots: resolveActivePackRoots(),
     rootsProvider: resolveActivePackRoots,
     cleanOrphanMetas: false,
+    ...(studioPlayHost
+      ? {
+          // Studio switches games at runtime; do not block catalog.json on every template
+          // asset producer before the active scope is readable.
+          producerReadiness: 'on-demand' as const,
+          ignorePath: ignoreStudioPackScanPath,
+        }
+      : {}),
   },
+  sourceIdentityFor,
+  materialPackagesProvider: () => discoverMaterialPackages(resolveActivePackRoots),
 });
 const playPackPlugin = enginePreset.pack;
 if (!playPackPlugin) throw new Error('Play Runtime must own a Pack producer');
@@ -621,10 +804,14 @@ export default defineConfig({
     host: HOST,
     strictPort: true,
     open: false,
-    ...(GAME_API_PORT ? {
-      proxy: {
-        '/api': { target: `http://127.0.0.1:${GAME_API_PORT}`, changeOrigin: true },
-      },
+    ...(GAME_API_PORT
+      ? {
+          proxy: {
+            '/api': {
+              target: `http://127.0.0.1:${GAME_API_PORT}`,
+              changeOrigin: true,
+            },
+          },
     } : {}),
     // Perf "A": the studio shell (:18920) now fetches game assets straight from
     // this play-engine origin (:15173) instead of via its same-origin /preview
@@ -645,12 +832,17 @@ export default defineConfig({
         // The exact active game is watched by pluginPack after scope bind;
         // sibling game directories are intentionally not mounted or watched.
         ...(activeGameDir ? [
-          `${activeGameDir}/**/package.json`,
-          `${activeGameDir}/**/tsconfig.json`,
-        ] : []),
+          `${activeGameDir}/**/package.json`, `${activeGameDir}/**/tsconfig.json`]
+          : []),
       ],
     },
-    fs: { allow: [viteRoot], strict: false },
+    fs: {
+      allow: resolveViteFsAllowRoots({
+        packageDir: here,
+        gameDir: activeGameDir || INITIAL_GAME_DIR || null,
+      }),
+      strict: false,
+    },
     // HMR clientPort: when vite runs behind a reverse proxy the browser must
     // open the HMR websocket to the *gateway* port (usually 443), not the
     // internal vite port. FORGEAX_HMR_CLIENT_PORT overrides
@@ -660,6 +852,8 @@ export default defineConfig({
   },
   build: {
     ...enginePreset.build,
-    outDir: process.env.FORGEAX_BUILD_OUT_DIR ? resolve(process.env.FORGEAX_BUILD_OUT_DIR) : resolve(here, 'dist'),
+    outDir: process.env.FORGEAX_BUILD_OUT_DIR
+      ? resolve(process.env.FORGEAX_BUILD_OUT_DIR)
+      : resolve(here, 'dist'),
   },
 });

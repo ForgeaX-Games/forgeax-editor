@@ -4,7 +4,10 @@ import { resolve } from 'node:path';
 
 const main = readFileSync(resolve(import.meta.dir, '../main.ts'), 'utf8');
 const executionHost = readFileSync(resolve(import.meta.dir, '../execution-host.ts'), 'utf8');
-const executionBootstrap = readFileSync(resolve(import.meta.dir, '../execution-bootstrap.ts'), 'utf8');
+const executionBootstrap = readFileSync(
+  resolve(import.meta.dir, '../execution-bootstrap.ts'),
+  'utf8',
+);
 const watchPolicy = readFileSync(resolve(import.meta.dir, '../../vite.config.ts'), 'utf8');
 
 describe('Play runtime follows engine preview startup', () => {
@@ -19,7 +22,9 @@ describe('Play runtime follows engine preview startup', () => {
   test('refreshes the runtime catalog before loading defaultScene', () => {
     expect(main).toContain('refreshPlayCatalogUntilReady(assets');
     expect(main).toContain('requiredGuid: requiredScene');
-    expect(main.indexOf('refreshPlayCatalogUntilReady')).toBeLessThan(main.indexOf('assets.loadByGuid<SceneAsset>'));
+    expect(main.indexOf('refreshPlayCatalogUntilReady')).toBeLessThan(
+      main.indexOf('assets.loadByGuid<SceneAsset>'),
+    );
     expect(executionBootstrap).toContain('await assets.refreshCatalog()');
   });
 
@@ -60,10 +65,15 @@ describe('Play runtime follows engine preview startup', () => {
   });
 
   test('completed-frame heartbeat publishes on the first submitted frame', () => {
-    const heartbeat = readFileSync(resolve(import.meta.dir, '../completed-frame-heartbeat.ts'), 'utf8');
+    const heartbeat = readFileSync(
+      resolve(import.meta.dir, '../completed-frame-heartbeat.ts'),
+      'utf8',
+    );
     expect(heartbeat).toContain('The first completed frame publishes immediately');
     expect(heartbeat).toContain('frames += 1;');
-    const initBranch = heartbeat.indexOf('if (sampleStartedAt === undefined || lastHeartbeatAt === undefined)');
+    const initBranch = heartbeat.indexOf(
+      'if (sampleStartedAt === undefined || lastHeartbeatAt === undefined)',
+    );
     const firstPublish = heartbeat.indexOf('return { fps: lastFps, sentinel };', initBranch);
     const skipFirst = heartbeat.indexOf('return undefined;', initBranch);
     expect(initBranch).toBeGreaterThanOrEqual(0);

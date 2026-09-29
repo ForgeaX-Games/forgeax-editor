@@ -65,8 +65,8 @@ function makeFakeRenderer() {
   const attachedWorlds = new Set<World>();
   const attachCalls: World[] = [];
   const detachCalls: World[] = [];
+  const leases = new Map<object, World>();
   const renderer = {
-    ready: Promise.resolve({ ok: true }),
     // assets is the AssetRegistry seam play-assemble routes defaultScene
     // instantiate through (GUID→handle resolve). Recording spy: these freeze
     // tests don't assert on spawned play entities, only editWorld invariants.
@@ -78,19 +78,23 @@ function makeFakeRenderer() {
     draw() {
       return { ok: true } as const;
     },
-    attachWorld(world: World) {
+    attach(world: World) {
       attachCalls.push(world);
       attachedWorlds.add(world);
-      return { ok: true as const, value: undefined };
-    },
-    detachWorld(world: World) {
-      detachCalls.push(world);
-      attachedWorlds.delete(world);
+      const lease = {
+        dispose() {
+          detachCalls.push(world);
+          attachedWorlds.delete(world);
+          leases.delete(lease);
+        },
+      };
+      leases.set(lease, world);
+      return { ok: true as const, value: lease };
     },
     dispose() {
       disposeCalls += 1;
     },
-    onError(_cb: (e: unknown) => void) {
+    subscribe(_cb: (event: unknown) => void) {
       return () => {};
     },
   };

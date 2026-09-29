@@ -45,12 +45,11 @@ function createEditSessionWithCoreWorld(extra: readonly Component[] = []): EditS
 function texture(): TextureAsset {
   return {
     kind: 'texture',
-    width: 2,
-    height: 2,
+    shape: { viewDimension: '2d', extent: { width: 2, height: 2 } },
     format: 'rgba8unorm',
     data: new Uint8Array(2 * 2 * 4),
     colorSpace: 'srgb',
-    mipmap: false,
+    mips: { kind: 'none' },
   };
 }
 
@@ -684,6 +683,99 @@ describe('Gateway asset read surface', () => {
     expect(rows).toEqual(registry.listCatalog());
   });
 
+  it('assetCatalog accepts MaterialAsset for projected rows and array shared fields', () => {
+    const listed = {
+      guid: MATERIAL_GUID,
+      packageUrl: '/assets/material.pack.json',
+      kind: 'material',
+      name: 'Material',
+    } as unknown as CatalogEntry;
+    const registry = {
+      listCatalog: () => [listed],
+      // CatalogReplica rows may omit the optional authoring capability; the
+      // gateway must retain the kind fallback when answering compatibility.
+      catalogSnapshot: () => ({ version: 2, entries: [listed], stale: false, diagnostics: [] }),
+    } as unknown as AssetRegistry;
+    const session = createEditSessionWithCoreWorld([MeshFilter, MeshRenderer]);
+    session.registry = registry;
+
+    const result = new EditGateway(session).assetCatalog({ compatibleWith: 'MaterialAsset' });
+    expect(result).toMatchObject({ ok: true, assets: [listed] });
+  });
+
+  it('keeps a newer failed Catalog replica projection over a stale pack-index row', () => {
+    const listed = {
+      guid: MATERIAL_GUID,
+      packageUrl: '/scoped/material.pack.json',
+      sourcePath: 'materials/hero.material',
+      kind: 'material',
+      revision: { digest: 'sha256:accepted', observedAt: 42, rootId: 'game-root' },
+      lifecycle: { state: 'current' },
+      projection: { current: { packageUrl: '/scoped/material.pack.json' } },
+    } as unknown as CatalogEntry;
+    const failed = {
+      ...listed,
+      packageUrl: '/material.pack.json',
+      revision: { digest: 'failure:import-internal-error', observedAt: 43, rootId: 'game-root' },
+      lifecycle: { state: 'failed', reason: { code: 'gltf-malformed-header', hint: 'repair the source' } },
+      diagnostics: [{ code: 'gltf-malformed-header', severity: 'blocking', hint: 'repair the source' }],
+      projection: {
+        current: { packageUrl: '/material.pack.json' },
+        lastKnownGood: { packageUrl: '/scoped/material.pack.json' },
+      },
+    } as unknown as CatalogEntry;
+    const registry = {
+      listCatalog: () => [listed],
+      catalogSnapshot: () => ({ version: 2, entries: [failed], stale: true, diagnostics: [] }),
+    } as unknown as AssetRegistry;
+    const session = createEditSessionWithCoreWorld([MeshFilter, MeshRenderer]);
+    session.registry = registry;
+
+    const row = new EditGateway(session).assetCatalog()[0];
+    expect(row).toMatchObject({
+      guid: MATERIAL_GUID,
+      packageUrl: '/material.pack.json',
+      revision: failed.revision,
+      lifecycle: failed.lifecycle,
+      diagnostics: failed.diagnostics,
+      projection: failed.projection,
+    });
+  });
+
+  it('keeps the Catalog replica authoritative when revisions are absent or equal', () => {
+    const listed = {
+      guid: MATERIAL_GUID,
+      packageUrl: '/old/material.pack.json',
+      sourcePath: 'materials/hero.material',
+      kind: 'material',
+      lifecycle: { state: 'current' },
+      projection: { current: { packageUrl: '/old/material.pack.json' } },
+    } as unknown as CatalogEntry;
+    const failed = {
+      ...listed,
+      packageUrl: '/failed/material.pack.json',
+      lifecycle: { state: 'failed', reason: { code: 'source-invalid', hint: 'repair the source' } },
+      diagnostics: [{ code: 'source-invalid', severity: 'blocking', hint: 'repair the source' }],
+      projection: {
+        current: { packageUrl: '/failed/material.pack.json' },
+        lastKnownGood: { packageUrl: '/old/material.pack.json' },
+      },
+    } as unknown as CatalogEntry;
+    const registry = {
+      listCatalog: () => [listed],
+      catalogSnapshot: () => ({ version: 2, entries: [failed], stale: true, diagnostics: [] }),
+    } as unknown as AssetRegistry;
+    const session = createEditSessionWithCoreWorld([MeshFilter, MeshRenderer]);
+    session.registry = registry;
+
+    expect(new EditGateway(session).assetCatalog()[0]).toMatchObject({
+      packageUrl: '/failed/material.pack.json',
+      lifecycle: failed.lifecycle,
+      diagnostics: failed.diagnostics,
+      projection: failed.projection,
+    });
+  });
+
   it('assetCatalog returns an empty readonly result without a registry', () => {
     const session = createEditSessionWithCoreWorld([MeshFilter, MeshRenderer]);
     const gateway = new EditGateway(session);
@@ -704,8 +796,7 @@ describe('Gateway asset read surface', () => {
       expect(d.kind).toBe('texture');
       expect(d.guid).toBe(TEXTURE_GUID);
       // Lightweight POD fields flow through `meta` (kind-agnostic projection).
-      expect(d.meta?.width).toBe(2);
-      expect(d.meta?.height).toBe(2);
+      expect(d.meta?.shape).toEqual({ viewDimension: '2d', extent: { width: 2, height: 2 } });
       expect(d.meta?.format).toBe('rgba8unorm');
       // The whole point: the heavy `data` buffer is stripped, at any nesting.
       expect(d.meta?.data).toBeUndefined();
@@ -740,8 +831,7 @@ describe('Gateway asset read surface', () => {
     expect(d.ok).toBe(true);
     if (d.ok) {
       expect(d.kind).toBe('texture');
-      expect(d.meta?.width).toBe(2);
-      expect(d.meta?.height).toBe(2);
+      expect(d.meta?.shape).toEqual({ viewDimension: '2d', extent: { width: 2, height: 2 } });
       // No hard-coded per-kind field list: the heavy buffer is dropped by shape.
       expect(d.meta?.data).toBeUndefined();
     }
@@ -906,14 +996,14 @@ describe('Gateway component read surface', () => {
     }
   });
 
-  it('describeComponent marks Transform.world transient (the round-1 friction)', () => {
+  it('describeComponent exposes authored Transform without derived world storage', () => {
     // The real friction: Transform.world is derived each frame from local TRS
     // (engine transform.ts declares it transient:true, D-5). The door must
     // signpost it so an AI does not author it or read it stale.
     const d = gw().describeComponent('Transform');
     expect(d.ok).toBe(true);
     if (d.ok) {
-      expect(d.transient?.world).toBe(true);
+      expect(d.schema.world).toBeUndefined();
       // authored TRS inputs are NOT transient
       expect(d.transient?.pos).toBeUndefined();
       expect(d.transient?.quat).toBeUndefined();

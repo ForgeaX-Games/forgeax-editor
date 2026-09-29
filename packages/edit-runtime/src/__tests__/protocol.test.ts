@@ -150,12 +150,12 @@ describe('VAG_PREVIEW_RELOAD', () => {
 });
 
 describe('schema completeness — all runtime schema exports present', () => {
-  test('Object.keys(...).filter(endsWith("Schema")).length === 17', async () => {
-    // The cross-realm wire currently exposes 17 schemas: the original VAG
+  test('Object.keys(...).filter(endsWith("Schema")).length === 19', async () => {
+    // The cross-realm wire currently exposes 19 schemas: the original VAG
     // messages, additive carrier handshake/health contracts, and the remote
-    // gameplay projection request/response plus their nested schemas.
+    // gameplay projection request/response plus their nested schemas and bounded runtime diagnostic schemas.
     const mod = await import('../public/protocol');
     const schemaKeys = Object.keys(mod).filter((k) => k.endsWith('Schema'));
-    expect(schemaKeys).toHaveLength(17);
+    expect(schemaKeys).toHaveLength(19);
   });
 });

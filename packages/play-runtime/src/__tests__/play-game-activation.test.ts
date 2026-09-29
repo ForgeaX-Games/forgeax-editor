@@ -1,9 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { Plugin } from '@forgeax/engine-app';
-import {
-  activatePlayGame,
-  resolvePlayGameActivation,
-} from '../play-game-activation';
+import { activatePlayGame, resolvePlayGameActivation } from '../play-game-activation';
 
 const gameplay: Plugin = {
   name: 'game-3d',

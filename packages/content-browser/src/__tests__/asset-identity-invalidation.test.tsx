@@ -15,7 +15,7 @@ describe('asset identity invalidation', () => {
   it('uses the producer completion signal for catalog recovery', () => {
     const snapshotHook = source('hooks/useAssetBrowserSnapshot.ts');
     expect(snapshotHook).toContain("panelBridge.on('assetsChanged'");
-    expect(snapshotHook).toContain('model.refresh(hint)');
+    expect(snapshotHook).toContain("model.refresh(hint === 'scene-document-changed' ? 'pack-changed' : hint)");
     expect(snapshotHook).not.toContain('notifyDocChanged');
   });
 });

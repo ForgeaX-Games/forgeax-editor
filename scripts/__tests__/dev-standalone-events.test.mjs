@@ -12,7 +12,23 @@ const unixOnly = process.platform === 'win32' ? 'the lifecycle fixture requires 
 
 function createFakeBun(tempDir) {
   const fakeBunPath = join(tempDir, 'fake-bun');
-  writeFileSync(fakeBunPath, '#!/bin/sh\ncase "$*" in\n  *editor-edit-runtime*) exit 0;;\n  *) trap \'exit 0\' TERM INT; sleep 30;;\nesac\n', 'utf8');
+  // dev-standalone now waits for host HTTP/catalog before starting edit-runtime.
+  // The fixture must stand up minimal listeners on the declared ports so boot
+  // reaches edit-runtime, which immediately exits 0 and emits restart-scheduled.
+  writeFileSync(fakeBunPath, `#!/bin/sh
+case "$*" in
+  *editor-edit-runtime*) exit 0;;
+  *game-backend*)
+    PORT="\${FORGEAX_GAME_API_PORT:-0}"
+    exec node -e "require('http').createServer((_,r)=>{r.writeHead(200);r.end('ok')}).listen(Number(process.env.FORGEAX_GAME_API_PORT||0))"
+    ;;
+  *run\\ dev*|*vite.config.ts*)
+    PORT="\${FORGEAX_STANDALONE_PORT:-\${FORGEAX_INTERFACE_PORT:-0}}"
+    exec node -e "require('http').createServer((_,r)=>{r.writeHead(200);r.end('ok')}).listen(Number(process.env.FORGEAX_STANDALONE_PORT||process.env.FORGEAX_INTERFACE_PORT||0))"
+    ;;
+  *) trap 'exit 0' TERM INT; sleep 30;;
+esac
+`, 'utf8');
   chmodSync(fakeBunPath, 0o755);
   return fakeBunPath;
 }
@@ -38,7 +54,7 @@ function waitForExit(child, timeoutMs = 3000) {
   });
 }
 
-async function waitForEvent(eventLogPath, child, predicate, timeoutMs = 2500) {
+async function waitForEvent(eventLogPath, child, predicate, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
     if (child.exitCode !== null) throw new Error(`dev-standalone exited before the expected event: ${child.exitCode}`);

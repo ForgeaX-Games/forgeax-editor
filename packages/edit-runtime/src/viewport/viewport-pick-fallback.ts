@@ -26,7 +26,7 @@
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { MeshFilter } from '@forgeax/engine-render';
-import { Transform } from '@forgeax/engine-scene';
+import { GlobalTransform } from '@forgeax/engine-scene';
 import { toShared, type MeshAsset } from '@forgeax/engine-types';
 import { resolveVisibility, worldRenderableHandles } from '@forgeax/editor-core';
 import { isEntEffectivelyHidden, readWorldTransform } from './viewport-entity-read';
@@ -58,7 +58,7 @@ export function pickMeshFallback(world: World, origin: Vec3, dir: Vec3): EntityH
       // Inverted-infinity empty box (mesh without positions): not pickable,
       // same guard as the engine pick.
       if (aabb !== undefined && !(aabb[0]! > aabb[3]!)) {
-        const t = world.get(id, Transform);
+        const t = world.get(id, GlobalTransform);
         const w = t.ok ? (t.value as { world?: ArrayLike<number> }).world : undefined;
         if (w !== undefined && w.length >= 16) box = aabbToWorldBox(aabb, w);
       }

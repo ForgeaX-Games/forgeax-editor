@@ -18,8 +18,7 @@ import type {
   ApplyResult,
   CommandError,
   EditorOp,
-  EditSession,
-} from '../types';
+  EditSession } from '../types';
 import type { SceneAsset } from '@forgeax/engine-types';
 
 import { ChildOf, Children, Name, Transform } from '@forgeax/engine-scene';
@@ -27,11 +26,13 @@ import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import type { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '../scene/scene-types';
-import { Visibility, VisibilityStateValue, visibilityStateFromU32, type VisibilityState } from '../visibility';
+import { Visibility, VisibilityStateValue, visibilityStateFromU32, type VisibilityState,
+} from '../visibility';
 import { EngineFacade } from '../io/engine-facade';
 import { assetIO } from '../io/asset-io-facade';
 import { normalizeAnimationPlayerSceneAsset } from '../scene/animation-slot-sync';
-import { bindAllSceneAnimationTargets, type AnimationTargetBindingFailure } from '../scene/animation-target-binding';
+import { bindAllSceneAnimationTargets, type AnimationTargetBindingFailure,
+} from '../scene/animation-target-binding';
 import { worldRootHandles } from '../store/entity-state';
 import type { FieldSchema } from '../scene/schema';
 import { planGroupedArrayPatchFromSchema } from '../scene/array-edit';
@@ -64,7 +65,9 @@ export function applyCanonicalDocumentEffect(
  *  a raw `world` remains inaccessible. */
 export type EngineWriteProxy = Pick<
   EngineFacade,
-  'get' | 'resolveComponent' | 'componentDefinition' | 'editorComponentSchema' | 'getSceneInstanceState' | 'set' | 'setSceneOverride' | 'removeSceneOverride' | 'spawn' | 'despawn' | 'despawnScene' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid' | 'sharedAssetKind' | 'isAssetCatalogued' | 'invalidateAsset' | 'patchLiveMaterialParams'
+  | 'get' | 'resolveComponent' | 'componentDefinition' | 'editorComponentSchema' | 'getSceneInstanceState' | 'set' | 'setSceneOverride' | 'removeSceneOverride' | 'spawn' | 'despawn' | 'despawnScene' | 'addComponent' | 'removeComponent' | 'instantiateSceneAssetFlat' | 'resolveSharedGuid'
+  | 'sharedAssetKind'
+  | 'isAssetCatalogued' | 'invalidateAsset' | 'patchLiveMaterialParams'
 >;
 
 /** Transaction-scoped spawn-placeholder alias.
@@ -107,7 +110,8 @@ export interface DocApplierCtx {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type CToken = any;
 
-function resolveToken(engine: Pick<EngineFacade, 'resolveComponent'>, name: string): CToken | undefined {
+function resolveToken(engine: Pick<EngineFacade, 'resolveComponent'>, name: string,
+): CToken | undefined {
   // The World-local ComponentCatalog is the only dynamic resolution owner.
   // Built-in tokens are registered by the World's scene/render plugins.
   return engine.resolveComponent(name);
@@ -127,17 +131,21 @@ function isArrayLikeValue(value: unknown): value is ArrayLike<unknown> {
   return Array.isArray(value) || ArrayBuffer.isView(value);
 }
 
-function componentFieldSchema(engine: Pick<EngineFacade, 'editorComponentSchema'>, component: string, field: string): FieldSchema | undefined {
+function componentFieldSchema(engine: Pick<EngineFacade, 'editorComponentSchema'>, component: string, field: string,
+): FieldSchema | undefined {
   return (engine.editorComponentSchema(component) as ReturnType<EngineFacade['editorComponentSchema']>)?.fields.find((candidate) => candidate.key === field);
 }
 
-function rawComponentSchema(engine: Pick<EngineFacade, 'componentDefinition'>, component: string): Record<string, string> | undefined {
+function rawComponentSchema(engine: Pick<EngineFacade, 'componentDefinition'>, component: string,
+): Record<string, string> | undefined {
   const definition = engine.componentDefinition(component) as ReturnType<EngineFacade['componentDefinition']>;
   if (definition === undefined) return undefined;
-  return Object.fromEntries(Object.entries(definition.fields).map(([field, reflection]) => [field, reflection.type]));
+  return Object.fromEntries(Object.entries(definition.fields).map(([field, reflection]) => [field, reflection.type]),
+  );
 }
 
-function arrayFieldInfo(engine: Pick<EngineFacade, 'componentDefinition' | 'editorComponentSchema'>, component: string, field: string): { rawType: string; schema?: FieldSchema } | undefined {
+function arrayFieldInfo(engine: Pick<EngineFacade, 'componentDefinition' | 'editorComponentSchema'>, component: string, field: string,
+): { rawType: string; schema?: FieldSchema } | undefined {
   const rawType = rawComponentSchema(engine, component)?.[field];
   if (typeof rawType !== 'string' || !rawType.startsWith('array<')) return undefined;
   return { rawType, schema: componentFieldSchema(engine, component, field) };
@@ -159,7 +167,8 @@ function arrayElementType(rawType: string): string | undefined {
   return (capacity?.[1] ?? inner).trim();
 }
 
-function invalidScalarValue(rawType: string, value: unknown): { expected: string; reason: string } | null {
+function invalidScalarValue(rawType: string, value: unknown,
+): { expected: string; reason: string } | null {
   if (rawType === 'f32' || rawType === 'i32' || rawType === 'u32') {
     if (typeof value !== 'number' || !Number.isFinite(value)) {
       return { expected: rawType, reason: 'number-required' };
@@ -199,7 +208,8 @@ function invalidScalarValue(rawType: string, value: unknown): { expected: string
   return null;
 }
 
-function invalidFieldValue(rawType: string, value: unknown): { expected: string; reason: string; index?: number } | null {
+function invalidFieldValue(rawType: string, value: unknown,
+): { expected: string; reason: string; index?: number } | null {
   const elementType = arrayElementType(rawType);
   if (elementType === undefined) return invalidScalarValue(rawType, value);
   if (!isArrayLikeValue(value)) return { expected: rawType, reason: 'array-required' };
@@ -246,7 +256,8 @@ function completeGroupedArrays(
   for (const [groupName, groupFields] of groups) {
     const provided = groupFields.filter((field) => field.key in values);
     if (provided.length === 0) continue;
-    const providedLengths = provided.map((field) => ({ field: field.key, length: arrayLength(values[field.key]) }));
+    const providedLengths = provided.map((field) => ({ field: field.key, length: arrayLength(values[field.key]),
+    }));
     if (providedLengths.some((entry) => entry.length === null)) continue;
     const expected = providedLengths[0]!.length;
     if (expected === null) continue;
@@ -256,17 +267,30 @@ function completeGroupedArrays(
       return {
         ok: false,
         hint: `parallel arrays in ${groupName} must share one length; ${fieldPath} has ${mismatch.length}, expected ${expected}`,
-        details: { fieldPath, reason: 'parallel-array-length', group: groupName, lengths: providedLengths },
+        details: {
+          fieldPath,
+          reason: 'parallel-array-length',
+          group: groupName,
+          lengths: providedLengths,
+        },
       };
     }
 
-    const baseLengths = base === undefined
-      ? []
-      : groupFields.map((field) => ({ field: field.key, length: arrayLength(base[field.key]) }));
-    const baseExpected = baseLengths.length > 0 && baseLengths.every((entry) => entry.length !== null && entry.length === baseLengths[0]!.length)
-      ? baseLengths[0]!.length
-      : null;
-    if (provided.length !== groupFields.length && baseExpected !== null && baseExpected > 0 && expected !== baseExpected) {
+    const baseLengths =
+      base === undefined
+        ? []
+        : groupFields.map((field) => ({ field: field.key, length: arrayLength(base[field.key]) }));
+    const baseExpected =
+      baseLengths.length > 0 &&
+      baseLengths.every((entry) => entry.length !== null && entry.length === baseLengths[0]!.length)
+        ? baseLengths[0]!.length
+        : null;
+    if (
+      provided.length !== groupFields.length &&
+      baseExpected !== null &&
+      baseExpected > 0 &&
+      expected !== baseExpected
+    ) {
       const fieldPath = `${component}.${provided[0]!.key}`;
       return {
         ok: false,
@@ -275,7 +299,11 @@ function completeGroupedArrays(
           fieldPath,
           reason: 'parallel-array-length',
           group: groupName,
-          lengths: groupFields.map((field) => ({ field: field.key, length: field.key in values ? arrayLength(values[field.key]) : arrayLength(base?.[field.key]) })),
+          lengths: groupFields.map((field) => ({
+            field: field.key,
+            length:
+              field.key in values ? arrayLength(values[field.key]) : arrayLength(base?.[field.key]),
+          })),
         },
       };
     }
@@ -360,13 +388,20 @@ function validateComponentWrite(
       return {
         ok: false,
         hint: `${fieldPath} requires exactly ${capacity} items (received ${length})`,
-        details: { fieldPath, reason: 'fixed-array-length', expectedLength: capacity, actualLength: length },
+        details: {
+          fieldPath,
+          reason: 'fixed-array-length',
+          expectedLength: capacity,
+          actualLength: length,
+        },
       };
     }
   }
 
   const effective = base === undefined ? values : { ...base, ...values };
-  const schemaFields = (engine.editorComponentSchema(component) as ReturnType<EngineFacade['editorComponentSchema']>)?.fields ?? [];
+  const schemaFields =
+    (engine.editorComponentSchema(component) as ReturnType<EngineFacade['editorComponentSchema']>)
+      ?.fields ?? [];
   const groups = new Map<string, FieldSchema[]>();
   for (const field of schemaFields) {
     if (field.arrayGroup === undefined) continue;
@@ -376,7 +411,10 @@ function validateComponentWrite(
   }
   for (const [groupName, fields] of groups) {
     if (!fields.some((field) => field.key in values)) continue;
-    const lengths = fields.map((field) => ({ field: field.key, length: arrayLength(effective[field.key]) }));
+    const lengths = fields.map((field) => ({
+      field: field.key,
+      length: arrayLength(effective[field.key]),
+    }));
     if (lengths.some((entry) => entry.length === null)) {
       const culprit = lengths.find((entry) => entry.length === null)!.field;
       const fieldPath = `${component}.${culprit}`;
@@ -451,8 +489,8 @@ function spawnComponentData(
         // mysteriously empty entity on reopen (AGENTS.md #2 data-loss).
         console.warn(
           `[editor] spawnComponentData: unknown component '${compName}' dropped — ` +
-          `upstream producer still emits a component this editor does not register. ` +
-          `Migrate it to an engine-native component (MeshFilter/MeshRenderer/Transform/…).`,
+            `upstream producer still emits a component this editor does not register. ` +
+            `Migrate it to an engine-native component (MeshFilter/MeshRenderer/Transform/…).`,
         );
       }
     }
@@ -501,7 +539,10 @@ export function applySpawnEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResul
   const parent = cmd.parent ?? null;
   const parentEng = parent !== null ? toEntity(alias, parent) : null;
   if (parentEng !== null && !engine.get(parentEng, Name).ok) {
-    return { ok: false, error: { code: 'INVALID_PARENT', hint: `parent ${parent} does not exist` } };
+    return {
+      ok: false,
+      error: { code: 'INVALID_PARENT', hint: `parent ${parent} does not exist` },
+    };
   }
   const compData = spawnComponentData(engine, cmd.name ?? 'Entity', parentEng, cmd.components);
   // Spawn must resolve the same shared-field contract as add/set before any
@@ -513,28 +554,35 @@ export function applySpawnEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResul
     entry.data = resolved.value;
   }
 
-  console.info(`[placement-diag] spawn-applier.before ${JSON.stringify({
+  console.info(
+    `[placement-diag] spawn-applier.before ${JSON.stringify({
     name: cmd.name ?? 'Entity',
     parent: parentEng,
     requestedComponents: Object.keys((cmd.components ?? {}) as Record<string, unknown>),
     materializedComponents: compData.map((entry) =>
-      (entry.component as unknown as { name?: string }).name ?? 'unknown'),
-  })}`);
+      (entry.component as unknown as { name?: string }).name ?? 'unknown',
+      ),
+  })}`,
+  );
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const r = engine.spawn(...(compData as any));
   if (!r.ok) {
-    console.error(`[placement-diag] spawn-applier.failed ${JSON.stringify({
+    console.error(
+      `[placement-diag] spawn-applier.failed ${JSON.stringify({
       name: cmd.name ?? 'Entity',
       error: String(r.error),
-    })}`);
+    })}`,
+    );
     return { ok: false, error: { code: 'SPAWN_FAILED', hint: String(r.error) } };
   }
   const eH = r.value as EntityHandle;
-  console.info(`[placement-diag] spawn-applier.created ${JSON.stringify({
+  console.info(
+    `[placement-diag] spawn-applier.created ${JSON.stringify({
     name: cmd.name ?? 'Entity',
     entity: eH,
     parent: parentEng,
-  })}`);
+  })}`,
+  );
   // Rewrite _id in place to the real handle: the committed ledger op keeps the
   // concrete handle, and a NEGATIVE placeholder must resolve for later sub-ops in
   // the same transaction (alias forward-reference). Post-dispatch readers use the
@@ -566,7 +614,8 @@ export function applyDestroyEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyRes
     const chR = engine.get(ce, Children);
     if (chR.ok && chR.value.entities != null) {
       const arr = chR.value.entities as { readonly length: number; [index: number]: number };
-      for (let ci = 0; ci < arr.length; ci++) if (!visitedEng.has(arr[ci]! as EntityHandle)) idStack.push(arr[ci]! as EntityHandle);
+      for (let ci = 0; ci < arr.length; ci++)
+        if (!visitedEng.has(arr[ci]! as EntityHandle)) idStack.push(arr[ci]! as EntityHandle);
     }
   }
   // ── Collect legacy component snapshot (fallback path only) ──────────────
@@ -577,12 +626,20 @@ export function applyDestroyEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyRes
   if (!cmd._asset) {
     legacyEntries = [];
     for (const ce of subtree) {
-      const nr = engine.get(ce, Name); const nm = nr.ok ? nr.value.value : '?';
+      const nr = engine.get(ce, Name);
+      const nm = nr.ok ? nr.value.value : '?';
       const comps: Record<string, unknown> = {};
-      for (const [cn, ct] of [['Transform', Transform], ['ChildOf', ChildOf], ['MeshFilter', MeshFilter], ['Visibility', Visibility]] as [string, CToken][]) {
-        const cr = engine.get(ce, ct); if (cr.ok) comps[cn] = clone(cr.value);
+      for (const [cn, ct] of [
+        ['Transform', Transform],
+        ['ChildOf', ChildOf],
+        ['MeshFilter', MeshFilter],
+        ['Visibility', Visibility],
+      ] as [string, CToken][]) {
+        const cr = engine.get(ce, ct);
+        if (cr.ok) comps[cn] = clone(cr.value);
       }
-      const nc = engine.get(ce, Name); if (nc.ok) comps['Name'] = clone(nc.value);
+      const nc = engine.get(ce, Name);
+      if (nc.ok) comps['Name'] = clone(nc.value);
       legacyEntries.push({ name: nm, comps });
     }
   }
@@ -617,10 +674,19 @@ export function applyDestroyEntity(ctx: DocApplierCtx, _cmd: EditorOp): ApplyRes
   // applyCommand callers that bypass Gateway pre-collection.
   const spawnCmds: EditorOp[] = legacyEntries!.map((e) => ({
     kind: 'spawnEntity' as const,
-    name: e.name, parent: null, components: e.comps,
+    name: e.name,
+    parent: null,
+    components: e.comps,
   }));
   const rootName = legacyEntries![0]?.name ?? `Entity ${cmd.entity}`;
-  return { ok: true, inverse: spawnCmds.length === 1 ? spawnCmds[0]! : { kind: 'transaction', label: `undo destroy ${rootName}`, commands: spawnCmds }, created: [] };
+  return {
+    ok: true,
+    inverse:
+      spawnCmds.length === 1
+        ? spawnCmds[0]!
+        : { kind: 'transaction', label: `undo destroy ${rootName}`, commands: spawnCmds },
+    created: [],
+  };
 }
 
 // ── rename applier ────────────────────────────────────────────────────────────
@@ -631,7 +697,8 @@ export function applyRename(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   const { engine, alias } = ctx;
   const eH = toEntity(alias, cmd.entity);
   const nameR = engine.get(eH, Name);
-  if (!nameR.ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
+  if (!nameR.ok)
+    return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
   const before = nameR.value.value;
   const r = engine.set(eH, Name, { value: cmd.name });
   if (!r.ok) return { ok: false, error: { code: 'RENAME_FAILED', hint: String(r.error) } };
@@ -645,13 +712,17 @@ export function applyReparent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   const cmd = _cmd as any;
   const { engine, alias } = ctx;
   const eH = toEntity(alias, cmd.entity);
-  if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
+  if (!engine.get(eH, Name).ok)
+    return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
   const parentEng = cmd.parent !== null ? toEntity(alias, cmd.parent) : null;
   if (cmd.parent !== null && !engine.get(parentEng!, Name).ok) {
     return { ok: false, error: { code: 'INVALID_PARENT', hint: `parent ${cmd.parent} not found` } };
   }
   if (parentEng !== null && parentEng === eH) {
-    return { ok: false, error: { code: 'INVALID_PARENT', hint: 'cannot parent an entity to itself' } };
+    return {
+      ok: false,
+      error: { code: 'INVALID_PARENT', hint: 'cannot parent an entity to itself' },
+    };
   }
   const coR = engine.get(eH, ChildOf);
   // Inverse carries the prior parent HANDLE (handle IS identity now — no legacy
@@ -671,12 +742,16 @@ export function applyReparent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
     const r = engine.removeComponent(eH, ChildOf);
     if (!r.ok) return { ok: false, error: { code: 'REPARENT_FAILED', hint: String(r.error) } };
   }
-  return { ok: true, inverse: { kind: 'reparent', entity: cmd.entity, parent: before }, created: [] };
+  return {
+    ok: true,
+    inverse: { kind: 'reparent', entity: cmd.entity, parent: before },
+    created: [],
+  };
 }
 
 function hierarchyParent(ctx: DocApplierCtx, entity: EntityHandle): EntityHandle | null {
   const result = ctx.engine.get(entity, ChildOf);
-  return result.ok ? result.value.parent as EntityHandle : null;
+  return result.ok ? (result.value.parent as EntityHandle) : null;
 }
 
 function hierarchyChildren(ctx: DocApplierCtx, entity: EntityHandle): EntityHandle[] {
@@ -686,7 +761,11 @@ function hierarchyChildren(ctx: DocApplierCtx, entity: EntityHandle): EntityHand
   return Array.from(entities, (value) => value as EntityHandle);
 }
 
-function hierarchyContains(ctx: DocApplierCtx, ancestor: EntityHandle, candidate: EntityHandle): boolean {
+function hierarchyContains(
+  ctx: DocApplierCtx,
+  ancestor: EntityHandle,
+  candidate: EntityHandle,
+): boolean {
   if (ancestor === candidate) return true;
   return hierarchyChildren(ctx, ancestor).some((child) => hierarchyContains(ctx, child, candidate));
 }
@@ -739,32 +818,45 @@ export function applyHierarchyGesture(ctx: DocApplierCtx, _cmd: EditorOp): Apply
     .map((entity) => toEntity(ctx.alias, entity))
     .filter((entity) => ctx.engine.get(entity, Name).ok);
   if (live.length === 0) {
-    return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: 'hierarchyGesture has no live entity targets' } };
+    return {
+      ok: false,
+      error: { code: 'NO_SUCH_ENTITY', hint: 'hierarchyGesture has no live entity targets' },
+    };
   }
 
   const commands: EditorOp[] = [];
   if (cmd.action === 'reparent') {
-    const parent = cmd.parent === undefined || cmd.parent === null
-      ? null
-      : toEntity(ctx.alias, cmd.parent);
+    const parent =
+      cmd.parent === undefined || cmd.parent === null ? null : toEntity(ctx.alias, cmd.parent);
     if (parent !== null && !ctx.engine.get(parent, Name).ok) {
-      return { ok: false, error: { code: 'INVALID_PARENT', hint: `parent ${cmd.parent} not found` } };
+      return {
+        ok: false,
+        error: { code: 'INVALID_PARENT', hint: `parent ${cmd.parent} not found` },
+      };
     }
     for (const entity of live) {
       if (parent !== null && hierarchyContains(ctx, entity, parent)) continue;
       if (hierarchyParent(ctx, entity) === parent) continue;
       const transform = hierarchyPreservedTransform(ctx, entity, parent);
-      if (transform !== null) commands.push({ kind: 'setComponent', entity, component: 'Transform', patch: transform });
+      if (transform !== null)
+        commands.push({ kind: 'setComponent', entity, component: 'Transform', patch: transform });
       commands.push({ kind: 'reparent', entity, parent });
     }
   } else if (cmd.action === 'delete') {
-    const roots = live.filter((entity) => !live.some((other) => other !== entity && hierarchyContains(ctx, other, entity)));
+    const roots = live.filter(
+      (entity) => !live.some((other) => other !== entity && hierarchyContains(ctx, other, entity)),
+    );
     commands.push(...roots.map((entity) => ({ kind: 'destroyEntity' as const, entity })));
   } else if (cmd.action === 'visibility') {
     if (cmd.state === undefined) {
-      return { ok: false, error: { code: 'INVALID_ARGS', hint: 'visibility hierarchyGesture requires state' } };
+      return {
+        ok: false,
+        error: { code: 'INVALID_ARGS', hint: 'visibility hierarchyGesture requires state' },
+      };
     }
-    commands.push(...live.map((entity) => ({ kind: 'setVisibility' as const, entity, state: cmd.state! })));
+    commands.push(
+      ...live.map((entity) => ({ kind: 'setVisibility' as const, entity, state: cmd.state! })),
+    );
   } else if (cmd.action === 'group') {
     const placeholder = -1;
     const parent = hierarchyParent(ctx, live.at(-1)!);
@@ -775,18 +867,29 @@ export function applyHierarchyGesture(ctx: DocApplierCtx, _cmd: EditorOp): Apply
       components: { Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
       _id: placeholder,
     });
-    commands.push(...live.map((entity) => ({ kind: 'reparent' as const, entity, parent: placeholder })));
+    commands.push(
+      ...live.map((entity) => ({ kind: 'reparent' as const, entity, parent: placeholder })),
+    );
   } else if (cmd.action === 'ungroup') {
     const group = live[0]!;
     const parent = hierarchyParent(ctx, group);
-    commands.push(...hierarchyChildren(ctx, group).map((entity) => ({ kind: 'reparent' as const, entity, parent })));
+    commands.push(
+      ...hierarchyChildren(ctx, group).map((entity) => ({
+        kind: 'reparent' as const,
+        entity,
+        parent,
+      })),
+    );
     commands.push({ kind: 'destroyEntity', entity: group });
   } else {
     commands.push(...live.map((entity) => ({ kind: 'duplicateEntity' as const, entity })));
   }
 
   if (commands.length === 0) {
-    return { ok: false, error: { code: 'PLAN_FAILED', hint: `hierarchyGesture ${cmd.action} produced no mutation` } };
+    return {
+      ok: false,
+      error: { code: 'PLAN_FAILED', hint: `hierarchyGesture ${cmd.action} produced no mutation` },
+    };
   }
   return ctx.dispatchSub(ctx, {
     kind: 'transaction',
@@ -802,11 +905,23 @@ export function applySetComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   const cmd = _cmd as any;
   const { engine, alias } = ctx;
   const tok = resolveToken(ctx.engine, cmd.component);
-  if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
+  if (!tok)
+    return {
+      ok: false,
+      error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` },
+    };
   const eH = toEntity(alias, cmd.entity);
-  if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
+  if (!engine.get(eH, Name).ok)
+    return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
   const cur = engine.get(eH, tok);
-  if (!cur.ok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `component ${cmd.component} not on entity ${cmd.entity}` } };
+  if (!cur.ok)
+    return {
+      ok: false,
+      error: {
+        code: 'NO_SUCH_COMPONENT',
+        hint: `component ${cmd.component} not on entity ${cmd.entity}`,
+      },
+    };
   // Guard `patch` before Object.keys — a missing/null/non-object patch (e.g. a
   // caller that passed addComponent's `value` field by mistake) must return a
   // structured INVALID_ARGS, never throw a raw `Cannot convert undefined or null
@@ -814,14 +929,29 @@ export function applySetComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   // ctx.dispatchSub (transaction sub-ops) and gateway.begin bypass the door, so
   // the applier stays the innermost invariant point (solo round-14).
   if (typeof cmd.patch !== 'object' || cmd.patch === null || Array.isArray(cmd.patch)) {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: `setComponent requires an object "patch" field (got ${cmd.patch === null ? 'null' : Array.isArray(cmd.patch) ? 'array' : typeof cmd.patch}); note setComponent uses "patch", addComponent uses "value"` } };
+    return { ok: false, error: { code: 'INVALID_ARGS', hint: `setComponent requires an object "patch" field (got ${cmd.patch === null ? 'null' : Array.isArray(cmd.patch) ? 'array' : typeof cmd.patch}); note setComponent uses "patch", addComponent uses "value"`,
+      },
+    };
   }
   const before = clone(cur.value) as Record<string, unknown>;
-  const completed = completeGroupedArrays(ctx.engine, cmd.component, cmd.patch as Record<string, unknown>, before);
-  if (!completed.ok) return { ok: false, error: { code: 'SET_FAILED', hint: completed.hint, details: completed.details } };
+  const completed = completeGroupedArrays(
+    ctx.engine,
+    cmd.component,
+    cmd.patch as Record<string, unknown>,
+    before,
+  );
+  if (!completed.ok)
+    return {
+      ok: false,
+      error: { code: 'SET_FAILED', hint: completed.hint, details: completed.details },
+    };
   const patch = completed.values;
   const validation = validateComponentWrite(ctx.engine, cmd.component, patch, before, 'SET_FAILED');
-  if (!validation.ok) return { ok: false, error: { code: 'SET_FAILED', hint: validation.hint, details: validation.details } };
+  if (!validation.ok)
+    return {
+      ok: false,
+      error: { code: 'SET_FAILED', hint: validation.hint, details: validation.details },
+    };
   const restore: Record<string, unknown> = {};
   for (const k of Object.keys(patch)) restore[k] = before[k];
   // Front-door shared<T> binder (M7 / AC-10): resolve any catalogued GUID strings
@@ -829,10 +959,15 @@ export function applySetComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   // applyAddComponent — the setComponent path binds a clip onto an existing
   // AnimationPlayer). Fail Fast on a resolve miss; never pass the string to set().
   const resolvedPatch = resolveSharedFields(engine, cmd.component, patch);
-  if (!resolvedPatch.ok) return { ok: false, error: { code: 'SET_FAILED', hint: resolvedPatch.hint } };
+  if (!resolvedPatch.ok)
+    return { ok: false, error: { code: 'SET_FAILED', hint: resolvedPatch.hint } };
   const r = engine.set(eH, tok, resolvedPatch.value as Parameters<typeof engine.set>[2]);
   if (!r.ok) return { ok: false, error: { code: 'SET_FAILED', hint: String(r.error) } };
-  return { ok: true, inverse: { kind: 'setComponent', entity: cmd.entity, component: cmd.component, patch: restore }, created: [] };
+  return {
+    ok: true,
+    inverse: { kind: 'setComponent', entity: cmd.entity, component: cmd.component, patch: restore },
+    created: [],
+  };
 }
 
 // ── SceneInstance override appliers ─────────────────────────────────────────
@@ -854,17 +989,49 @@ export function applySetSceneOverride(ctx: DocApplierCtx, _cmd: EditorOp): Apply
     _beforeOverride?: unknown;
   };
   const tok = resolveToken(ctx.engine, cmd.component);
-  if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
+  if (!tok)
+    return {
+      ok: false,
+      error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` },
+    };
   const root = toEntity(ctx.alias, cmd.root);
   const member = toEntity(ctx.alias, cmd.member);
   const state = ctx.engine.getSceneInstanceState(root);
-  if (!state.ok) return { ok: false, error: { code: 'SET_FAILED', hint: `entity ${cmd.root} is not a SceneInstance root`, details: { fieldPath: `SceneInstance(${cmd.root})`, reason: 'scene-instance-root-required' } } };
+  if (!state.ok)
+    return {
+      ok: false,
+      error: {
+        code: 'SET_FAILED',
+        hint: `entity ${cmd.root} is not a SceneInstance root`,
+        details: {
+          fieldPath: `SceneInstance(${cmd.root})`,
+          reason: 'scene-instance-root-required',
+        },
+      },
+    };
   const localId = state.value.entityToLocalId.get(member);
   if (localId === undefined) {
-    return { ok: false, error: { code: 'SET_FAILED', hint: `entity ${cmd.member} is not a member of SceneInstance ${cmd.root}`, details: { fieldPath: `SceneInstance(${cmd.root}).member`, reason: 'member-not-in-instance' } } };
+    return {
+      ok: false,
+      error: {
+        code: 'SET_FAILED',
+        hint: `entity ${cmd.member} is not a member of SceneInstance ${cmd.root}`,
+        details: {
+          fieldPath: `SceneInstance(${cmd.root}).member`,
+          reason: 'member-not-in-instance',
+        },
+      },
+    };
   }
   const current = ctx.engine.get(member, tok);
-  if (!current.ok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `component ${cmd.component} not on entity ${cmd.member}` } };
+  if (!current.ok)
+    return {
+      ok: false,
+      error: {
+        code: 'NO_SUCH_COMPONENT',
+        hint: `component ${cmd.component} not on entity ${cmd.member}`,
+      },
+    };
   const before = clone(current.value) as Record<string, unknown>;
   const field = componentFieldSchema(ctx.engine, cmd.component, cmd.field);
   let patch: Record<string, unknown> = { [cmd.field]: cmd.value };
@@ -875,12 +1042,23 @@ export function applySetSceneOverride(ctx: DocApplierCtx, _cmd: EditorOp): Apply
       ctx.engine.editorComponentSchema(cmd.component),
     );
     if (!planned.ok) {
-      return { ok: false, error: { code: 'SET_FAILED', hint: planned.hint, details: { fieldPath: planned.fieldPath, reason: planned.reason } } };
+      return {
+        ok: false,
+        error: {
+          code: 'SET_FAILED',
+          hint: planned.hint,
+          details: { fieldPath: planned.fieldPath, reason: planned.reason },
+        },
+      };
     }
     patch = planned.patch;
   }
   const validation = validateComponentWrite(ctx.engine, cmd.component, patch, before, 'SET_FAILED');
-  if (!validation.ok) return { ok: false, error: { code: 'SET_FAILED', hint: validation.hint, details: validation.details } };
+  if (!validation.ok)
+    return {
+      ok: false,
+      error: { code: 'SET_FAILED', hint: validation.hint, details: validation.details },
+    };
   const resolved = resolveSharedFields(ctx.engine, cmd.component, patch);
   if (!resolved.ok) return { ok: false, error: { code: 'SET_FAILED', hint: resolved.hint } };
   const previous = new Map<string, unknown>();
@@ -890,26 +1068,60 @@ export function applySetSceneOverride(ctx: DocApplierCtx, _cmd: EditorOp): Apply
   }
   const applied: string[] = [];
   for (const fieldName of Object.keys(patch)) {
-    const result = ctx.engine.setSceneOverride(root, member, tok, fieldName, resolved.value[fieldName]);
+    const result = ctx.engine.setSceneOverride(
+      root,
+      member,
+      tok,
+      fieldName,
+      resolved.value[fieldName],
+    );
     if (!result.ok) {
       for (const appliedField of [...applied].reverse()) {
         const oldValue = previous.get(appliedField);
         if (oldValue === undefined) ctx.engine.removeSceneOverride(root, member, tok, appliedField);
         else ctx.engine.setSceneOverride(root, member, tok, appliedField, oldValue);
       }
-      return { ok: false, error: { code: 'SET_FAILED', hint: String(result.error), details: { fieldPath: `${cmd.component}.${fieldName}`, reason: 'engine-scene-override-rejected' } } };
+      return {
+        ok: false,
+        error: {
+          code: 'SET_FAILED',
+          hint: String(result.error),
+          details: {
+            fieldPath: `${cmd.component}.${fieldName}`,
+            reason: 'engine-scene-override-rejected',
+          },
+        },
+      };
     }
     applied.push(fieldName);
   }
   const inverseCommands: EditorOp[] = Object.keys(patch).map((fieldName) => {
     const oldValue = previous.get(fieldName);
     return oldValue === undefined
-      ? { kind: 'removeSceneOverride', root: cmd.root, member: cmd.member, component: cmd.component, field: fieldName }
-      : { kind: 'setSceneOverride', root: cmd.root, member: cmd.member, component: cmd.component, field: fieldName, value: oldValue };
+      ? {
+          kind: 'removeSceneOverride',
+          root: cmd.root,
+          member: cmd.member,
+          component: cmd.component,
+          field: fieldName,
+        }
+      : {
+          kind: 'setSceneOverride',
+          root: cmd.root,
+          member: cmd.member,
+          component: cmd.component,
+          field: fieldName,
+          value: oldValue,
+        };
   });
-  const inverse: EditorOp = inverseCommands.length === 1
-    ? inverseCommands[0]!
-    : { kind: 'transaction', label: `restore override ${cmd.component} ×${inverseCommands.length}`, commands: [...inverseCommands].reverse() };
+  const inverse: EditorOp =
+    inverseCommands.length === 1
+      ? inverseCommands[0]!
+      : {
+          kind: 'transaction',
+          label: `restore override ${cmd.component} ×${inverseCommands.length}`,
+          commands: [...inverseCommands].reverse(),
+        };
   return { ok: true, inverse, created: [] };
 }
 
@@ -922,24 +1134,74 @@ export function applyRemoveSceneOverride(ctx: DocApplierCtx, _cmd: EditorOp): Ap
     field: string;
   };
   const tok = resolveToken(ctx.engine, cmd.component);
-  if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
+  if (!tok)
+    return {
+      ok: false,
+      error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` },
+    };
   const root = toEntity(ctx.alias, cmd.root);
   const member = toEntity(ctx.alias, cmd.member);
   const state = ctx.engine.getSceneInstanceState(root);
-  if (!state.ok) return { ok: false, error: { code: 'SET_FAILED', hint: `entity ${cmd.root} is not a SceneInstance root`, details: { fieldPath: `SceneInstance(${cmd.root})`, reason: 'scene-instance-root-required' } } };
+  if (!state.ok)
+    return {
+      ok: false,
+      error: {
+        code: 'SET_FAILED',
+        hint: `entity ${cmd.root} is not a SceneInstance root`,
+        details: {
+          fieldPath: `SceneInstance(${cmd.root})`,
+          reason: 'scene-instance-root-required',
+        },
+      },
+    };
   const localId = state.value.entityToLocalId.get(member);
   if (localId === undefined) {
-    return { ok: false, error: { code: 'SET_FAILED', hint: `entity ${cmd.member} is not a member of SceneInstance ${cmd.root}`, details: { fieldPath: `SceneInstance(${cmd.root}).member`, reason: 'member-not-in-instance' } } };
+    return {
+      ok: false,
+      error: {
+        code: 'SET_FAILED',
+        hint: `entity ${cmd.member} is not a member of SceneInstance ${cmd.root}`,
+        details: {
+          fieldPath: `SceneInstance(${cmd.root}).member`,
+          reason: 'member-not-in-instance',
+        },
+      },
+    };
   }
   const existing = state.value.overrides.get(localId)?.get(`${cmd.component}:${cmd.field}`);
   if (existing === undefined) {
-    return { ok: false, error: { code: 'SET_FAILED', hint: `no SceneInstance override exists for ${cmd.component}.${cmd.field} on entity ${cmd.member}`, details: { fieldPath: `${cmd.component}.${cmd.field}`, reason: 'override-not-found' } } };
+    return {
+      ok: false,
+      error: {
+        code: 'SET_FAILED',
+        hint: `no SceneInstance override exists for ${cmd.component}.${cmd.field} on entity ${cmd.member}`,
+        details: { fieldPath: `${cmd.component}.${cmd.field}`, reason: 'override-not-found' },
+      },
+    };
   }
   const result = ctx.engine.removeSceneOverride(root, member, tok, cmd.field);
-  if (!result.ok) return { ok: false, error: { code: 'SET_FAILED', hint: String(result.error), details: { fieldPath: `${cmd.component}.${cmd.field}`, reason: 'engine-scene-override-rejected' } } };
+  if (!result.ok)
+    return {
+      ok: false,
+      error: {
+        code: 'SET_FAILED',
+        hint: String(result.error),
+        details: {
+          fieldPath: `${cmd.component}.${cmd.field}`,
+          reason: 'engine-scene-override-rejected',
+        },
+      },
+    };
   return {
     ok: true,
-    inverse: { kind: 'setSceneOverride', root: cmd.root, member: cmd.member, component: cmd.component, field: cmd.field, value: clone(existing.value) },
+    inverse: {
+      kind: 'setSceneOverride',
+      root: cmd.root,
+      member: cmd.member,
+      component: cmd.component,
+      field: cmd.field,
+      value: clone(existing.value),
+    },
     created: [],
   };
 }
@@ -1000,21 +1262,30 @@ function resolveSharedFieldGuids(
     for (const handle of Array.isArray(fieldValue) ? fieldValue : [fieldValue]) {
       if (typeof handle !== 'number' || handle === 0) continue;
       const kind = engine.sharedAssetKind(handle);
-      const expectedKind = target === 'MeshAsset' ? 'mesh' : target === 'MaterialAsset' ? 'material' : undefined;
+      const expectedKind =
+        target === 'MeshAsset' ? 'mesh' : target === 'MaterialAsset' ? 'material' : undefined;
       if (kind === undefined || (expectedKind !== undefined && kind !== expectedKind)) {
-        return { ok: false, hint: `${componentName}.${field} requires a live ${target} reference; handle ${handle} ${kind === undefined ? 'is not registered' : `resolves to ${kind}`}. Use a catalog GUID or bindAssetRef; do not guess numeric handles.` };
+        return {
+          ok: false,
+          hint: `${componentName}.${field} requires a live ${target} reference; handle ${handle} ${kind === undefined ? 'is not registered' : `resolves to ${kind}`}. Use a catalog GUID or bindAssetRef; do not guess numeric handles.`,
+        };
       }
     }
-
 
     if (Array.isArray(fieldValue)) {
       // Numeric elements were checked above; resolve the remaining GUIDs.
       let changed = false;
       const resolvedArr: unknown[] = fieldValue.map((el) => {
         if (typeof el !== 'string') return el;
-        if (!el) { changed = true; return 0; } // empty string → null handle
+        if (!el) {
+          changed = true;
+          return 0;
+        } // empty string → null handle
         const r = engine.resolveSharedGuid(target, el);
-        if (!r.ok) throw new SharedResolveMiss(`could not resolve GUID for ${componentName}.${field}[]: ${r.error.hint}`);
+        if (!r.ok)
+          throw new SharedResolveMiss(
+            `could not resolve GUID for ${componentName}.${field}[]: ${r.error.hint}`,
+          );
         changed = true;
         return r.value;
       });
@@ -1031,7 +1302,11 @@ function resolveSharedFieldGuids(
       }
       // scalar shared<T>: resolve the single GUID.
       const r = engine.resolveSharedGuid(target, fieldValue);
-      if (!r.ok) return { ok: false, hint: `could not resolve GUID for ${componentName}.${field}: ${r.error.hint}` };
+      if (!r.ok)
+        return {
+          ok: false,
+          hint: `could not resolve GUID for ${componentName}.${field}: ${r.error.hint}`,
+        };
       out ??= { ...value };
       out[field] = r.value;
     }
@@ -1065,21 +1340,57 @@ export function applyAddComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   const cmd = _cmd as any;
   const { engine, alias } = ctx;
   const tok = resolveToken(ctx.engine, cmd.component);
-  if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
+  if (!tok)
+    return {
+      ok: false,
+      error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` },
+    };
   const eH = toEntity(alias, cmd.entity);
-  if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
-  if (engine.get(eH, tok).ok) return { ok: false, error: { code: 'COMPONENT_EXISTS', hint: `component ${cmd.component} already on entity ${cmd.entity}` } };
-  if (cmd.value !== undefined && (typeof cmd.value !== 'object' || cmd.value === null || Array.isArray(cmd.value))) {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: `addComponent requires an object "value" field (got ${cmd.value === null ? 'null' : Array.isArray(cmd.value) ? 'array' : typeof cmd.value})` } };
+  if (!engine.get(eH, Name).ok)
+    return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
+  if (engine.get(eH, tok).ok)
+    return {
+      ok: false,
+      error: {
+        code: 'COMPONENT_EXISTS',
+        hint: `component ${cmd.component} already on entity ${cmd.entity}`,
+      },
+    };
+  if (
+    cmd.value !== undefined &&
+    (typeof cmd.value !== 'object' || cmd.value === null || Array.isArray(cmd.value))
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_ARGS',
+        hint: `addComponent requires an object "value" field (got ${cmd.value === null ? 'null' : Array.isArray(cmd.value) ? 'array' : typeof cmd.value})`,
+      },
+    };
   }
   const inputValue = Object.fromEntries(
-    Object.entries((cmd.value ?? {}) as Record<string, unknown>)
-      .filter(([, value]) => value !== undefined),
+    Object.entries((cmd.value ?? {}) as Record<string, unknown>).filter(
+      ([, value]) => value !== undefined,
+    ),
   );
   const completed = completeGroupedArrays(ctx.engine, cmd.component, inputValue, undefined);
-  if (!completed.ok) return { ok: false, error: { code: 'ADD_FAILED', hint: completed.hint, details: completed.details } };
-  const validation = validateComponentWrite(ctx.engine, cmd.component, completed.values, undefined, 'ADD_FAILED');
-  if (!validation.ok) return { ok: false, error: { code: 'ADD_FAILED', hint: validation.hint, details: validation.details } };
+  if (!completed.ok)
+    return {
+      ok: false,
+      error: { code: 'ADD_FAILED', hint: completed.hint, details: completed.details },
+    };
+  const validation = validateComponentWrite(
+    ctx.engine,
+    cmd.component,
+    completed.values,
+    undefined,
+    'ADD_FAILED',
+  );
+  if (!validation.ok)
+    return {
+      ok: false,
+      error: { code: 'ADD_FAILED', hint: validation.hint, details: validation.details },
+    };
   // Front-door shared<T> binder (M7 / AC-10): resolve any catalogued GUID strings
   // in shared fields to live handles before the engine sees them (Fail Fast on a
   // resolve miss — never pass the string through to the P3 gate / a silent 0).
@@ -1087,7 +1398,11 @@ export function applyAddComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResu
   if (!resolved.ok) return { ok: false, error: { code: 'ADD_FAILED', hint: resolved.hint } };
   const r = engine.addComponent(eH, { component: tok, data: resolved.value as never });
   if (!r.ok) return { ok: false, error: { code: 'ADD_FAILED', hint: String(r.error) } };
-  return { ok: true, inverse: { kind: 'removeComponent', entity: cmd.entity, component: cmd.component }, created: [] };
+  return {
+    ok: true,
+    inverse: { kind: 'removeComponent', entity: cmd.entity, component: cmd.component },
+    created: [],
+  };
 }
 
 // ── removeComponent applier ───────────────────────────────────────────────────
@@ -1098,17 +1413,37 @@ export function applyRemoveComponent(ctx: DocApplierCtx, _cmd: EditorOp): ApplyR
   const { engine, alias } = ctx;
   // Name is intrinsic: removeComponent Name → PROTECTED_COMPONENT. Guard before
   // token resolution.
-  if (cmd.component === 'Name') return { ok: false, error: { code: 'PROTECTED_COMPONENT', hint: 'Name is intrinsic and cannot be removed' } };
+  if (cmd.component === 'Name')
+    return {
+      ok: false,
+      error: { code: 'PROTECTED_COMPONENT', hint: 'Name is intrinsic and cannot be removed' },
+    };
   const tok = resolveToken(ctx.engine, cmd.component);
-  if (!tok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` } };
+  if (!tok)
+    return {
+      ok: false,
+      error: { code: 'NO_SUCH_COMPONENT', hint: `unknown component ${cmd.component}` },
+    };
   const eH = toEntity(alias, cmd.entity);
-  if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
+  if (!engine.get(eH, Name).ok)
+    return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
   const cur = engine.get(eH, tok);
-  if (!cur.ok) return { ok: false, error: { code: 'NO_SUCH_COMPONENT', hint: `component ${cmd.component} not on entity ${cmd.entity}` } };
+  if (!cur.ok)
+    return {
+      ok: false,
+      error: {
+        code: 'NO_SUCH_COMPONENT',
+        hint: `component ${cmd.component} not on entity ${cmd.entity}`,
+      },
+    };
   const value = clone(cur.value);
   const r = engine.removeComponent(eH, tok);
   if (!r.ok) return { ok: false, error: { code: 'REMOVE_FAILED', hint: String(r.error) } };
-  return { ok: true, inverse: { kind: 'addComponent', entity: cmd.entity, component: cmd.component, value }, created: [] };
+  return {
+    ok: true,
+    inverse: { kind: 'addComponent', entity: cmd.entity, component: cmd.component, value },
+    created: [],
+  };
 }
 
 // ── setVisibility applier ─────────────────────────────────────────────────────
@@ -1124,9 +1459,13 @@ export function applySetVisibility(ctx: DocApplierCtx, _cmd: EditorOp): ApplyRes
   const cmd = _cmd as Extract<EditorOp, { kind: 'setVisibility' }>;
   const { engine, alias } = ctx;
   const eH = toEntity(alias, cmd.entity);
-  if (!engine.get(eH, Name).ok) return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
+  if (!engine.get(eH, Name).ok)
+    return { ok: false, error: { code: 'NO_SUCH_ENTITY', hint: `entity ${cmd.entity} not found` } };
   if (cmd.state !== 'inherited' && cmd.state !== 'hidden' && cmd.state !== 'visible') {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: `invalid Visibility state "${String(cmd.state)}"` } };
+    return {
+      ok: false,
+      error: { code: 'INVALID_ARGS', hint: `invalid Visibility state "${String(cmd.state)}"` },
+    };
   }
 
   const current = engine.get(eH, Visibility);
@@ -1134,7 +1473,10 @@ export function applySetVisibility(ctx: DocApplierCtx, _cmd: EditorOp): ApplyRes
     ? visibilityStateFromValue((current.value as { state: number }).state)
     : 'inherited';
   if (previous === undefined) {
-    return { ok: false, error: { code: 'SET_FAILED', hint: `entity ${cmd.entity} has an invalid Visibility state` } };
+    return {
+      ok: false,
+      error: { code: 'SET_FAILED', hint: `entity ${cmd.entity} has an invalid Visibility state` },
+    };
   }
 
   if (cmd.state === 'inherited') {
@@ -1143,11 +1485,20 @@ export function applySetVisibility(ctx: DocApplierCtx, _cmd: EditorOp): ApplyRes
       if (!r.ok) return { ok: false, error: { code: 'SET_FAILED', hint: String(r.error) } };
       return {
         ok: true,
-        inverse: { kind: 'addComponent', entity: cmd.entity, component: 'Visibility', value: clone(current.value) },
+        inverse: {
+          kind: 'addComponent',
+          entity: cmd.entity,
+          component: 'Visibility',
+          value: clone(current.value),
+        },
         created: [],
       };
     }
-    return { ok: true, inverse: { kind: 'setVisibility', entity: cmd.entity, state: 'inherited' }, created: [] };
+    return {
+      ok: true,
+      inverse: { kind: 'setVisibility', entity: cmd.entity, state: 'inherited' },
+      created: [],
+    };
   }
 
   const value = { state: VisibilityStateValue[cmd.state] };
@@ -1156,16 +1507,26 @@ export function applySetVisibility(ctx: DocApplierCtx, _cmd: EditorOp): ApplyRes
     if (!r.ok) return { ok: false, error: { code: 'SET_FAILED', hint: String(r.error) } };
     return {
       ok: true,
-      inverse: previous === 'inherited'
-        ? { kind: 'setComponent', entity: cmd.entity, component: 'Visibility', patch: clone(current.value) }
-        : { kind: 'setVisibility', entity: cmd.entity, state: previous },
+      inverse:
+        previous === 'inherited'
+          ? {
+              kind: 'setComponent',
+              entity: cmd.entity,
+              component: 'Visibility',
+              patch: clone(current.value),
+            }
+          : { kind: 'setVisibility', entity: cmd.entity, state: previous },
       created: [],
     };
   }
 
   const r = engine.addComponent(eH, { component: Visibility, data: value });
   if (!r.ok) return { ok: false, error: { code: 'SET_FAILED', hint: String(r.error) } };
-  return { ok: true, inverse: { kind: 'removeComponent', entity: cmd.entity, component: 'Visibility' }, created: [] };
+  return {
+    ok: true,
+    inverse: { kind: 'removeComponent', entity: cmd.entity, component: 'Visibility' },
+    created: [],
+  };
 }
 
 // ── transaction applier ───────────────────────────────────────────────────────
@@ -1173,7 +1534,8 @@ export function applySetVisibility(ctx: DocApplierCtx, _cmd: EditorOp): ApplyRes
 export function applyTransaction(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResult {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cmd = _cmd as any;
-  if (cmd.commands.length === 0) return { ok: false, error: { code: 'EMPTY_TRANSACTION', hint: 'transaction has no commands' } };
+  if (cmd.commands.length === 0)
+    return { ok: false, error: { code: 'EMPTY_TRANSACTION', hint: 'transaction has no commands' } };
   const inverses: EditorOp[] = [];
   // Flatten every sub-op's created roots into one array (D-2: top-level created =
   // all sub-ops' roots). A caller needing per-sub-op roots (e.g. spawnClipboard's
@@ -1189,7 +1551,11 @@ export function applyTransaction(ctx: DocApplierCtx, _cmd: EditorOp): ApplyResul
     created.push(...r.created);
   }
   inverses.reverse();
-  return { ok: true, inverse: { kind: 'transaction', label: `undo ${cmd.label}`, commands: inverses }, created };
+  return {
+    ok: true,
+    inverse: { kind: 'transaction', label: `undo ${cmd.label}`, commands: inverses },
+    created,
+  };
 }
 
 // ── instantiateSceneAsset applier ─────────────────────────────────────────────
@@ -1239,7 +1605,14 @@ export function applyInstantiateSceneAsset(ctx: DocApplierCtx, _cmd: EditorOp): 
   const cmd = _cmd as any;
   const { engine, alias } = ctx;
   const asset = cmd.asset as SceneAsset | undefined;
-  if (!asset) return { ok: false, error: { code: 'INVALID_ARGS', hint: 'instantiateSceneAsset requires a collected `asset` (SceneAsset POD)' } };
+  if (!asset)
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_ARGS',
+        hint: 'instantiateSceneAsset requires a collected `asset` (SceneAsset POD)',
+      },
+    };
 
   // This is an Editor document operation, so normalize the copied payload at
   // the workflow boundary. EngineFacade.instantiateSceneAssetFlat remains a
@@ -1249,11 +1622,20 @@ export function applyInstantiateSceneAsset(ctx: DocApplierCtx, _cmd: EditorOp): 
     // instantiateSceneAssetFlat returns AssetError | PackError | EcsError |
     // {NO_REGISTRY} — all opaque here; surface as a single structured code so the
     // failure never flows downstream silently (Fail Fast / charter P3).
-    return { ok: false, error: { code: 'INSTANTIATE_FAILED', hint: `scene-asset instantiate failed: ${JSON.stringify(r.error)}` } };
+    return {
+      ok: false,
+      error: {
+        code: 'INSTANTIATE_FAILED',
+        hint: `scene-asset instantiate failed: ${JSON.stringify(r.error)}`,
+      },
+    };
   }
   const newRoots = r.value as EntityHandle[];
   if (newRoots.length === 0) {
-    return { ok: false, error: { code: 'INSTANTIATE_FAILED', hint: 'scene-asset instantiate produced no roots' } };
+    return {
+      ok: false,
+      error: { code: 'INSTANTIATE_FAILED', hint: 'scene-asset instantiate produced no roots' },
+    };
   }
   const bindingFailures = ctx.bindAnimationTargets(newRoots);
   if (bindingFailures.length > 0) {
@@ -1274,12 +1656,14 @@ export function applyInstantiateSceneAsset(ctx: DocApplierCtx, _cmd: EditorOp): 
     const parentEng = toEntity(alias, cmd.parent);
     if (engine.get(parentEng, Name).ok) {
       const pr = engine.addComponent(primary, { component: ChildOf, data: { parent: parentEng } });
-      if (!pr.ok) return cascadeInstantiateFailure(engine, newRoots, 'REPARENT_FAILED', String(pr.error));
+      if (!pr.ok)
+        return cascadeInstantiateFailure(engine, newRoots, 'REPARENT_FAILED', String(pr.error));
     }
   }
   if (typeof cmd.name === 'string') {
     const nr = engine.set(primary, Name, { value: cmd.name });
-    if (!nr.ok) return cascadeInstantiateFailure(engine, newRoots, 'RENAME_FAILED', String(nr.error));
+    if (!nr.ok)
+      return cascadeInstantiateFailure(engine, newRoots, 'RENAME_FAILED', String(nr.error));
   }
 
   // Positional offset (paste): shift every new root's Transform.pos so a paste
@@ -1289,8 +1673,10 @@ export function applyInstantiateSceneAsset(ctx: DocApplierCtx, _cmd: EditorOp): 
     for (const root of newRoots) {
       const tr = engine.get(root, Transform);
       if (!tr.ok) continue;
-      const cur = ((tr.value as unknown as { pos?: ArrayLike<number> }).pos) ?? [0, 0, 0];
-      engine.set(root, Transform, { pos: [(cur[0] ?? 0) + (dx ?? 0), (cur[1] ?? 0) + (dy ?? 0), (cur[2] ?? 0) + (dz ?? 0)] } as Parameters<typeof engine.set>[2]);
+      const cur = (tr.value as unknown as { pos?: ArrayLike<number> }).pos ?? [0, 0, 0];
+      engine.set(root, Transform, {
+        pos: [(cur[0] ?? 0) + (dx ?? 0), (cur[1] ?? 0) + (dy ?? 0), (cur[2] ?? 0) + (dz ?? 0)],
+      } as Parameters<typeof engine.set>[2]);
     }
   }
 
@@ -1300,7 +1686,10 @@ export function applyInstantiateSceneAsset(ctx: DocApplierCtx, _cmd: EditorOp): 
   const label = typeof cmd.label === 'string' ? cmd.label : 'instantiate';
   return {
     ok: true,
-    inverse: destroys.length === 1 ? destroys[0]! : { kind: 'transaction', label: `undo ${label}`, commands: destroys },
+    inverse:
+      destroys.length === 1
+        ? destroys[0]!
+        : { kind: 'transaction', label: `undo ${label}`, commands: destroys },
     // The new roots are the created channel (replaces the old cmd._newRoots
     // in-place rewrite, which JSON couldn't carry back over the eval bridge).
     created: newRoots,
@@ -1357,7 +1746,13 @@ function applyCommandCtx(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
     // A non-document kind reaching here means the gateway routed a session/
     // transient op into the document applier — a wiring bug; fail fast.
     default:
-      return { ok: false, error: { code: 'UNKNOWN_OP', hint: `applyCommand handles document ops only; "${(cmd as { kind: string }).kind}" is a session/transient op` } };
+      return {
+        ok: false,
+        error: {
+          code: 'UNKNOWN_OP',
+          hint: `applyCommand handles document ops only; "${(cmd as { kind: string }).kind}" is a session/transient op`,
+        },
+      };
   }
 }
 
@@ -1374,15 +1769,17 @@ export function buildDocCtxForSession(session: EditSession): DocApplierCtx {
   // resolution). This path drives undo/redo (gateway.undo/redo → applyCommand),
   // so an instantiateSceneAsset REDO would fail here without the registry — same
   // wiring the gateway executor's _getEngineFacade does with doc.registry.
-  const engine = new EngineFacade(session.world as World, session.registry) as unknown as EngineWriteProxy;
+  const engine = new EngineFacade(
+    session.world as World,
+    session.registry,
+  ) as unknown as EngineWriteProxy;
   const alias: DocAliasMap = new Map();
   const ctx: DocApplierCtx = {
     engine,
-    bindAnimationTargets: (roots) => bindAllSceneAnimationTargets(
-      session.world as World,
-      { mutation: engine },
-      roots,
-    ).flatMap((entry) => entry.failures),
+    bindAnimationTargets: (roots) =>
+      bindAllSceneAnimationTargets(session.world as World, { mutation: engine }, roots).flatMap(
+        (entry) => entry.failures,
+      ),
     // Asset write gate (north-star §2 axis symmetry): begin/undo of destroyAsset
     // reach pack IO through this, consistent with the gateway executor ctx. The
     // shared `assetIO` singleton is intentional (AC-D2): its per-path pack write
@@ -1392,7 +1789,13 @@ export function buildDocCtxForSession(session: EditSession): DocApplierCtx {
     // Non-span-pushing recursion reusing the SAME ctx (so the transaction alias
     // threads through every sub-op — forward-references resolve).
     dispatchSub: (c, sub) => applyCommandCtx(c, sub),
-    query: () => ({ ok: false, error: { code: 'QUERY_UNAVAILABLE', hint: 'query snapshot is only wired on the gateway executor ctx' } }),
+    query: () => ({
+      ok: false,
+      error: {
+        code: 'QUERY_UNAVAILABLE',
+        hint: 'query snapshot is only wired on the gateway executor ctx',
+      },
+    }),
   };
   return ctx;
 }
@@ -1431,7 +1834,11 @@ export function childrenOf(world: World, parent: EntityHandle | null): EntityHan
   return worldRootHandles(world);
 }
 
-export function isSelfOrDescendant(world: World, node: EntityHandle, candidate: EntityHandle): boolean {
+export function isSelfOrDescendant(
+  world: World,
+  node: EntityHandle,
+  candidate: EntityHandle,
+): boolean {
   if (node === candidate) return true;
   for (const c of childrenOf(world, node)) {
     if (isSelfOrDescendant(world, c, candidate)) return true;

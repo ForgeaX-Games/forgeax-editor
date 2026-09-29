@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { tmpdir } from 'node:os';
@@ -17,7 +18,7 @@ const recursivePins = [
 const environment = {
   os: 'linux',
   architecture: 'x64',
-  bunVersion: '1.3.14',
+  bunVersion: '1.4.0',
   nodeVersion: '22.13.0',
   pnpmVersion: '11.7.0',
   rustVersion: '1.93',
@@ -47,6 +48,18 @@ function validationInput(release, consumer = 'typecheck') {
   };
 }
 
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+  }
+  return value;
+}
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
 test('cold producer materializes the active profile once and publishes one release identity', async () => {
   const outputDir = makeOutputDir('cold-producer');
   const calls = [];
@@ -74,6 +87,98 @@ test('cold producer materializes the active profile once and publishes one relea
     assert.equal(new Set([release.manifest.artifactId, release.manifest.releaseDigest]).size, 2);
   } finally {
     rmSync(outputDir, { recursive: true, force: true });
+  }
+});
+
+test('source-first producer consumes the Engine action staging tree', async () => {
+  const root = makeOutputDir('engine-staging');
+  const staged = join(root, 'engine');
+  const outputDir = join(root, 'release');
+  const previous = process.env.FORGEAX_ENGINE_PREREQUISITE_OUTPUT;
+  const previousSha = process.env.FORGEAX_ENGINE_PREREQUISITE_SHA;
+  try {
+    const payloads = {
+      'engine-dist/runtime/dist/index.mjs': 'engine dist\n',
+      'wgpu-wasm/wgpu_wasm.js': 'wgpu\n',
+      'fbx-wasm/fbx-wasm.wasm': 'fbx\n',
+    };
+    for (const [path, content] of Object.entries(payloads)) {
+      const file = join(staged, 'payload', path);
+      mkdirSync(join(file, '..'), {recursive: true});
+      writeFileSync(file, content);
+    }
+    const engineInventory = Object.entries(payloads).map(([path, content]) => {
+      const [payloadClass] = path.split('/');
+      return {
+        payloadClass,
+        path: `payload/${path}`,
+        bytes: Buffer.byteLength(content),
+        sha256: sha256(content),
+      };
+    });
+    writeFileSync(
+      join(staged, 'engine-prerequisite-build-manifest.json'),
+      `${JSON.stringify({
+        schemaVersion: 'forgeax-engine-editor-prerequisite-build/v1',
+        sourceOnly: true,
+        status: 'success',
+        productionMode: 'source-build',
+        os: 'linux',
+        architecture: 'x64',
+        engineSha: 'c'.repeat(40),
+        recursivePins: [],
+        payloadClasses: ['engine-dist', 'fbx-wasm', 'wgpu-wasm'],
+        inputDigest: 'd'.repeat(64),
+        outputDigest: sha256(JSON.stringify(canonicalize(engineInventory))),
+        inventory: engineInventory,
+        recipeInputs: [],
+        toolchain: { node: '22.22.3', pnpm: '11.7.0' },
+        stageTimingsMs: { install: 1, staging: 1 },
+        durationMs: 2,
+      }, null, 2)}\n`,
+    );
+    process.env.FORGEAX_ENGINE_PREREQUISITE_OUTPUT = staged;
+    process.env.FORGEAX_ENGINE_PREREQUISITE_SHA = 'c'.repeat(40);
+    const release = await producePrerequisiteRelease({
+      outputDir,
+      profile: 'PR',
+      sourceSha,
+      producerRunId: '102',
+      producerAttempt: 1,
+      recursivePins,
+      environment,
+      producerEnvironmentFingerprint: 'linux-x64-standard',
+      enginePrerequisiteOutput: staged,
+    });
+    assert.equal(release.ok, true);
+    assert.equal(readFileSync(join(outputDir, 'payload', 'engine-dist', 'runtime', 'dist', 'index.mjs'), 'utf8'), 'engine dist\n');
+    assert.equal(readFileSync(join(outputDir, 'payload', 'wgpu-wasm', 'wgpu_wasm.js'), 'utf8'), 'wgpu\n');
+    assert.equal(readFileSync(join(outputDir, 'payload', 'fbx-wasm', 'fbx-wasm.wasm'), 'utf8'), 'fbx\n');
+    assert.equal(release.manifest.enginePrerequisite.engineSha, 'c'.repeat(40));
+    assert.equal(release.manifest.enginePrerequisite.productionMode, 'source-build');
+    assert.equal(release.manifest.enginePrerequisite.outputDigest, sha256(JSON.stringify(canonicalize(engineInventory))));
+
+    writeFileSync(join(staged, 'payload', 'wgpu-wasm', 'wgpu_wasm.js'), 'tampered\n');
+    const tampered = await producePrerequisiteRelease({
+      outputDir: join(root, 'tampered-release'),
+      profile: 'PR',
+      sourceSha,
+      producerRunId: '103',
+      producerAttempt: 1,
+      recursivePins,
+      environment,
+      producerEnvironmentFingerprint: 'linux-x64-standard',
+      enginePrerequisiteOutput: staged,
+    });
+    assert.equal(tampered.ok, false);
+    assert.equal(tampered.error.code, 'producer-failure');
+    assert.match(tampered.error.observed, /Engine source-build payload mismatch/);
+  } finally {
+    if (previous === undefined) delete process.env.FORGEAX_ENGINE_PREREQUISITE_OUTPUT;
+    else process.env.FORGEAX_ENGINE_PREREQUISITE_OUTPUT = previous;
+    if (previousSha === undefined) delete process.env.FORGEAX_ENGINE_PREREQUISITE_SHA;
+    else process.env.FORGEAX_ENGINE_PREREQUISITE_SHA = previousSha;
+    rmSync(root, {recursive: true, force: true});
   }
 });
 

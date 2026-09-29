@@ -1,10 +1,4 @@
-import {
-  lstatSync,
-  realpathSync,
-  statSync,
-  symlinkSync,
-  unlinkSync,
-} from 'node:fs';
+import { lstatSync, realpathSync, statSync, symlinkSync, unlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 export function resolveExternalRootFarmRuntimeRoot(

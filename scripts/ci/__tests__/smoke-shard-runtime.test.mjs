@@ -283,6 +283,48 @@ test('admission fails closed when the lock and all port inspection tools are mis
   }
 });
 
+test('shardEvidencePaths derives per-shard runtime and lifecycle locations', () => {
+  const smokeRuntime = loadRuntime();
+  assert.deepEqual(smokeRuntime.shardEvidencePaths('scriptable'), {
+    dir: '.ci/smoke-shard-runtime/scriptable',
+    reportPath: '.ci/smoke-shard-runtime/scriptable/runtime.json',
+    lifecyclePath: '.ci/smoke-shard-runtime/scriptable/lifecycle.jsonl',
+  });
+  assert.equal(smokeRuntime.shardEvidencePaths(''), null);
+});
+
+test('runShard prefers explicit shard evidence over bundle isolation env', async () => {
+  const smokeRuntime = loadRuntime();
+  const tempDir = mkdtempSync(join(tmpdir(), 'forgeax-smoke-runtime-test-'));
+  try {
+    const result = await smokeRuntime.runShard({
+      env: {
+        FORGEAX_SMOKE_RUNTIME_REPORT: join(tempDir, 'bundle/runtime.json'),
+        FORGEAX_DEV_STACK_EVENT_LOG: join(tempDir, 'bundle/lifecycle.jsonl'),
+      },
+      shard: 'scriptable',
+      identity: {runId: 'run-4', attempt: '1', job: 'smoke-play', pool: 'runner', shard: 'scriptable'},
+      ports: [15890],
+      command: [process.execPath, '-e', 'process.exit(0)'],
+      lookupTool: tool => tool === 'flock' || tool === 'lsof',
+      inspectPorts: () => [],
+      runLockedCommand: async (_spec, options) => {
+        assert.equal(
+          options.env?.FORGEAX_DEV_STACK_EVENT_LOG,
+          '.ci/smoke-shard-runtime/scriptable/lifecycle.jsonl',
+        );
+        return {acquiredAt: '2026-01-01T00:00:00.000Z', code: 0, groupId: null, killedPids: []};
+      },
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.report.classification.code, smokeRuntime.FAILURE_CODES.passed);
+  } finally {
+    rmSync(tempDir, {recursive: true, force: true});
+    rmSync('.ci/smoke-shard-runtime/scriptable', {recursive: true, force: true});
+  }
+});
+
 test('busy-port admission records the holder without authorizing an external kill', () => {
   const classifyFailure = loadClassifier();
   const result = classifyFailure(baseFailure({

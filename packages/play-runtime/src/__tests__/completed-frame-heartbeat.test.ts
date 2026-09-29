@@ -47,7 +47,9 @@ describe('completed-frame heartbeat', () => {
     expect(published).toEqual([{ fps: 0, sentinel: 1 }]);
     now = 1010;
     listener?.();
-    expect(published).toEqual([{ fps: 0, sentinel: 1 }, { fps: 0, sentinel: 2 }]);
+    expect(published).toEqual([{ fps: 0, sentinel: 1 },
+      { fps: 0, sentinel: 2 },
+    ]);
 
     unsubscribe();
     expect(listener).toBeUndefined();

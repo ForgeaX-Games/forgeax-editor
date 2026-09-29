@@ -4,8 +4,8 @@
 // rule").
 //
 // This is a SINGLE source of truth (architecture-principles Derive): the router
-// (via interface submodule deps) and the UI panels both read it — there is no
-// second divergent state. It is derived purely from the public selection emit
+// (via host-injected Interface callbacks) and the UI panels both read it — there
+// is no second divergent state. It is derived purely from the public selection emit
 // signals, exactly as the router does:
 //   - onSelectionChange        (entity forward-select) → 'entity'
 //   - onAssetSelectionChange    (asset forward-select)  → 'asset'

@@ -33,20 +33,28 @@ export interface ImportFormat {
 
 /** Canonical extension → importer format mapping. Keep in sync with content-browser/src/import-registry.ts. */
 export const IMPORT_FORMATS: ImportFormat[] = [
-  { extensions: ['.pack.json', '.pack.ts'], label: 'Authored Asset Pack', importer: 'pack', subAssetKinds: [], defaultSettings: {} },
+  {
+    extensions: ['.pack.json', '.pack.ts'],
+    label: 'Authored Asset Pack',
+    importer: 'pack',
+    subAssetKinds: [],
+    defaultSettings: {},
+  },
   {
     extensions: ['.png', '.jpg', '.jpeg', '.webp', '.tga'],
     label: 'Image Texture',
     importer: 'image',
     subAssetKinds: ['texture'],
-    defaultSettings: { colorSpace: 'srgb', mipmap: 'auto', addressMode: 'repeat', filterMode: 'linear' },
+    defaultSettings: { colorSpace: 'srgb', mipmap: 'auto', addressMode: 'repeat', filterMode: 'linear',
+    },
   },
   {
     extensions: ['.hdr'],
     label: 'HDR Environment',
     importer: 'image',
     subAssetKinds: ['cube-texture'],
-    defaultSettings: { colorSpace: 'linear', mipmap: 'none', addressMode: 'clamp-to-edge', filterMode: 'linear', kind: 'cube-texture' },
+    defaultSettings: { colorSpace: 'linear', mipmap: 'none', addressMode: 'clamp-to-edge', filterMode: 'linear', kind: 'cube-texture',
+    },
   },
   {
     extensions: ['.glb', '.gltf'],
@@ -107,7 +115,7 @@ export function isImportable(filename: string): boolean {
 
 /** All supported extensions (flat list). */
 export function getAllExtensions(): string[] {
-  return IMPORT_FORMATS.flatMap(f => f.extensions);
+  return IMPORT_FORMATS.flatMap((f) => f.extensions);
 }
 
 /** Build the file-input accept list from the canonical registry. */

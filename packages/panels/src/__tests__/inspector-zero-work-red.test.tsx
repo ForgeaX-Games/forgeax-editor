@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'bun:test';
 
 const panel = readFileSync(resolve(import.meta.dir, '..', 'Inspector.tsx'), 'utf8');
+const assetRefControl = readFileSync(resolve(import.meta.dir, '..', 'AssetRefControl.tsx'), 'utf8');
+const assetRefContract = readFileSync(resolve(import.meta.dir, '..', 'asset-ref-contract.ts'), 'utf8');
 
 describe('Inspector zero-work contracts', () => {
   it('refreshes the authored component snapshot through the document signal', () => {
@@ -25,8 +27,9 @@ describe('Inspector zero-work contracts', () => {
   });
 
   it('projects stale asset handles as repairable missing state and unbinds numeric refs with zero', () => {
-    expect(panel).toContain("const assetMissing = assetBound && curDesc?.ok !== true;");
-    expect(panel).toContain('Missing asset — browse to repair');
+    expect(assetRefContract).toContain('missing: true');
+    expect(assetRefControl).toContain('binding.missing');
+    expect(assetRefControl).toContain("t('editor.inspector.assetRef.missing')");
     expect(panel).toContain("const clearValue = typeof currentValue === 'number' ? 0 : '';");
   });
 });

@@ -1,4 +1,25 @@
 {
+  "editorMenu.build.reload": "Reload Preview",
+  "editorMenu.select.invert": "Invert Selection",
+  "editorMenu.select.byType": "Select by Type",
+  "editorMenu.select.byType.mesh": "Meshes",
+  "editorMenu.select.byType.light": "Lights",
+  "editorMenu.select.byType.camera": "Cameras",
+  "editorMenu.select.byType.collider": "Colliders",
+  "editorMenu.select.marquee": "Marquee Mode",
+  "editorMenu.file.save": "Save",
+  "editorMenu.edit.undo": "Undo",
+  "editorMenu.edit.redo": "Redo",
+  "editorMenu.edit.delete": "Delete",
+  "editorMenu.window.outline": "Outline",
+  "editorMenu.window.inspector": "Inspector",
+  "editorMenu.window.files": "Files",
+  "editorMenu.build.play": "▶ Play",
+  "editorMenu.build.stop": "■ Stop",
+  "editorMenu.build.editScene": "✎ Edit Scene",
+  "editorMenu.select.all": "Select All",
+  "editorMenu.select.none": "Deselect",
+  "editorMenu.select.frame": "Frame Selected",
   "editorKeyboard": {
     "duplicateSelection": "Duplicate selection",
     "hideSelected": "Hide selected entities (UE parity · editor-only, never affects the game)",
@@ -11,6 +32,16 @@
     "viewportNavigation": "Viewport navigation and gizmo mode",
     "shieldGameInput": "Shield game input while editor-owned",
     "closeOverlay": "Close current overlay · browser fullscreen → game fullscreen → Settings → Dashboard in order"
+  },
+  "standaloneRecovery": {
+    "shutdownTitle": "Previous session could not finish closing",
+    "shutdownHint": "A new session will start only after cleanup finishes. Resolve the pending close action before retrying, or reload the application.",
+    "retryShutdown": "Retry closing session",
+    "title": "UI render crashed",
+    "hint": "The React UI threw while rendering. Try \"Retry\" first; if that fails, \"Reload this region\"; if it still errors, \"Reload Studio\". The desktop app has no address bar, so you must recover with the buttons below.",
+    "retry": "Retry",
+    "remount": "Reload this region",
+    "reloadApplication": "Reload Studio"
   },
   "editor": {
     "sceneBadge": {
@@ -232,12 +263,21 @@
       "hierarchy": "Hierarchy",
       "parent": "Parent",
       "focus": "Frame this entity in the viewport (F)",
-      "lockDisabled": "Lock (not available yet)",
       "displaySettings": "Display settings",
       "showModifiedOnly": "Show modified only",
       "expandAll": "Expand all",
       "collapseAll": "Collapse all",
       "resetAll": "Reset all properties",
+      "sceneInstance": {
+        "title": "Scene Instance",
+        "localMember": "Member {{id}}",
+        "source": "Source",
+        "overrideCount": "{{count}} override",
+        "overrideCount_plural": "{{count}} overrides",
+        "modifiedProperties": "Modified properties",
+        "revert": "Revert",
+        "revertTitle": "Revert to source asset value"
+      },
       "animPlay": "Play preview",
       "animPause": "Pause preview",
       "animNoClip": "bind a clip to slot 0 to preview",
@@ -370,6 +410,7 @@
         "itemCount": "{{count}} items"
       },
       "sourceTree": {
+        "all": "All",
         "favorites": "Favorites",
         "favoritesEmpty": "No favorited folders yet"
       },
@@ -451,6 +492,9 @@
         "moveConflictTitle": "Name already in use",
         "moveConflictNote": "These names already exist in \"{{dir}}\". Moving may overwrite them:",
         "moveConflictConfirm": "Move anyway",
+        "duplicateNameAtLocation": "An asset named \"{{name}}\" already exists at this location.",
+        "duplicateFolderAtLocation": "A folder named \"{{name}}\" already exists at this location.",
+        "duplicateFileAtLocation": "A file named \"{{name}}\" already exists at this location.",
         "sceneSwitch": {
           "title": "Unsaved scene changes",
           "body": "Switching to \"{{name}}\" would replace the current authored scene. Choose how to handle unsaved edits.",
@@ -532,7 +576,8 @@
         "cancelled": "Import cancelled: {{name}}",
         "cancel": "Cancel",
         "retry": "Retry {{name}}",
-        "dismiss": "Dismiss"
+        "dismiss": "Dismiss",
+        "targetAlreadyExists": "\"{{name}}\" already exists at the import destination. Delete the existing file, rename your file before importing, or choose an empty folder."
       },
       "tooltip": {
         "kind": "Kind: {{kind}}",

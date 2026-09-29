@@ -7,7 +7,7 @@
 // Anchors: requirements AC-02/AC-03/AC-08, plan-strategy §2 D-1/D-5.
 
 import { Camera } from '@forgeax/engine-render';
-import { Transform } from '@forgeax/engine-scene';
+import { GlobalTransform } from '@forgeax/engine-scene';
 import { mat4, vec3 } from '@forgeax/engine-math';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
@@ -44,10 +44,10 @@ export function createPlayVfxRuntime(options: PlayVfxRuntimeOptions): PlayVfxRun
 
 function readParticleCamera(world: World | undefined): ParticleRenderCamera | undefined {
   if (world === undefined) return undefined;
-  const query = world.query({ read: [Camera, Transform] }).unwrap();
+  const query = world.query({ read: [Camera, GlobalTransform] }).unwrap();
   const first = query[Symbol.iterator]().next();
   if (first.done) return undefined;
-  const transform = first.value.get(Transform);
+  const transform = first.value.get(GlobalTransform);
   const camera = first.value.get(Camera);
 
   const worldMatrix = transform.world;

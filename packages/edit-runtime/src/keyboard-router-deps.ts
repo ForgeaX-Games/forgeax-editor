@@ -20,6 +20,7 @@ import {
   worldRootHandles,
   childrenOf,
   trySaveActivePage,
+  materializeGeneratedDefaultScene,
 } from '@forgeax/editor-core';
 import { getViewportQuadrant, getInputTarget } from './viewport/viewport-quadrant';
 import { routeViewportKeydown } from './viewport/viewport';
@@ -36,6 +37,7 @@ export interface RouterAsset {
 
 /** Editor-owned inputs; no product shell types or module-global dependency slot. */
 export interface KeyboardRouterDepsShape {
+  executeFocusedTextEditAction?: (action: 'undo' | 'redo' | 'delete') => Promise<boolean>;
   dispatch: (op: { kind: string; [k: string]: unknown }, origin?: string) => void;
   getEntitySelection: () => number[];
   getAssetSelection: () => RouterAsset[];
@@ -52,7 +54,8 @@ export interface KeyboardRouterDepsShape {
   duplicateAsset: (guid: string, packPath: string) => void;
   undo: () => void;
   redo: () => void;
-  save: () => void;
+  /** Start the canonical save and expose its terminal success to the caller. */
+  save: () => void | Promise<boolean>;
   restartPreview: () => void;
   handleViewportKeyDown: (event: KeyboardEvent) => void;
 }
@@ -143,10 +146,49 @@ export function buildKeyboardRouterDeps(): KeyboardRouterDepsShape {
     undo: () => { gateway.undo(); },
     redo: () => { gateway.redo(); },
     // M4/B3: MI (and future page controllers) divert Ctrl+S away from scene save.
-    save: () => {
-      if (trySaveActivePage()) return;
-      if (trySaveDirtyMaterialStaging()) return;
-      gateway.dispatch(createHumanSaveRequest(), 'human');
+    save: (): Promise<boolean> | undefined => {
+      const activePageHandled = trySaveActivePage();
+      console.info('[editor] save entry', { activePageHandled });
+      if (activePageHandled) return;
+      const stagingHandled = trySaveDirtyMaterialStaging();
+      if (stagingHandled) {
+        console.info('[editor] save handled by material staging');
+        return;
+      }
+      const authoringSession = gateway.sceneAuthoringSession();
+      const sceneReadModel = gateway.sceneReadModel();
+      console.info('[editor] save state', {
+        authoringMode: authoringSession.mode,
+        currentScene: sceneReadModel.currentScene,
+        defaultScene: sceneReadModel.defaultScene,
+      });
+      // A script-generated default has no current authored scene entry. Promote
+      // it through the canonical createSceneFile transaction before attempting
+      // the ordinary pack save; direct disk materialization is intentionally
+      // rejected because it cannot publish the external dependency closure.
+      if (
+        authoringSession.mode === 'authored'
+        && sceneReadModel.currentScene === null
+      ) {
+        console.info('[editor] Ctrl+S promoting script-generated scene to authored pack');
+        return materializeGeneratedDefaultScene().then((ok) => {
+          console.info('[editor] script-generated scene promotion result', JSON.stringify({ ok }));
+          return ok;
+        });
+      }
+      const request = createHumanSaveRequest();
+      const accepted = gateway.dispatch(request as never, 'human');
+      if (!accepted.ok) return Promise.resolve(false);
+      return gateway.waitOperationRun(request.requestId!).then(async (terminal) => {
+        if (
+          terminal.ok
+          && terminal.value.status === 'failed'
+          && terminal.value.error?.code === 'generated-scene-read-only'
+        ) {
+          return materializeGeneratedDefaultScene();
+        }
+        return terminal.ok && terminal.value.status === 'succeeded';
+      });
     },
     handleViewportKeyDown: routeViewportKeydown,
   };

@@ -33,48 +33,12 @@ import {
 import { useMaterialFilter, useMaterialToolbarRegistration } from './material-toolbar';
 import type { PreviewProps } from './index';
 import { inspectorFieldLabel } from '../inspector-field-label';
-import { AssetRefControl } from '../AssetRefControl';
+import { DROPPABLE_TEXTURE_KINDS } from '../asset-ref-drop';
+import { TextureSlotRow } from '../texture-slot-row';
 
 interface PassDesc {
   name?: string;
   program?: { module?: string };
-}
-
-/** Accepted drag-drop kinds for texture assignment. */
-const DROPPABLE_TEXTURE_KINDS: ReadonlySet<string> = new Set(['texture', 'image']);
-
-// ── TextureSlot: per-field drop zone + browse + display ─────────────────────
-
-interface TextureSlotProps {
-  label: string;
-  guid: string | null;
-  canEdit: boolean;
-  onAssign: (textureGuid: string) => void;
-  onClear: () => void;
-  onBrowse: (anchor: AssetPickerAnchor) => void;
-}
-
-function TextureSlot({ label, guid, canEdit, onAssign, onClear, onBrowse }: TextureSlotProps) {
-  return (
-    <div className="f-row" data-testid={`mat-${label}`}>
-      <span className="f-name" title={label}>{inspectorFieldLabel(label)}</span>
-      <span className="f-val">
-        <AssetRefControl
-          assetType="TextureAsset"
-          guid={guid}
-          testId={`mat-${label}`}
-          readOnly={!canEdit}
-          onBrowse={onBrowse}
-          onBind={(nextGuid) => {
-            const entry = gateway.assetCatalog().find((row) => row.guid === nextGuid);
-            if (!entry || !DROPPABLE_TEXTURE_KINDS.has(entry.kind)) return;
-            onAssign(nextGuid);
-          }}
-          onClear={onClear}
-        />
-      </span>
-    </div>
-  );
 }
 
 // ── Per-kind parameter editors ──────────────────────────────────────────────
@@ -341,16 +305,19 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
     return subscribeMaterialStaging(() => setVersion((v) => v + 1));
   }, []);
 
-  // Initialize staging buffer
+  // Initialize staging buffer (re-seed when parent chain warms so saved matches UI baseline).
   useEffect(() => {
     if (!asset || asset.kind !== 'material') return;
+    const rawPayload = (asset.payload ?? propsPayload) as Record<string, unknown>;
+    const catalogFlat = resolveOverrides(asset.guid, materialCatalogLookup(gateway.doc.registry));
     openMaterialStaging({
       guid: asset.guid,
       packPath: asset.packPath,
       name: asset.name,
-      payload: asset.payload ?? propsPayload,
+      payload: rawPayload,
+      catalogFlatValues: catalogFlat,
     });
-  }, [asset?.guid, asset?.packPath, asset?.name, propsPayload]);
+  }, [asset?.guid, asset?.packPath, asset?.name, propsPayload, chainVersion]);
 
   // Parent-chain warm
   useEffect(() => {
@@ -420,7 +387,7 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
   const commitParam = useCallback((name: string, value: unknown) => {
     if (!asset?.guid) return;
     patchMaterialStagingParam(asset.guid, { [name]: value });
-    setMaterialPreviewParam(asset.guid, name, value);
+    clearMaterialPreviewParams(asset.guid, [name]);
   }, [asset?.guid]);
 
   const previewParam = useCallback((name: string, value: unknown) => {
@@ -438,13 +405,14 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
   const resetParam = useCallback((name: string, defaultValue?: unknown) => {
     if (!asset?.guid) return;
     resetMaterialStagingParam(asset.guid, name, defaultValue);
+    // Drop transient overlay only — preview re-reads staging/catalog (never stage undefined).
     clearMaterialPreviewParams(asset.guid, [name]);
   }, [asset?.guid]);
 
   const handleAssignTexture = useCallback((key: string, textureGuid: string) => {
     if (!asset?.guid) return;
     patchMaterialStagingParam(asset.guid, {}, { [key]: textureGuid });
-    setMaterialPreviewParam(asset.guid, key, textureGuid);
+    clearMaterialPreviewParams(asset.guid, [key]);
   }, [asset?.guid]);
 
   const handleClearTexture = useCallback((key: string) => {
@@ -593,7 +561,7 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
 
                 {/* Texture Slots */}
                 {textureRows.map((row) => (
-                  <TextureSlot
+                  <TextureSlotRow
                     key={row.name}
                     label={row.name}
                     guid={row.textureGuid}
@@ -630,6 +598,7 @@ export default function AssetPreviewMaterial({ payload: propsPayload }: PreviewP
       {pickerTarget && (
         <AssetPicker
           assetType="TextureAsset"
+          acceptKinds={DROPPABLE_TEXTURE_KINDS}
           anchor={pickerTarget.anchor}
           currentGuid={rows.find((r) => r.name === pickerTarget.name)?.textureGuid ?? undefined}
           onPick={(guid) => { handleAssignTexture(pickerTarget.name, guid); setPickerTarget(null); }}

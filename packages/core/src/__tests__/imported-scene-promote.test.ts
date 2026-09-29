@@ -1,3 +1,4 @@
+import type { SceneWithLegacyMounts } from '../scene/legacy-scene-mounts';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
@@ -32,16 +33,13 @@ function registry(): AssetRegistry {
   return new AssetRegistry(new ShaderRegistry({ device, manifestUrl: undefined }));
 }
 
-function scene(name: string): SceneAsset {
+function scene(name: string): SceneWithLegacyMounts {
   return {
     kind: 'scene',
-    entities: [{
-      localId: 0 as LocalEntityId,
-      components: {
+    entities: {"entity-0": {components: {
         Name: { value: name },
         Transform: { pos: [0, 0, 0], scale: [1, 1, 1] },
-      },
-    }],
+      }}},
     mounts: [],
   };
 }

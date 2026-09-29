@@ -6,12 +6,11 @@
       "guid": "2b7c9a10-4d5e-5f60-8a1b-2c3d4e5f6071",
       "kind": "scene",
       "payload": {
-        "entities": [
-          {
-            "localId": 0,
+        "entities": {
+          "entity-0": {
             "components": {
               "Entity": {
-                "self": 0
+                "self": "entity-0"
               },
               "Name": {
                 "value": "E2E unsaved save failure mutation"
@@ -36,11 +35,10 @@
               }
             }
           },
-          {
-            "localId": 1,
+          "entity-1": {
             "components": {
               "Entity": {
-                "self": 1
+                "self": "entity-1"
               },
               "Name": {
                 "value": "Fox J0 Human"
@@ -65,11 +63,10 @@
               }
             }
           },
-          {
-            "localId": 2,
+          "entity-2": {
             "components": {
               "Entity": {
-                "self": 2
+                "self": "entity-2"
               },
               "Name": {
                 "value": "Ground"
@@ -102,11 +99,10 @@
               }
             }
           },
-          {
-            "localId": 3,
+          "entity-3": {
             "components": {
               "Entity": {
-                "self": 3
+                "self": "entity-3"
               },
               "Name": {
                 "value": "RedBox"
@@ -139,11 +135,10 @@
               }
             }
           },
-          {
-            "localId": 4,
+          "entity-4": {
             "components": {
               "Entity": {
-                "self": 4
+                "self": "entity-4"
               },
               "Name": {
                 "value": "BlueBall"
@@ -184,11 +179,10 @@
               }
             }
           },
-          {
-            "localId": 5,
+          "entity-5": {
             "components": {
               "Entity": {
-                "self": 5
+                "self": "entity-5"
               },
               "Name": {
                 "value": "Sun"
@@ -249,11 +243,10 @@
               }
             }
           },
-          {
-            "localId": 6,
+          "entity-6": {
             "components": {
               "Entity": {
-                "self": 6
+                "self": "entity-6"
               },
               "Name": {
                 "value": "J3 Camera"
@@ -293,7 +286,8 @@
                 "bloom": 1,
                 "bloomThreshold": 0.800000011920929,
                 "bloomIntensity": 0.55,
-                "bloomBlurRadius": 4,
+                "bloomSoftKnee": 0.5,
+                "bloomScatter": 0.7,
                 "clearColor": [
                   0.03999999910593033,
                   0.05999999865889549,
@@ -304,14 +298,13 @@
               }
             }
           },
-          {
-            "localId": 34,
+          "entity-34": {
             "components": {
               "Entity": {
-                "self": 34
+                "self": "entity-34"
               },
               "Name": {
-                "value": "Arc Nova Skill · Select and Replay"
+                "value": "Arc Nova Skill \u00b7 Select and Replay"
               },
               "Transform": {
                 "pos": [
@@ -338,24 +331,28 @@
                 "timeScale": 1
               }
             }
-          }
-        ],
-        "mounts": [
-          {
-            "localId": 7,
-            "memberFirst": 8,
-            "memberCount": 26,
-            "source": 5,
-            "parent": 1
           },
-          {
-            "localId": 35,
-            "memberFirst": 36,
-            "memberCount": 37,
-            "source": 8,
-            "parent": 1
+          "entity-7": {
+            "components": {
+              "ChildOf": {
+                "parent": "entity-1"
+              }
+            },
+            "instance": {
+              "source": 5
+            }
+          },
+          "entity-35": {
+            "components": {
+              "ChildOf": {
+                "parent": "entity-1"
+              }
+            },
+            "instance": {
+              "source": 8
+            }
           }
-        ]
+        }
       },
       "refs": [
         "cbe42beb-8975-5096-b3a1-3dda4cb4c077",
@@ -366,7 +363,7 @@
         "019f56f2-0ac0-776a-9d28-50eb5a9edeb8",
         "019f56f2-0ac0-776a-9d28-50eb5a9edeb9",
         "019f56f2-0ac0-776a-9d28-50efaa0ebd1f",
-        "019ffdb4-1000-7000-8000-000000000008"
+        "b05d3430-4c47-558d-9201-f2a8e54f8771"
       ],
       "artifacts": {}
     },

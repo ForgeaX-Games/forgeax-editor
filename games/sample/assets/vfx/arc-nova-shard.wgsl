@@ -6,7 +6,7 @@ struct VertexOutput {
   @location(1) normal: vec3<f32>,
   @location(2) uv: vec2<f32>,
   @location(3) emissive_intensity: vec4<f32>,
-  @location(4) surface: vec4<f32>,
+  @location(4) coat: f32,
   @location(5) center: vec3<f32>,
 };
 
@@ -20,9 +20,6 @@ struct VertexInput {
   @location(6) up: vec3<f32>,
   @location(7) forward: vec3<f32>,
   @location(8) particle_color: vec4<f32>,
-  @location(9) base_color: vec4<f32>,
-  @location(10) emissive_intensity: vec4<f32>,
-  @location(11) surface: vec4<f32>,
 };
 
 @vertex
@@ -33,13 +30,13 @@ fn vs_main(input: VertexInput) -> VertexOutput {
   var output: VertexOutput;
   output.center = input.center;
   output.position = vec4<f32>(input.center + offset, 1.0);
-  output.color = input.particle_color * input.base_color;
+  output.color = input.particle_color * material.baseColor;
   output.normal = normalize(input.right * input.geometry_normal.x
     + input.up * input.geometry_normal.y
     + input.forward * input.geometry_normal.z);
   output.uv = input.geometry_uv;
-  output.emissive_intensity = input.emissive_intensity;
-  output.surface = input.surface;
+  output.emissive_intensity = vec4<f32>(material.emissive.rgb, material.emissiveIntensity);
+  output.coat = material.clearcoat;
   return output;
 }
 
@@ -53,7 +50,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
   let prism = 0.58 + 0.42 * cos(vec3<f32>(0.0, 2.1, 4.2) + input.uv.y * 11.0 + normal * 2.0);
   let emissive = input.emissive_intensity.rgb * input.emissive_intensity.a
     * (vec3<f32>(0.22) + input.color.rgb * 0.78);
-  let coat = clamp(input.surface.z, 0.0, 1.0);
+  let coat = clamp(input.coat, 0.0, 1.0);
   let rgb = input.color.rgb * (facet + bands * 0.22)
     + emissive * prism * (0.3 + fresnel * 0.9)
     + prism * coat * fresnel * 0.35;

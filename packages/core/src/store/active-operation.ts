@@ -1,14 +1,18 @@
 // Current-authority UI operation seam.
 //
-// Business UI can live either beside the Runtime or in a disposable shell. It
-// must not know which carrier is active, and it must never fall back to a shell
-// shadow World. This adapter chooses the one current authority while preserving
-// the Gateway operation payload and structured result.
+// Dispatch routing pairs with panel reads — see `io/editor-panel-authority.ts`.
+// Callers use dispatchActiveEditorOperation; they must not choose gateway vs
+// run.dispatch independently of that snapshot.
 
 import type { CommandError, EditorOp } from '../types';
 import type { DispatchResult } from '../io/gateway';
 import type { CommandOrigin } from '../io/gateway-history';
-import { getActiveRuntimeUiGraph } from '../io/runtime-ui-diagnostics';
+import {
+  canDispatchPanelDocumentOperations,
+  getEditorPanelAuthoritySnapshot,
+  usesHostGatewayForPanelDispatch,
+} from '../io/editor-panel-authority';
+import { traceHierarchyVisibility } from '../io/hierarchy-visibility-trace';
 import { broadcastAssetsChanged } from './assets-changed';
 import { gateway } from './gateway';
 import { resolveGamePath } from '../util/path-resolver';
@@ -16,6 +20,7 @@ import { refreshAuthoritativeSceneReadModel } from '../io/scene-read-model-clien
 import {
   dispatchViewportRuntimeOperation,
   getViewportRuntimeClientSnapshot,
+  refreshViewportRuntimeHierarchySnapshot,
   refreshViewportRuntimeSelectionSnapshot,
   waitViewportRuntimeOperationRun,
 } from '../io/viewport-runtime-client';
@@ -40,6 +45,11 @@ const SCENE_MANIFEST_OPERATIONS = new Set([
   'setDefaultScene',
 ]);
 
+const HIERARCHY_STRUCTURE_REFRESH_KINDS = new Set([
+  'setVisibility',
+  'hierarchyGesture',
+]);
+
 async function refreshSelectionAfterSuccess(kind: string, result: DispatchResult): Promise<DispatchResult> {
   if (!result.ok) return result;
   if (SELECTION_OPERATIONS.has(kind)) {
@@ -54,6 +64,33 @@ async function refreshSelectionAfterSuccess(kind: string, result: DispatchResult
     await refreshAuthoritativeSceneReadModel();
   }
   return result;
+}
+
+async function refreshHierarchyStructureAfterSuccess(kind: string, result: DispatchResult): Promise<DispatchResult> {
+  if (!result.ok || !HIERARCHY_STRUCTURE_REFRESH_KINDS.has(kind)) return result;
+  if (getViewportRuntimeClientSnapshot().status !== 'ready') return result;
+  traceHierarchyVisibility('carrier.refresh.start', { kind });
+  try {
+    const snapshot = await refreshViewportRuntimeHierarchySnapshot();
+    traceHierarchyVisibility('carrier.refresh.done', {
+      kind,
+      rowCount: snapshot.structure.rows.length,
+      selectionCount: snapshot.selectionIds.length,
+    });
+  } catch (error) {
+    traceHierarchyVisibility('carrier.refresh.failed', {
+      kind,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return result;
+}
+
+async function refreshHostProjectionsAfterSuccess(kind: string, result: DispatchResult): Promise<DispatchResult> {
+  return refreshHierarchyStructureAfterSuccess(
+    kind,
+    await refreshSelectionAfterSuccess(kind, result),
+  );
 }
 
 function treeContainsPath(value: unknown, targetPath: string): boolean {
@@ -116,31 +153,43 @@ export async function dispatchActiveEditorOperation(
   operation: EditorOp,
   origin: CommandOrigin = 'human',
 ): Promise<DispatchResult> {
-  if (getViewportRuntimeClientSnapshot().status !== 'ready') {
-    if (getActiveRuntimeUiGraph() !== null) {
-      const { kind } = operation;
-      return refreshSelectionAfterSuccess(kind, gateway.dispatch(operation, origin));
-    }
+  const authority = getEditorPanelAuthoritySnapshot();
+  const { kind } = operation;
+
+  const dispatchOnLiveGateway = async (): Promise<DispatchResult> => {
+    return refreshHostAfterDirectoryOperation(
+      operation,
+      await refreshHostProjectionsAfterSuccess(kind, gateway.dispatch(operation, origin)),
+    );
+  };
+
+  if (!canDispatchPanelDocumentOperations(authority)) {
     console.warn(
       '[editor] operation blocked: Viewport Runtime is disconnected',
       operation.kind,
     );
     return {
       ok: false,
-      error: {
-        code: 'operation-failed',
-        hint: 'Viewport Runtime is disconnected; reconnect before retrying the operation.',
-      },
+      error: transportOperationError(
+        operation,
+        'Viewport Runtime is disconnected; reconnect before retrying the operation.',
+      ),
     };
   }
-  const { kind, ...input } = operation;
+
+  if (usesHostGatewayForPanelDispatch(authority)) {
+    return dispatchOnLiveGateway();
+  }
+
+  const { kind: remoteKind, ...input } = operation;
   try {
-    const response = await dispatchViewportRuntimeOperation(kind, input, {
+    const response = await dispatchViewportRuntimeOperation(remoteKind, input, {
       id: `editor-${origin}`,
       kind: origin,
     });
     if (response.error !== undefined) {
-      return { ok: false, error: response.error as CommandError };
+      const failed = { ok: false as const, error: response.error as CommandError };
+      return failed;
     }
     const run = response.result as {
       readonly status?: unknown;
@@ -152,7 +201,7 @@ export async function dispatchActiveEditorOperation(
         ok: false,
         error: (run.error ?? {
           code: 'operation-failed',
-          hint: `Runtime operation "${kind}" ended ${String(run.status)}.`,
+          hint: `Runtime operation "${remoteKind}" ended ${String(run.status)}.`,
           retryable: true,
           recoveryActions: ['operation.retry'],
         }) as CommandError,
@@ -167,20 +216,21 @@ export async function dispatchActiveEditorOperation(
       const operationResult = result as DispatchResult;
       return refreshHostAfterDirectoryOperation(
         operation,
-        await refreshSelectionAfterSuccess(kind, operationResult),
+        await refreshHostProjectionsAfterSuccess(remoteKind, operationResult),
       );
     }
-    return refreshHostAfterDirectoryOperation(
+    const succeeded = await refreshHostAfterDirectoryOperation(
       operation,
-      await refreshSelectionAfterSuccess(kind, { ok: true }),
+      await refreshHostProjectionsAfterSuccess(remoteKind, { ok: true }),
     );
+    return succeeded;
   } catch (cause) {
     return {
       ok: false,
-      error: {
-        code: 'operation-failed',
-        hint: cause instanceof Error ? cause.message : String(cause),
-      },
+      error: transportOperationError(
+        operation,
+        cause instanceof Error ? cause.message : String(cause),
+      ),
     };
   }
 }

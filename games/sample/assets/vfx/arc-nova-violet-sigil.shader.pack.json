@@ -5,6 +5,7 @@
     {
       "guid": "7e43f472-4c4d-4ee3-9aa1-bc89e7402812",
       "kind": "material",
+      "execution": "cooked",
       "name": "Arc Nova Violet Shock",
       "sourceKey": "arc-nova-violet-sigil.wgsl",
       "payload": {

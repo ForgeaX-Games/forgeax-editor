@@ -38,5 +38,5 @@ describe('play-runtime Vite network projection', () => {
       clientPort: 443,
       path: PLAY_VITE_HMR_PATH,
     });
-  });
+});
 });

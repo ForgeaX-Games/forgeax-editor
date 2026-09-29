@@ -15,7 +15,7 @@ import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { RuntimeDiagnosticFact, RuntimeDiagnosticsProvider } from '@forgeax/editor-core';
 import { mat4, vec3 } from '@forgeax/engine-math';
 import { Camera } from '@forgeax/engine-render';
-import { Transform } from '@forgeax/engine-scene';
+import { GlobalTransform } from '@forgeax/engine-scene';
 import {
   createVfxRuntimeHost,
   type ParticleRenderCamera,
@@ -152,7 +152,7 @@ export function createParticleCameraSource(
 }
 
 function readParticleCamera(world: World, entity: EntityHandle): ParticleRenderCamera | undefined {
-  const transform = world.get(entity, Transform);
+  const transform = world.get(entity, GlobalTransform);
   const camera = world.get(entity, Camera);
   if (!transform.ok || !camera.ok) return undefined;
 

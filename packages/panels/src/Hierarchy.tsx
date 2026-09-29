@@ -16,7 +16,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from '@forgeax/editor-core/i18n';
-import { useKeybindingScope } from '@forgeax/interface/core/app-shell';
+import { useKeybindingScope } from '@forgeax/app-shell/application';
 import { showContextMenu, type MenuItemDef } from '@forgeax/editor-core';
 import { childrenOf } from '@forgeax/editor-core';
 import { entExists, entName, entParent, entComponents, entComponentsPresent, worldComponentNames, worldEntityHandles } from '@forgeax/editor-core';
@@ -27,7 +27,7 @@ import { entExists, entName, entParent, entComponents, entComponentsPresent, wor
 // plain-JSON op the AI would build. "Change the door, not the body."
 // M3 (I1/AC-08/AC-09): all reads go through gateway.activeWorld (edit->editWorld,
 // play->playWorld) + EntityHandle; node key IS the engine handle.
-import { dispatchActiveEditorOperation, gateway, getActiveRuntimeUiGraph, getEditorWorldProjection, getSelection, getSelectionList, onSelectionChange, onRenameRequest, readEntityVisibility, readVisibilityIntent, requestRefEntity, resolveVisibility, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected, useSelection, useSceneReadModel, clearAssetSelection, clearFolderSelection, getViewportRuntimeClientSnapshot, queryViewportRuntimeProjection, subscribeViewportRuntimeClient } from '@forgeax/editor-core';
+import { dispatchActiveEditorOperation, gateway, getActiveRuntimeUiGraph, getEditorPanelAuthoritySnapshot, getEditorWorldProjection, getSelection, getSelectionList, onSelectionChange, onRenameRequest, readEntityVisibility, readVisibilityIntent, requestRefEntity, resolveVisibility, subscribeDocVersion, useDocVersion, useIsHoverEntity, useIsSelected, useSelection, useSceneReadModel, clearAssetSelection, clearFolderSelection, getViewportRuntimeClientSnapshot, getViewportRuntimeHierarchySnapshot, refreshViewportRuntimeHierarchySnapshot, subscribeViewportRuntimeClient, subscribeViewportRuntimeHierarchySnapshot } from '@forgeax/editor-core';
 import { ENTITY_PRESETS, buildPresetComponents, getPreset } from '@forgeax/editor-core';
 import type { EditorWorldProjectionRow, EntityHandle, VisibilitySnapshot } from '@forgeax/editor-core';
 import {
@@ -43,20 +43,24 @@ import {
   expandHierarchyAll,
   expandHierarchySceneFolder,
   getHierarchyPanelSnapshot,
+  getHierarchySceneReloadGeneration,
+  hierarchyProjectionMatchesWorld,
   hierarchyMobility,
   getHierarchyVisibleMatches,
   createHierarchyStructureSelector,
+  subscribeHierarchySceneReload,
   type HierarchyStructureProjection,
   hasHierarchyViewFilter,
   revealHierarchyEntity,
-  resolveHierarchyRuntimeAccess,
   subscribeHierarchyPanelState,
   toggleHierarchyCollapsed,
   setHierarchyEditorInspection,
   clearHierarchyEditorInspection,
   type HierarchyColumns,
   type HierarchyRuntimeProjection,
+  hierarchyRuntimeProjectionFromCarrier,
 } from './hierarchy-state';
+import { useHierarchyPanelAuthority } from './hierarchy-panel-authority';
 
 interface Menu {
   id: EntityHandle;
@@ -480,9 +484,21 @@ function subscribeRowVm(fn: () => void): () => void {
   });
 }
 const projectionVmCache = new WeakMap<object, Map<EntityHandle, HierarchyRowVM>>();
-function useHierarchyRowVM(id: EntityHandle, projection?: HierarchyStructureProjection): HierarchyRowVM {
-  const getSnapshot = useCallback(() => projection ? (projectionRow(projection, id) ?? MISSING_ROW_VM) : rowVmSnapshot(id), [id, projection]);
-  const subscribe = useCallback((listener: () => void) => projection ? (() => undefined) : subscribeRowVm(listener), [projection]);
+function useHierarchyRowVM(
+  id: EntityHandle,
+  projection: HierarchyStructureProjection | undefined,
+  hierarchyReadsFromCarrier: boolean,
+): HierarchyRowVM {
+  const getSnapshot = useCallback(() => (
+    hierarchyReadsFromCarrier
+      ? (projectionRow(projection, id) ?? MISSING_ROW_VM)
+      : rowVmSnapshot(id)
+  ), [hierarchyReadsFromCarrier, id, projection]);
+  const subscribe = useCallback((listener: () => void) => (
+    hierarchyReadsFromCarrier
+      ? subscribeViewportRuntimeHierarchySnapshot(listener)
+      : subscribeRowVm(listener)
+  ), [hierarchyReadsFromCarrier]);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 // Per-row collapse subscription: toggling one node's collapse re-renders only
@@ -494,9 +510,15 @@ function useIsHierarchyCollapsed(id: EntityHandle): boolean {
 // Collapse an id list to a stable reference across renders: while ▶ Play bumps
 // docVersion every frame, the root order rarely changes, so returning the prior
 // array when contents are value-equal keeps the SceneFolderRow memo intact.
-function useStableIds(ids: readonly EntityHandle[]): readonly EntityHandle[] {
+function useStableIds(ids: readonly EntityHandle[], resetKey = 0): readonly EntityHandle[] {
   const ref = useRef(ids);
-  if (!idsEqual(ref.current, ids)) ref.current = ids;
+  const resetRef = useRef(resetKey);
+  if (resetRef.current !== resetKey) {
+    resetRef.current = resetKey;
+    ref.current = ids;
+  } else if (!idsEqual(ref.current, ids)) {
+    ref.current = ids;
+  }
   return ref.current;
 }
 
@@ -538,98 +560,32 @@ function flattenVisibleRows(
   return rows;
 }
 
-function useRemoteHierarchyProjection(enabled: boolean): HierarchyRuntimeProjection | undefined {
+function useCarrierHierarchyProjection(enabled: boolean): HierarchyRuntimeProjection | undefined {
   const connection = useSyncExternalStore(
     subscribeViewportRuntimeClient,
     getViewportRuntimeClientSnapshot,
     getViewportRuntimeClientSnapshot,
   );
-  const [projection, setProjection] = useState<HierarchyRuntimeProjection | undefined>();
+  const carrier = useSyncExternalStore(
+    subscribeViewportRuntimeHierarchySnapshot,
+    getViewportRuntimeHierarchySnapshot,
+    getViewportRuntimeHierarchySnapshot,
+  );
   useEffect(() => {
-    if (!enabled) {
-      setProjection(undefined);
-      return;
-    }
-    if (connection.status !== 'ready') {
-      setProjection(undefined);
-      return;
-    }
-    // A new carrier/generation must not be mistaken for the previous selector's
-    // revision. The next successful query installs the new baseline.
-    setProjection(undefined);
-    let disposed = false;
-    let pending = false;
-    let lastProjectionRevision: number | undefined;
-    let lastSelectionIds: readonly EntityHandle[] | undefined;
-    let lastEditorWorldRowsCount: number | undefined;
-    let lastEditorWorldCamId: EntityHandle | null | undefined;
-    const refresh = async () => {
-      if (pending) return;
-      pending = true;
-      try {
-        const envelope = await queryViewportRuntimeProjection<HierarchyRuntimeProjection>({ kind: 'hierarchy.structure' });
-        if (disposed) return;
-        if (envelope.status === 'ready') {
-          const next = envelope.value;
-          const revision = next.structure.projectionRevision;
-          const sameSelection = lastSelectionIds !== undefined
-            && lastSelectionIds.length === next.selectionIds.length
-            && lastSelectionIds.every((id, index) => id === next.selectionIds[index]);
-          const currentRowsCount = next.editorWorld?.rows?.length ?? 0;
-          const currentCamId = next.editorWorld?.cameraId;
-          const sameEditorWorld = lastEditorWorldRowsCount === currentRowsCount
-            && lastEditorWorldCamId === currentCamId;
-          if (revision !== undefined && revision === lastProjectionRevision && sameSelection && sameEditorWorld) return;
-          lastProjectionRevision = revision;
-          lastSelectionIds = next.selectionIds;
-          lastEditorWorldRowsCount = currentRowsCount;
-          lastEditorWorldCamId = currentCamId;
-          setProjection(next);
-        } else if (envelope.status === 'empty') {
-          lastProjectionRevision = envelope.revision;
-          lastSelectionIds = [];
-          lastEditorWorldRowsCount = 0;
-          lastEditorWorldCamId = undefined;
-          setProjection({
-            structure: { structureEpoch: envelope.revision, rows: [] },
-            selectionIds: [],
-          });
-        } else {
-          lastProjectionRevision = undefined;
-          lastSelectionIds = undefined;
-          lastEditorWorldRowsCount = undefined;
-          lastEditorWorldCamId = undefined;
-          setProjection(undefined);
-        }
-      } catch {
-        if (!disposed) setProjection(undefined);
-      } finally {
-        pending = false;
-      }
-    };
-    void refresh();
-    // Bounded pull keeps the cache disposable and avoids inventing a second
-    // notification protocol before measurement demonstrates that deltas pay off.
-    const timer = window.setInterval(() => void refresh(), 100);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [enabled, connection.runtime?.runtimeId, connection.runtime?.runtimeGeneration, connection.status]);
-  return projection;
+    if (!enabled || connection.status !== 'ready') return;
+    void refreshViewportRuntimeHierarchySnapshot().catch(() => undefined);
+  }, [connection.runtime?.runtimeGeneration, connection.runtime?.runtimeId, connection.status, enabled]);
+  if (!enabled || connection.status !== 'ready' || carrier === null) return undefined;
+  return hierarchyRuntimeProjectionFromCarrier(carrier);
 }
 
-function useHierarchyProjection(): {
+function useHierarchyProjection(hierarchyReadsFromCarrier: boolean): {
   readonly structure: HierarchyStructureProjection | undefined;
   readonly remote: HierarchyRuntimeProjection | undefined;
   readonly hasLocalRuntimeGraph: boolean;
 } {
   const graph = getActiveRuntimeUiGraph();
-  // The in-process standalone host already owns the authoritative RuntimeUiGraph.
-  // Do not also start the cross-carrier 100 ms pull loop: it creates a second
-  // projection and needlessly re-renders the whole hierarchy. The remote path
-  // remains available for a shell whose viewport lives in another carrier.
-  const remoteProjection = useRemoteHierarchyProjection(graph === null);
+  const carrierProjection = useCarrierHierarchyProjection(hierarchyReadsFromCarrier);
   const holder = useRef<{ graph: unknown; generation: number; selector: ReturnType<typeof createHierarchyStructureSelector>; mounted: ReturnType<ReturnType<typeof createHierarchyStructureSelector>['mount']> } | null>(null);
   const generation = graph?.stats().worldGeneration ?? 0;
   if (graph && (holder.current?.graph !== graph || holder.current.generation !== generation)) {
@@ -645,9 +601,12 @@ function useHierarchyProjection(): {
   // mere presence does not make it authoritative once a Runtime carrier is
   // connected: the carrier projection wins, and the local graph is only the
   // in-process fallback used when no remote projection exists.
-  return remoteProjection !== undefined
-    ? { structure: remoteProjection.structure, remote: remoteProjection, hasLocalRuntimeGraph: graph !== null }
-    : { structure: localProjection, remote: undefined, hasLocalRuntimeGraph: graph !== null };
+  if (hierarchyReadsFromCarrier) {
+    return carrierProjection !== undefined
+      ? { structure: carrierProjection.structure, remote: carrierProjection, hasLocalRuntimeGraph: graph !== null }
+      : { structure: undefined, remote: undefined, hasLocalRuntimeGraph: graph !== null };
+  }
+  return { structure: localProjection, remote: undefined, hasLocalRuntimeGraph: graph !== null };
 }
 
 function projectionRow(projection: HierarchyStructureProjection | undefined, id: EntityHandle): HierarchyRowVM | undefined {
@@ -657,8 +616,7 @@ function projectionRow(projection: HierarchyStructureProjection | undefined, id:
   const cache = projectionVmCache.get(projection) ?? new Map<EntityHandle, HierarchyRowVM>();
   projectionVmCache.set(projection, cache);
   const previous = cache.get(id);
-  if (previous) return previous;
-  const value = {
+  const candidate: HierarchyRowVM = {
     exists: true,
     name: row.name,
     typeId: row.typeId,
@@ -667,8 +625,9 @@ function projectionRow(projection: HierarchyStructureProjection | undefined, id:
     mobilityKey: row.mobility,
     childIds: row.childIds,
   };
-  cache.set(id, value);
-  return value;
+  if (previous && rowVmEqual(previous, candidate)) return previous;
+  cache.set(id, candidate);
+  return candidate;
 }
 
 const Row = memo(function Row({
@@ -682,6 +641,7 @@ const Row = memo(function Row({
   readOnly,
   columns,
   projection,
+  hierarchyReadsFromCarrier,
 }: {
   id: EntityHandle;
   depth: number;
@@ -693,6 +653,7 @@ const Row = memo(function Row({
   readOnly?: boolean | undefined;
   columns: HierarchyColumns;
   projection?: HierarchyStructureProjection | undefined;
+  hierarchyReadsFromCarrier: boolean;
 }) {
   const { t } = useTranslation();
   const remote = useContext(RemoteHierarchyContext);
@@ -700,9 +661,9 @@ const Row = memo(function Row({
   // collapse) re-renders ONLY the rows whose own value actually flips
   // (useSyncExternalStore bails on Object.is), so a doc churn or a hover move
   // no longer repaints the whole tree.
-  const vm = useHierarchyRowVM(id, projection);
+  const vm = useHierarchyRowVM(id, projection, hierarchyReadsFromCarrier);
   const localIsSelected = useIsSelected(id);
-  const isSelected = remote?.selectionIds.has(id) ?? localIsSelected;
+  const isSelected = remote !== null ? remote.selectionIds.has(id) : localIsSelected;
   const isHovered = useIsHoverEntity(id);
   const isCollapsed = useIsHierarchyCollapsed(id);
   const [dropPos, setDropPos] = useState<DropPos | null>(null);
@@ -806,8 +767,8 @@ const Row = memo(function Row({
           title={nodeHidden ? t('editor.hierarchy.menu.showInViewport') : t('editor.hierarchy.menu.hideInViewport')}
           onClick={(e) => {
             e.stopPropagation();
-            if (readOnly) return;
             const newHidden = !nodeHidden;
+            if (readOnly) return;
             // Same-state selected siblings follow the click as ONE transaction
             // (one undo step) via the shared core op (north-star §3.2).
             const sel = remote?.selectionIds ?? getSelectionList();
@@ -822,7 +783,7 @@ const Row = memo(function Row({
               kind: 'hierarchyGesture',
               action: 'visibility',
               entities: ids,
-              state: newHidden ? 'hidden' : 'visible',
+              state: newHidden ? 'hidden' : 'inherited',
             });
           }}
         >
@@ -885,7 +846,7 @@ const Row = memo(function Row({
       </div>
       {!isCollapsed &&
         renderedKids.map((k) => (
-          <Row key={k} id={k} depth={depth + 1} onMenu={onMenu} toggleCollapse={toggleCollapse} readOnly={readOnly} columns={columns} projection={projection} />
+          <Row key={k} id={k} depth={depth + 1} onMenu={onMenu} toggleCollapse={toggleCollapse} readOnly={readOnly} columns={columns} projection={projection} hierarchyReadsFromCarrier={hierarchyReadsFromCarrier} />
         ))}
     </>
   );
@@ -908,6 +869,7 @@ const SceneFolderRow = memo(function SceneFolderRow({
   readOnly,
   columns,
   projection,
+  hierarchyReadsFromCarrier,
 }: {
   childrenIds: readonly EntityHandle[];
   visibilityIds?: readonly EntityHandle[] | undefined;
@@ -920,6 +882,7 @@ const SceneFolderRow = memo(function SceneFolderRow({
   readOnly: boolean;
   columns: HierarchyColumns;
   projection?: HierarchyStructureProjection | undefined;
+  hierarchyReadsFromCarrier: boolean;
 }) {
   const { t } = useTranslation();
   const remote = useContext(RemoteHierarchyContext);
@@ -1012,6 +975,7 @@ const SceneFolderRow = memo(function SceneFolderRow({
           readOnly={readOnly}
           columns={columns}
           projection={projection}
+          hierarchyReadsFromCarrier={hierarchyReadsFromCarrier}
         />
       ))}
     </>
@@ -1126,6 +1090,7 @@ function VirtualizedRows({
   readOnly,
   columns,
   projection,
+  hierarchyReadsFromCarrier,
 }: {
   rows: readonly HierarchyVisibleRow[];
   scrollRef: React.RefObject<HTMLDivElement | null>;
@@ -1136,6 +1101,7 @@ function VirtualizedRows({
   readOnly: boolean;
   columns: HierarchyColumns;
   projection?: HierarchyStructureProjection | undefined;
+  hierarchyReadsFromCarrier: boolean;
 }) {
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
@@ -1144,6 +1110,14 @@ function VirtualizedRows({
     overscan: 12,
   });
   useEffect(() => {
+    let remeasureRaf = 0;
+    let followUpRaf = 0;
+    const cancelScheduledRemeasure = (): void => {
+      if (remeasureRaf) cancelAnimationFrame(remeasureRaf);
+      if (followUpRaf) cancelAnimationFrame(followUpRaf);
+      remeasureRaf = 0;
+      followUpRaf = 0;
+    };
     const syncVirtualizerScrollOffset = (): void => {
       const element = scrollRef.current;
       if (!element) return;
@@ -1157,22 +1131,52 @@ function VirtualizedRows({
       // public scroll subscription.
       element.dispatchEvent(new Event('scroll'));
     };
+    const remeasureVirtualRange = (): void => {
+      syncVirtualizerScrollOffset();
+      rowVirtualizer.measure();
+    };
+    const scheduleRemeasureVirtualRange = (followUpFrame = false): void => {
+      cancelScheduledRemeasure();
+      remeasureRaf = requestAnimationFrame(() => {
+        remeasureRaf = 0;
+        remeasureVirtualRange();
+        if (followUpFrame) {
+          followUpRaf = requestAnimationFrame(() => {
+            followUpRaf = 0;
+            remeasureVirtualRange();
+          });
+        }
+      });
+    };
     const observeResize = (): ResizeObserver | undefined => {
       if (typeof ResizeObserver === 'undefined') return undefined;
       const observer = new ResizeObserver(() => {
-        syncVirtualizerScrollOffset();
+        scheduleRemeasureVirtualRange();
       });
       const element = scrollRef.current;
       if (element) observer.observe(element);
       return observer;
     };
-    syncVirtualizerScrollOffset();
+    let intersection: IntersectionObserver | undefined;
+    if (typeof IntersectionObserver !== 'undefined') {
+      intersection = new IntersectionObserver((entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        scheduleRemeasureVirtualRange(true);
+      }, { threshold: 0 });
+      const element = scrollRef.current;
+      if (element) intersection.observe(element);
+    }
+    scheduleRemeasureVirtualRange();
     const observer = observeResize();
-    return () => observer?.disconnect();
-  }, [rowVirtualizer, scrollRef]);
+    return () => {
+      cancelScheduledRemeasure();
+      observer?.disconnect();
+      intersection?.disconnect();
+    };
+  }, [rowVirtualizer, scrollRef, rows.length]);
   const remote = useContext(RemoteHierarchyContext);
   const localSelectedId = useSelection();
-  const selectedId = remote?.primarySelection ?? localSelectedId;
+  const selectedId = remote !== null ? remote.primarySelection : localSelectedId;
   const selectedIndex = selectedId === null ? -1 : rows.findIndex((row) => row.id === selectedId);
   useEffect(() => {
     if (selectedIndex >= 0) rowVirtualizer.scrollToIndex(selectedIndex, { align: 'auto' });
@@ -1208,6 +1212,7 @@ function VirtualizedRows({
               readOnly={readOnly}
               columns={columns}
               projection={projection}
+              hierarchyReadsFromCarrier={hierarchyReadsFromCarrier}
             />
           </div>
         );
@@ -1223,11 +1228,20 @@ export function HierarchyPanel() {
   // as well; otherwise the first `graph === null` snapshot is never replaced
   // and the hierarchy remains an empty folder until another unrelated render.
   useDocVersion();
+  const sceneReloadGen = useSyncExternalStore(
+    subscribeHierarchySceneReload,
+    getHierarchySceneReloadGeneration,
+    getHierarchySceneReloadGeneration,
+  );
+  const {
+    readsFromCarrier,
+    usesRemoteProjection: remoteProjection,
+    readOnly,
+  } = useHierarchyPanelAuthority(gateway.mode);
   const {
     structure: projection,
     remote: remoteProjectionState,
-    hasLocalRuntimeGraph,
-  } = useHierarchyProjection();
+  } = useHierarchyProjection(readsFromCarrier);
   const remoteContext = useMemo<RemoteHierarchyContextValue | null>(() => {
     if (remoteProjectionState === undefined) return null;
     const selectionIds = new Set(remoteProjectionState.selectionIds);
@@ -1270,16 +1284,11 @@ export function HierarchyPanel() {
   }, [activeSceneId]);
 
   const activeWorld = gateway.activeWorld;
-  const { usesRemoteProjection: remoteProjection, readOnly } = resolveHierarchyRuntimeAccess({
-    hasLocalRuntimeGraph,
-    hasRemoteProjection: remoteContext !== null,
-    gatewayMode: gateway.mode,
-  });
   const worldReady = activeWorld != null || projection !== undefined;
   const hierarchyBodyRef = useRef<HTMLDivElement>(null);
   const hierarchyRootRef = useRef<HTMLDivElement>(null);
   useKeybindingScope(hierarchyRootRef, 'editor.hierarchy');
-  const worldEntityIds = remoteProjection
+  const worldEntityIds = readsFromCarrier
     ? projection?.rows.map((row) => row.id) ?? EMPTY_IDS
     : activeWorld ? worldEntityHandles(activeWorld) : EMPTY_IDS;
   // The runtime projection is the cheap structural read model, but a freshly
@@ -1287,9 +1296,9 @@ export function HierarchyPanel() {
   // Never let that transient lag hide authored entities: when its cardinality
   // disagrees with the active world, use the same world's value-stable row VM
   // until the projection catches up.
-  const usableProjection = remoteProjection
+  const usableProjection = readsFromCarrier
     ? projection
-    : projection && projection.rows.length === worldEntityIds.length ? projection : undefined;
+    : hierarchyProjectionMatchesWorld(projection, activeWorld, worldEntityIds.length) ? projection : undefined;
   if (worldReady) pruneDisplayOrder(worldEntityIds);
   // Root order derives from the doc. `docVersion` is referenced so the panel
   // re-derives roots when the document mutates (incl. the per-frame Play mirror),
@@ -1303,21 +1312,14 @@ export function HierarchyPanel() {
   const projectedRoots = usableProjection
     ? usableProjection.rows.filter((row) => !projectedChildIds!.has(row.id)).map((row) => row.id)
     : !remoteProjection && activeWorld ? childrenOf(activeWorld, null) : EMPTY_IDS;
-  const roots = useStableIds(worldReady ? stableDisplayOrder(projectedRoots) : EMPTY_IDS);
+  const roots = useStableIds(
+    worldReady ? stableDisplayOrder(projectedRoots) : EMPTY_IDS,
+    sceneReloadGen,
+  );
   const visibleRows = useMemo(() => {
     if ((!activeWorld && !usableProjection) || view.collapsed.has(HIERARCHY_SCENE_FOLDER_ID)) return [];
     return flattenVisibleRows(roots, view.collapsed, activeWorld, usableProjection);
-  }, [activeWorld, roots, usableProjection, view.collapsed]);
-  useEffect(() => {
-    console.info(`[placement-diag] hierarchy.snapshot ${JSON.stringify({
-      gatewayRev: gateway.rev,
-      mode: gateway.mode,
-      worldReady,
-      projectionRows: usableProjection?.rows.length ?? null,
-      visibleRoots: roots,
-      worldEntityCount: worldEntityIds.length,
-    })}`);
-  }, [activeWorld, roots, usableProjection?.rows.length, worldEntityIds.length, worldReady]);
+  }, [activeWorld, activeSceneId, roots, usableProjection, view.collapsed, sceneReloadGen]);
   const toggleCollapse = useCallback((id: EntityHandle) => toggleHierarchyCollapsed(id), []);
   const spawnEntity = () => {
     if (readOnly) return;
@@ -1575,6 +1577,7 @@ export function HierarchyPanel() {
               readOnly={readOnly}
               columns={view.columns}
               projection={usableProjection}
+              hierarchyReadsFromCarrier={readsFromCarrier}
             />
           )}
           {matches.length > 0 && (
@@ -1588,6 +1591,7 @@ export function HierarchyPanel() {
               readOnly={readOnly}
               columns={view.columns}
               projection={usableProjection}
+              hierarchyReadsFromCarrier={readsFromCarrier}
             />
           )}
         </div>
@@ -1634,6 +1638,7 @@ export function HierarchyPanel() {
             readOnly={readOnly}
             columns={view.columns}
             projection={usableProjection}
+            hierarchyReadsFromCarrier={readsFromCarrier}
           />
           <VirtualizedRows
             rows={visibleRows}
@@ -1643,6 +1648,7 @@ export function HierarchyPanel() {
             readOnly={readOnly}
             columns={view.columns}
             projection={usableProjection}
+            hierarchyReadsFromCarrier={readsFromCarrier}
           />
         </div>
       )}

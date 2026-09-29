@@ -43,9 +43,6 @@ export async function createMaterialInstanceAndOpen(name: string, packDir: strin
     return;
   }
 
-  // The pack write is fire-and-forget, but the tab opens by GUID and the page
-  // controller seeds staging from this payload — the same defaults the applier
-  // just wrote — so the editor is usable before the disk write lands.
   const opened = await dispatchActiveEditorOperation({
     kind: 'openAssetEditor',
     asset: {
@@ -56,7 +53,5 @@ export async function createMaterialInstanceAndOpen(name: string, packDir: strin
       payload: createDefaultMaterialInstancePayload(parentGuid) as unknown as Record<string, unknown>,
     },
   }, 'human');
-  // The asset itself was created; only the tab failed to open. Report that
-  // instead of dropping the refusal — the host may install no page navigation.
   if (!opened.ok) toast.error('openAssetEditor', { description: opened.error.hint });
 }

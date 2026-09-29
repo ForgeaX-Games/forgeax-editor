@@ -15,7 +15,7 @@ describe('Play VFX render capability gate', () => {
     const source = readFileSync(resolve(import.meta.dir, '../main.ts'), 'utf8');
     expect(source).toContain('supportsVfxRenderFeature(renderer.inspect().capabilities)');
     expect(source).not.toContain('supportsVfxRenderFeature(renderer.device.caps)');
-    expect(source).toContain('const assets = app.value.assets');
+    expect(source).toContain('const { world, renderer, assets } = carrierApp');
     expect(source).not.toContain('renderer.assets');
     expect(source).not.toContain('renderer.installRenderFeature');
     expect(source).not.toContain('renderer.subscribeFrameEnd');

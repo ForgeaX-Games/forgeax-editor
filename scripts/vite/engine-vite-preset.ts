@@ -23,9 +23,12 @@
 
 import { basename, dirname, resolve, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readdirSync, readFileSync, realpathSync, createReadStream, statSync, unlinkSync, existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { readdirSync, readFileSync, realpathSync, createReadStream, statSync, unlinkSync, existsSync,
+} from 'node:fs';
 import type { PluginOption } from 'vite';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import type { ProducerReadiness } from '@forgeax/engine-import';
 import {
   pluginPack,
   type PluginPack,
@@ -36,6 +39,7 @@ import vitePluginRhiDebug from '@forgeax/engine-vite-plugin-rhi-debug';
 // source-only TypeScript export. Reach the same core helper relatively so Vite
 // folds it into the config bundle before Node evaluates that bundle.
 import {
+  createSourceIdentityFor,
   resolveGameAssetRoots,
   resolveGameCatalogRoots,
 } from '../../packages/core/src/asset-roots.ts';
@@ -43,11 +47,12 @@ import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { fbxImporter } from '@forgeax/engine-fbx';
 import { fontImporter } from '@forgeax/engine-font/font-importer';
-import { targetProfileImporter } from '../../packages/engine/templates/game-default/assets/plugins/target-profile-importer.ts';
 import {
   createParticleCodeNativeCooker,
   type ParticleCodeModuleSet,
 } from '@forgeax/engine-vfx-compiler';
+import { createMaterialPackCooker } from '@forgeax/engine-shader-compiler';
+import { createUiImporter } from '@forgeax/engine-ui/importer';
 import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import type { RuntimeAssetBinding, RuntimeCatalogRoot } from '@forgeax/engine-types';
 
@@ -60,8 +65,11 @@ export const ENGINE_EXECUTION_ISOLATION_HEADERS = Object.freeze({
 // This module lives under scripts/vite. Anchor the @forgeax workspace
 // family at edit-runtime's node_modules so every consuming config derives the
 // identical SSOT list regardless of which Vite root loaded this preset.
-const EDITOR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const EDIT_RUNTIME_DIR = resolve(EDITOR_ROOT, 'packages/edit-runtime');
+// Packaged helpers are bundled into engine/, so source-relative paths no longer apply.
+const PACKAGED_ENGINE_ROOT = process.env.FORGEAX_STARTUP_PROFILE === 'desktop-prod' && process.env.FORGEAX_RESOURCE_ROOT
+  ? resolve(process.env.FORGEAX_RESOURCE_ROOT, 'engine') : undefined;
+const EDITOR_ROOT = PACKAGED_ENGINE_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const EDIT_RUNTIME_DIR = PACKAGED_ENGINE_ROOT ?? resolve(EDITOR_ROOT, 'packages/edit-runtime');
 const HOST_DDC_ROOT = resolve(EDITOR_ROOT, '.forgeax', 'ddc');
 
 /** The project publication root is owned by the canonical game directory. */
@@ -130,7 +138,9 @@ export function discoverForgeaxWorkspacePackages(
       for (const name of names) out.add(`@forgeax/${name}`);
       discovered = true;
       break;
-    } catch { /* try the next supported install layout */ }
+    } catch {
+      /* try the next supported install layout */
+    }
   }
   if (!discovered) {
     throw new Error(
@@ -152,6 +162,11 @@ export function discoverForgeaxWorkspacePackages(
  * direct at the host root must therefore resolve from their importing engine
  * package's nested graph instead of being globally deduped.
  */
+const NEVER_DEDUPE_AT_NESTED_HOST = new Set<string>([
+  '@forgeax/engine-plugin',
+  '@forgeax/engine-debug-draw',
+]);
+
 function forgeaxHostDedupePackages(
   workspacePackages: readonly string[],
   packageRoots: readonly string[] | undefined,
@@ -166,6 +181,7 @@ function forgeaxHostDedupePackages(
     ];
   });
   return workspacePackages.filter((specifier) => {
+    if (NEVER_DEDUPE_AT_NESTED_HOST.has(specifier)) return false;
     const packageName = specifier.slice('@forgeax/'.length);
     return hostPackageDirs.some((scopeDir) =>
       existsSync(join(scopeDir, packageName, 'package.json')),
@@ -214,7 +230,7 @@ function normalizeGameFilePath(raw: string, viteRoot: string, dereference = true
     // the editor package root (parent of apps/standalone/) before viteRoot, because
     // the host config's root is apps/standalone/ and a bare `../`
     // from there would land inside packages/, not the sibling Forgeax-games/.
-    const editorRoot = resolve(EDIT_RUNTIME_DIR, '..', '..');
+    const editorRoot = EDITOR_ROOT;
     const fromEditor = resolve(editorRoot, p).replace(/\\/g, '/');
     const fromVite = resolve(viteRoot, p).replace(/\\/g, '/');
     p = fromEditor;
@@ -235,23 +251,11 @@ interface PackageExportTarget {
 }
 
 interface PackageExports {
-  readonly [subpath: string]: string | PackageExportTarget | undefined;
-}
-
-/**
- * Pick the browser graph entry from a package `exports` target.
- *
- * Vite client conditions prefer `browser` over `import`. Play/Edit hosts must
- * honor the same order: `@forgeax/engine-plugin` ships a Node `import` that
- * uses `createRequire`, and a separate `browser` build that does not.
- */
-export function resolveBrowserPackageExportPath(
-  entry: string | PackageExportTarget | null | undefined,
-): string | undefined {
-  if (typeof entry === 'string') return entry;
-  if (typeof entry?.browser === 'string') return entry.browser;
-  if (typeof entry?.import === 'string') return entry.import;
-  return undefined;
+  readonly [subpath: string]:
+    | string | {
+    readonly browser?: string | null;
+    readonly import?: string;
+  } | undefined;
 }
 
 /**
@@ -273,11 +277,13 @@ export function resolveGameEngineEntry(
   if (!packageName) return null;
 
   const packageRoots = [
-    resolve(EDIT_RUNTIME_DIR, 'node_modules'),
     ...(opts.packageRoots ?? []).flatMap((root) => {
       const abs = resolve(root);
       return [abs, resolve(abs, 'node_modules'), resolve(abs, 'packages')];
     }),
+    resolve(EDIT_RUNTIME_DIR, 'node_modules'),
+    resolve(EDITOR_ROOT, 'node_modules'),
+    resolve(EDITOR_ROOT, 'packages/engine/packages'),
   ];
   const hostPackageRoot = process.env.FORGEAX_HOST_PACKAGE_ROOT;
   if (hostPackageRoot) {
@@ -293,20 +299,40 @@ export function resolveGameEngineEntry(
         };
         if (manifest.name !== id.split('/').slice(0, 2).join('/')) continue;
         const exportKey = subpath.length === 0 ? '.' : `./${subpath.join('/')}`;
-        const exactEntry = manifest.exports?.[exportKey];
-        const wildcardReplacement = subpath.join('/');
-        const wildcardEntry = wildcardReplacement
-          ? manifest.exports?.['./*']
-          : undefined;
-        const entry = exactEntry ?? wildcardEntry;
-        const importPath = resolveBrowserPackageExportPath(entry);
-        if (typeof importPath === 'string') {
-          const resolvedImportPath = exactEntry === undefined && wildcardEntry !== undefined
-            ? importPath.replaceAll('*', wildcardReplacement)
-            : importPath;
-          return resolve(packageDir, resolvedImportPath);
+        let entry = manifest.exports?.[exportKey];
+        let wildcard: string | undefined;
+        if (entry === undefined) {
+          for (const pattern of Object.keys(manifest.exports ?? {})
+            .filter((key) => key.includes('*'))
+            .sort((a, b) => b.length - a.length)) {
+            const [prefix, suffix] = pattern.split('*');
+            if (!exportKey.startsWith(prefix!) || !exportKey.endsWith(suffix!)) continue;
+            wildcard = exportKey.slice(
+              prefix!.length,
+              suffix!.length ? -suffix!.length : undefined,
+            );
+            if (wildcard.split('/').some((part) => part === '..' || part === '.')) return null;
+            entry = manifest.exports?.[pattern];
+            break;
+          }
         }
-      } catch { /* try the next producer-owned package root */ }
+        const target = (path: string) =>
+          resolve(packageDir, wildcard === undefined ? path : path.replaceAll('*', wildcard));
+        if (typeof entry === 'string') return target(entry);
+        if (entry === undefined) continue;
+        // This resolver is used by browser Vite hosts, but it intentionally
+        // bypasses Vite's package-resolution conditions to stay anchored in
+        // the selected Engine worktree. Preserve the package export contract:
+        // prefer an explicit browser entry, and treat browser:null as a hard
+        // browser exclusion instead of silently loading the Node import.
+        if ('browser' in entry) {
+          if (typeof entry.browser === 'string') return target(entry.browser);
+          return null;
+        }
+        if (typeof entry.import === 'string') return target(entry.import);
+      } catch {
+        /* try the next producer-owned package root */
+      }
     }
   }
   return null;
@@ -336,20 +362,23 @@ function gameEngineResolve(opts: GameSourceResolutionOptions): PluginOption {
     packageRoots,
     gamePathPrefixes = [],
   } = opts;
-  const multiGamePathRe = gamePathPrefixes.length === 0
-    ? MULTI_GAME_PATH_RE
-    : new RegExp(
-      `/(?:${[
+  const multiGamePathRe =
+    gamePathPrefixes.length === 0
+      ? MULTI_GAME_PATH_RE
+      : new RegExp(
+          `/(?:${[
         HOST_GAMES_DIR,
         'packages/games',
         'forgeax-games',
-        ...gamePathPrefixes,
-      ].map(escapeRegex).join('|')})/[^/]+/`,
-    );
+        ...gamePathPrefixes].map(escapeRegex).join('|')})/[^/]+/`,
+        );
   let gameDirNorm: string | null = null;
   if (gameDirAbs) {
-    try { gameDirNorm = normalizeGameFilePath(realpathSync.native(gameDirAbs), gameDirAbs); }
-    catch { gameDirNorm = normalizeGameFilePath(gameDirAbs, gameDirAbs); }
+    try {
+      gameDirNorm = normalizeGameFilePath(realpathSync.native(gameDirAbs), gameDirAbs);
+    } catch {
+      gameDirNorm = normalizeGameFilePath(gameDirAbs, gameDirAbs);
+    }
   }
   let viteRoot = process.cwd();
   return {
@@ -360,25 +389,27 @@ function gameEngineResolve(opts: GameSourceResolutionOptions): PluginOption {
     resolveId(id, importer) {
       if (!importer || !id.startsWith('@forgeax/')) return null;
       const imp = normalizeGameFilePath(importer, viteRoot);
-     const currentGameDir = gameDirProvider?.() ?? gameDirAbs;
-     const currentGameDirNorm = currentGameDir === gameDirAbs
-       ? gameDirNorm
-       : currentGameDir
-         ? normalizeGameFilePath(currentGameDir, viteRoot)
-         : null;
+      const currentGameDir = gameDirProvider?.() ?? gameDirAbs;
+      const currentGameDirNorm =
+        currentGameDir === gameDirAbs
+          ? gameDirNorm
+          : currentGameDir
+            ? normalizeGameFilePath(currentGameDir, viteRoot)
+            : null;
       // Play serves games through an in-root symlink farm. Dereferencing the
       // importer above is important for source identity, but it erases the
       // URL-space game prefix (for example `smoke-games/<slug>`), which is the
       // multi-game host's only stable match for an external game directory.
       // Keep the logical path as a second observation for ownership matching.
       const logicalImp = normalizeGameFilePath(importer, viteRoot, false);
-      const isGameFile = currentGameDirNorm !== null
-        ? imp.startsWith(currentGameDirNorm)
-        : (multiGame && (multiGamePathRe.test(imp) || multiGamePathRe.test(logicalImp)));
-      const isStaticGameFile = staticGameDir.length > 0
-        && imp.startsWith(normalizeGameFilePath(staticGameDir, viteRoot));
-      return (isGameFile || isStaticGameFile)
-        ? resolveGameEngineEntry(id, { packageRoots }) ?? null
+      const isGameFile =
+        currentGameDirNorm !== null
+          ? imp.startsWith(currentGameDirNorm)
+          : multiGame && (multiGamePathRe.test(imp) || multiGamePathRe.test(logicalImp));
+      const isStaticGameFile =
+        staticGameDir.length > 0 && imp.startsWith(normalizeGameFilePath(staticGameDir, viteRoot));
+      return isGameFile || isStaticGameFile
+        ? (resolveGameEngineEntry(id, { packageRoots }) ?? null)
         : null;
     },
   };
@@ -393,16 +424,15 @@ const SHARED_BASE = resolve(EDITOR_ROOT, 'forgeax-editor-assets');
 // shared runtime inputs, not game-local `.ui.html`/`.meta.json` authoring files.
 // Keep the engine-assets submodule as their SSOT and add only its template UI
 // directory to the self-hosted pack roots below.
+const ENGINE_ASSETS_BASE = PACKAGED_ENGINE_ROOT
+  ? resolve(PACKAGED_ENGINE_ROOT, 'forgeax-engine-assets')
+  : resolve(EDIT_RUNTIME_DIR, '..', 'engine', 'forgeax-engine-assets');
 const ENGINE_TEMPLATE_UI_BASE = resolve(
-  EDITOR_ROOT,
-  'packages',
-  'engine',
-  'forgeax-engine-assets',
+  ENGINE_ASSETS_BASE,
   'demo-assets',
   'template-game-default',
   'ui',
 );
-const ENGINE_ASSETS_BASE = resolve(EDIT_RUNTIME_DIR, '..', 'engine', 'forgeax-engine-assets');
 
 /**
  * A resolved root plus its stable catalog-space prefix. The engine pack catalog
@@ -419,7 +449,9 @@ export type CatalogAssetRoot = RuntimeCatalogRoot;
 
 function isGameDefaultTemplate(gameDirAbs: string): boolean {
   try {
-    const packageJson = JSON.parse(readFileSync(join(gameDirAbs, 'package.json'), 'utf8')) as { name?: unknown };
+    const packageJson = JSON.parse(readFileSync(join(gameDirAbs, 'package.json'), 'utf8')) as {
+      name?: unknown;
+    };
     return packageJson.name === '@forgeax/template-game-default';
   } catch {
     return false;
@@ -449,6 +481,86 @@ function gamePackRoots(gameDirAbs: string): string[] {
     : [...templateRuntimeRoots, ...roots];
 }
 
+interface AuthoredMaterialPackageShape {
+  readonly schemaVersion?: unknown;
+  readonly kind?: unknown;
+  readonly assets?: readonly {
+    readonly kind?: unknown;
+    readonly sourceKey?: unknown;
+  }[];
+}
+
+/**
+ * Pack remains the runtime material publisher, but the shader transform still
+ * needs the authored MaterialAsset contract to compose the generated
+ * `forgeax_material::parameters` module. Discover only those contracts from
+ * the same roots Pack scans; the shader plugin consumes them in compile-only
+ * mode and does not publish a second runtime material entry.
+ */
+function isAuthoredMaterialPackage(value: unknown): value is AuthoredMaterialPackageShape {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const pack = value as AuthoredMaterialPackageShape;
+  if (
+    (pack.schemaVersion !== '1.0.0' && pack.schemaVersion !== '2.0.0') ||
+    pack.kind !== 'internal-text-package'
+  ) {
+    return false;
+  }
+  if (!Array.isArray(pack.assets) || pack.assets.length !== 1) return false;
+  const asset = pack.assets[0];
+  return (
+    typeof asset === 'object' &&
+    asset !== null &&
+    !Array.isArray(asset) &&
+    asset.kind === 'material' &&
+    typeof asset.sourceKey === 'string' &&
+    asset.sourceKey.length > 0 &&
+    asset.sourceKey.endsWith('.wgsl')
+  );
+}
+
+/** Discover authored material contracts from one current Pack root snapshot. */
+export function discoverMaterialPackages(
+  rootsOrProvider: readonly string[] | (() => readonly string[]),
+): string[] {
+  const roots = typeof rootsOrProvider === 'function' ? rootsOrProvider : () => rootsOrProvider;
+  const packages = new Set<string>();
+  const visit = (path: string): void => {
+    let stat: ReturnType<typeof statSync>;
+    try {
+      stat = statSync(path);
+    } catch {
+      return;
+    }
+    if (stat.isDirectory()) {
+      let entries: import('node:fs').Dirent[];
+      try {
+        entries = readdirSync(path, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') {
+          continue;
+        }
+        visit(join(path, entry.name));
+      }
+      return;
+    }
+    if (!stat.isFile() || !path.endsWith('.pack.json')) return;
+    try {
+      if (isAuthoredMaterialPackage(JSON.parse(readFileSync(path, 'utf8')) as unknown)) {
+        packages.add(resolve(path));
+      }
+    } catch {
+      // Pack owns malformed-package diagnostics. Discovery leaves those files
+      // to Pack instead of masking the producer's structured failure.
+    }
+  };
+  for (const root of roots()) visit(resolve(root));
+  return [...packages].sort();
+}
+
 /**
  * Pack/runtime boundary owned by the editor host: shader source sidecars are
  * authored inputs for forgeaxShader, not runtime asset rows. The predicate is
@@ -460,7 +572,9 @@ export function isEditorBuildOnlyPackPath(path: string): boolean {
   if (!normalized.endsWith('.meta.json')) return false;
   if (normalized.endsWith('.wgsl.meta.json')) return true;
   try {
-    const meta = JSON.parse(readFileSync(path, 'utf8')) as { importer?: unknown };
+    const meta = JSON.parse(readFileSync(path, 'utf8')) as {
+      importer?: unknown;
+    };
     return meta.importer === 'shader';
   } catch {
     return false;
@@ -479,9 +593,7 @@ export function discoverParticleCodeModules(
   rootsOrProvider: readonly string[] | (() => readonly string[]),
 ): Readonly<Record<string, ParticleCodeModuleSet>> {
   const modules: Record<string, ParticleCodeModuleSet> = {};
-  const roots = typeof rootsOrProvider === 'function'
-    ? rootsOrProvider
-    : () => rootsOrProvider;
+  const roots = typeof rootsOrProvider === 'function' ? rootsOrProvider : () => rootsOrProvider;
   const scan = (): Record<string, ParticleCodeModuleSet> => {
     const next: Record<string, ParticleCodeModuleSet> = {};
     const visit = (path: string): void => {
@@ -537,9 +649,7 @@ export function discoverParticleCodeModules(
 export function discoverGameMaterialPackages(
   rootsOrProvider: readonly string[] | (() => readonly string[]),
 ): string[] {
-  const roots = typeof rootsOrProvider === 'function'
-    ? rootsOrProvider()
-    : rootsOrProvider;
+  const roots = typeof rootsOrProvider === 'function' ? rootsOrProvider() : rootsOrProvider;
   const packages = new Set<string>();
   const visit = (path: string): void => {
     let stat: ReturnType<typeof statSync>;
@@ -568,9 +678,9 @@ export function discoverGameMaterialPackages(
         sourceKey?: unknown;
       };
       if (
-        asset.kind === 'material'
-        && typeof asset.sourceKey === 'string'
-        && asset.sourceKey.endsWith('.wgsl')
+        asset.kind === 'material' &&
+        typeof asset.sourceKey === 'string' &&
+        asset.sourceKey.endsWith('.wgsl')
       ) {
         packages.add(path);
       }
@@ -592,7 +702,9 @@ function cleanOrphanMetasInDir(dir: string): void {
   let entries: import('node:fs').Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
-  } catch { return; }
+  } catch {
+    return;
+  }
 
   for (const entry of entries) {
     const fullPath = join(dir, entry.name);
@@ -604,18 +716,23 @@ function cleanOrphanMetasInDir(dir: string): void {
 
     let source: string | undefined;
     try {
-      const meta = JSON.parse(readFileSync(fullPath, 'utf-8')) as { source?: string };
+      const meta = JSON.parse(readFileSync(fullPath, 'utf-8')) as {
+        source?: string;
+      };
       source = meta.source;
-    } catch { continue; }
+    } catch {
+      continue;
+    }
 
     // Resolve expected source path (mirrors engine scanner's resolveAssetSource):
     //   - undefined → derive from filename by stripping .meta.json
     //   - @name/rest → path-ref (skip — too complex for auto-cleanup)
     //   - relative string → resolve from meta's directory
     if (typeof source === 'string' && source.startsWith('@')) continue;
-    const expectedSource = source !== undefined
-      ? resolve(dir, source)
-      : resolve(dir, entry.name.replace(/\.meta\.json$/, ''));
+    const expectedSource =
+      source !== undefined
+        ? resolve(dir, source)
+        : resolve(dir, entry.name.replace(/\.meta\.json$/, ''));
 
     if (!existsSync(expectedSource)) {
       try {
@@ -623,7 +740,9 @@ function cleanOrphanMetasInDir(dir: string): void {
         console.warn(
           `[forgeax-pack] auto-cleaned orphan meta: ${fullPath} (missing source: ${expectedSource})`,
         );
-      } catch { /* already deleted or inaccessible */ }
+      } catch {
+        /* already deleted or inaccessible */
+      }
     }
   }
 }
@@ -633,15 +752,16 @@ function cleanOrphanMetasInDir(dir: string): void {
 // that base. Strip it only for the scoped control/catalog/import/package
 // namespace. There is deliberately no base-strip for a root catalog or import
 // URL: an unbound producer must not acquire a global asset route by accident.
-const PACK_ROUTE_PREFIXES = [
-  '/game-plugins/',
-  '/__pack/',
-];
+const PACK_ROUTE_PREFIXES = ['/game-plugins/', '/__pack/'];
 function packBaseStrip(base: string): PluginOption {
   const prefix = base.replace(/\/$/, ''); // '/editor'
   return {
     name: 'forgeax:engine-preset-pack-base-strip',
-    configureServer(server: { middlewares: { use(fn: (req: { url?: string }, res: unknown, next: () => void) => void): unknown } }) {
+    configureServer(server: {
+      middlewares: {
+        use(fn: (req: { url?: string }, res: unknown, next: () => void) => void): unknown;
+      };
+    }) {
       server.middlewares.use((req, _res, next) => {
         const u = req.url;
         if (u) {
@@ -668,7 +788,11 @@ function decodeAssetUrl(): PluginOption {
     configureServer(server) {
       server.middlewares.use((req, _res, next) => {
         if (req.url && req.url.includes('%')) {
-          try { req.url = decodeURIComponent(req.url); } catch { /* downstream reports malformed URLs */ }
+          try {
+            req.url = decodeURIComponent(req.url);
+          } catch {
+            /* downstream reports malformed URLs */
+          }
         }
         next();
       });
@@ -693,13 +817,21 @@ function silenceShaderEmitInServe(plugin: Record<string, unknown>): PluginOption
     },
     buildStart(this: unknown) {
       if (!isServe || typeof orig.buildStart !== 'function') return orig.buildStart?.call(this);
-      const proxy = new Proxy(this as object, { get(t, p) { return p === 'emitFile' ? () => '' : (t as Record<string | symbol, unknown>)[p]; } });
+      const proxy = new Proxy(this as object, {
+        get(t, p) {
+          return p === 'emitFile' ? () => '' : (t as Record<string | symbol, unknown>)[p];
+        },
+      });
       return orig.buildStart.call(proxy);
     },
     transform(this: unknown, code: string, id: string) {
       if (typeof orig.transform !== 'function') return undefined;
       if (!isServe) return orig.transform.call(this, code, id);
-      const proxy = new Proxy(this as object, { get(t, p) { return p === 'emitFile' ? () => '' : (t as Record<string | symbol, unknown>)[p]; } });
+      const proxy = new Proxy(this as object, {
+        get(t, p) {
+          return p === 'emitFile' ? () => '' : (t as Record<string | symbol, unknown>)[p];
+        },
+      });
       return orig.transform.call(proxy, code, id);
     },
   } as unknown as PluginOption;
@@ -719,7 +851,10 @@ function silenceShaderEmitInServe(plugin: Record<string, unknown>): PluginOption
 // or `fbx-wasm.wasm` and serves the file directly from the engine
 // submodule's build output. This mirrors how forgeaxShader's middleware
 // serves `/shaders/manifest.json` from a fixed disk location.
-const FBX_WASM_PKG_DIR = resolve(EDIT_RUNTIME_DIR, 'node_modules/@forgeax/engine-fbx/pkg');
+const editRuntimeRequire = createRequire(resolve(EDIT_RUNTIME_DIR, 'package.json'));
+const FBX_WASM_PKG_DIR = PACKAGED_ENGINE_ROOT
+  ? resolve(PACKAGED_ENGINE_ROOT, 'node_modules/@forgeax/engine-fbx/pkg')
+  : resolve(dirname(editRuntimeRequire.resolve('@forgeax/engine-fbx/package.json')), 'pkg');
 
 function fbxWasmServe(): PluginOption {
   return {
@@ -763,10 +898,8 @@ export interface EngineVitePresetOptions {
    * Whether to set resolve.preserveSymlinks. edit-runtime needs it (its nested
    * workspace symlink graph would otherwise pre-bundle one file via many symlink
    * paths -> esbuild OOM). The :15290 host must NOT enable it: the host bundle
-   * pulls dockview + @radix-ui through packages/interface/node_modules, and under
-   * preserveSymlinks vite resolves the symlinked interface to its realpath and
-   * then fails to find those NESTED transitive deps (dockview-core / react-context)
-   * that live under the symlink target. The host relies on realpath dedupe
+   * consumes published packages with nested transitive dependencies and uses
+   * their real paths for resolution. The host relies on realpath dedupe
    * (resolve.dedupe) instead — which already collapses the @forgeax family to one
    * instance. Defaults to true (edit-runtime's need); the host passes false.
    */
@@ -784,11 +917,11 @@ export interface EngineVitePresetOptions {
   ddc?: PluginPackDdcOptions;
   /** Optional fixed binding for a standalone single-game dev host. */
   runtimeBinding?: RuntimeAssetBinding;
- /**
-  * Optional Pack roots supplied by the active-game adapter. When omitted, a
-  * fixed `gameDirAbs` gets the standard single-game roots. The producer owns
-  * one current root set at a time; a dynamic host must rebind it explicitly.
-  */
+  /**
+   * Optional Pack roots supplied by the active-game adapter. When omitted, a
+   * fixed `gameDirAbs` gets the standard single-game roots. The producer owns
+   * one current root set at a time; a dynamic host must rebind it explicitly.
+   */
   pack?: {
     readonly roots: readonly string[];
     /**
@@ -799,8 +932,14 @@ export interface EngineVitePresetOptions {
     readonly rootsProvider?: () => readonly string[];
     readonly refresh?: () => void;
     readonly cleanOrphanMetas?: boolean;
-   readonly runtimeBinding?: RuntimeAssetBinding;
+    readonly runtimeBinding?: RuntimeAssetBinding;
+    readonly producerReadiness?: ProducerReadiness;
+    readonly ignorePath?: (path: string) => boolean;
   };
+  /** Resolve authored material contracts for the current Pack root snapshot. */
+  materialPackagesProvider?: () => readonly string[];
+  /** Host-owned stable source identity projection shared by Catalog and import. */
+  sourceIdentityFor?: (sourcePath: string) => string;
   /** Importer classification for game source modules. */
   gameSource?: Omit<GameSourceResolutionOptions, 'gameDirAbs'>;
 }
@@ -809,7 +948,11 @@ export interface EngineVitePreset {
   plugins: PluginOption[];
   /** The one Pack producer used by this host, if it owns a catalog. */
   pack: PluginPack | null;
-  optimizeDeps: { exclude: string[]; include: string[]; holdUntilCrawlEnd: false };
+  optimizeDeps: {
+    exclude: string[];
+    include: string[];
+    holdUntilCrawlEnd: false;
+  };
   resolve: { dedupe: string[]; preserveSymlinks: boolean };
   build: { target: 'esnext' };
   /** Declared game roots projected into the pack catalog's sourcePath space. */
@@ -822,13 +965,21 @@ export interface EngineVitePreset {
 // dependency, and causes the standalone host to exit with code 9. Native ESM
 // resolution is valid for these browser-safe modules and avoids that startup
 // failure.
-const RAPIER_COMPAT_PACKAGE = resolve(
-  EDITOR_ROOT,
-  'packages/engine/packages/physics-rapier3d/node_modules/@dimforge/rapier3d-compat',
-);
+const RAPIER_COMPAT_PACKAGE = PACKAGED_ENGINE_ROOT
+  ? resolve(PACKAGED_ENGINE_ROOT, 'node_modules/@dimforge/rapier3d-compat')
+  : resolve(
+      dirname(
+        createRequire(
+          resolve(EDITOR_ROOT, 'packages/engine/packages/physics-rapier3d/package.json'),
+        ).resolve('@dimforge/rapier3d-compat'),
+      ),
+      '..',
+    );
 const ENGINE_OPTIMIZE_DEPS_INCLUDE: readonly string[] = existsSync(
   join(RAPIER_COMPAT_PACKAGE, 'package.json'),
-) ? [RAPIER_COMPAT_PACKAGE] : [];
+)
+  ? [RAPIER_COMPAT_PACKAGE]
+  : [];
 
 // Rapier is imported dynamically by Play after the initial Vite dependency
 // crawl. Keep both browser-native ESM entrypoints out of the optimizer so a
@@ -875,62 +1026,102 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
   const catalogRoots = gameDirAbs
     ? resolveGameCatalogRoots(gameDirAbs, { sharedBase: SHARED_BASE })
     : [];
+  const configuredRuntimeBinding = opts.runtimeBinding ?? opts.pack?.runtimeBinding;
+  // Static standalone hosts know the logical game-root projection at config
+  // time. Carry it on the server binding as well as the client define so the
+  // Content Browser can translate producer catalog paths (which are relative
+  // to the editor checkout) back to game-relative authoring paths.
+  const runtimeBinding =
+    configuredRuntimeBinding === undefined
+      ? undefined
+      : configuredRuntimeBinding.catalogRoots === undefined
+        ? { ...configuredRuntimeBinding, catalogRoots }
+        : configuredRuntimeBinding;
   const packRoots = opts.pack?.roots ?? (gameDirAbs ? gamePackRoots(gameDirAbs) : []);
   const packRootsProvider = opts.pack?.rootsProvider ?? (() => packRoots);
+  const materialPackCooker = createMaterialPackCooker();
   const packRefresh = opts.pack?.refresh ?? (() => {});
   const cleanPackMetas = opts.pack?.cleanOrphanMetas ?? gameDirAbs !== null;
+  const sourceIdentityFor =
+    opts.sourceIdentityFor ??
+    (selfHostPack
+      ? createSourceIdentityFor({
+          gameDirAbs,
+          sharedBase: SHARED_BASE,
+          implicitSharedSubs: ['template-game-default'],
+        })
+      : undefined);
 
   const plugins: PluginOption[] = [];
   if (nonRootBase) {
     plugins.push(packBaseStrip(base));
   }
   plugins.push(fbxWasmServe());
- // Always register: Studio with no initial game still ▶ Play-loads the exact
- // game directory supplied later by the scope controller; --game self-host
- // passes an abs dir. Both need bare @forgeax/* re-anchored at edit-runtime.
+  // Always register: Studio with no initial game still ▶ Play-loads the exact
+  // game directory supplied later by the scope controller; --game self-host
+  // passes an abs dir. Both need bare @forgeax/* re-anchored at edit-runtime.
   plugins.push(gameEngineResolve({ gameDirAbs, ...opts.gameSource }));
   let pack: PluginPack | null = null;
   if (selfHostPack) {
     if (cleanPackMetas) cleanOrphanMetas(packRoots);
-   // Keep directory roots intact so newly-created packs remain visible to the
-   // dev watcher. The pack scanner receives `ignorePath` below and excludes
-   // build-only shader sidecars without sacrificing live file discovery.
-   const expandedPackRoots = packRoots;
+    // Keep directory roots intact so newly-created packs remain visible to the
+    // dev watcher. The pack scanner receives `ignorePath` below and excludes
+    // build-only shader sidecars without sacrificing live file discovery.
+    const expandedPackRoots = packRoots;
     // Decode percent-encoded non-ASCII URLs before pluginPack's middleware runs,
     // so its urlToAbs Map (keyed by Unicode filenames) can match Chinese/CJK paths.
     // Without this, `req.url` arrives percent-encoded while the map key is decoded.
     plugins.push(decodeAssetUrl());
+    const hostIgnorePath = opts.pack?.ignorePath;
     pack = pluginPack({
-     roots: [...expandedPackRoots],
-      ignorePath: isEditorBuildOnlyPackPath,
+      roots: [...expandedPackRoots],
+      ignorePath: (path: string) =>
+        isEditorBuildOnlyPackPath(path) || hostIgnorePath?.(path) === true,
       importers: [
         audioImporter,
         imageImporter,
         gltfImporter,
         fbxImporter,
         fontImporter,
-        targetProfileImporter(),
+        createUiImporter(),
       ],
       cookers: [
-        createParticleCodeNativeCooker(
-          discoverParticleCodeModules(packRootsProvider),
-        ),
+        // Authored material packs opt into the cooked contract. Register the
+        // compiler in the same host that owns Pack so standalone/Play publish
+        // the runtime payload instead of serving source-only declarations.
+        // Play can rebind this preset to another game without recreating it.
+        {
+          ...materialPackCooker,
+          cook: (input: unknown) => createMaterialPackCooker(packRootsProvider()).cook(input),
+        },
+        createParticleCodeNativeCooker(discoverParticleCodeModules(packRootsProvider)),
       ],
       // Edit/Standalone and Play both refresh through their host-specific
       // bridges. The default is intentionally no-op so a shared preset cannot
       // accidentally full-reload a live editor viewport.
       refresh: packRefresh,
       ddc,
-      ...(opts.runtimeBinding === undefined && opts.pack?.runtimeBinding === undefined
+      ...(sourceIdentityFor === undefined ? {} : { sourceIdentityFor }),
+      ...(runtimeBinding === undefined ? {} : { runtimeBinding }),
+      ...(opts.pack?.producerReadiness === undefined
         ? {}
-        : { runtimeBinding: opts.runtimeBinding ?? opts.pack?.runtimeBinding }),
+        : { producerReadiness: opts.pack.producerReadiness }),
     });
-    plugins.push(pack as unknown as PluginOption);
+    plugins.push(pack);
   }
   plugins.push(
     silenceShaderEmitInServe(
       forgeaxShader({
-        materialPackagesProvider: () => discoverGameMaterialPackages(packRootsProvider),
+        // Pack owns runtime material publication. The shader plugin receives
+        // the same authored contracts only to compose WGSL for imported source
+        // modules; compile-only mode keeps materialShaders[] out of the
+        // manifest so the Pack artifact is the single runtime registration.
+        materialPackagesProvider:
+          opts.materialPackagesProvider ??
+          (selfHostPack
+            ? () => discoverMaterialPackages(opts.pack?.rootsProvider ?? packRoots)
+            : undefined),
+        publishAuthoredMaterialShaders: selfHostPack ? false : undefined,
       }) as unknown as Record<string, unknown>,
     ),
   );
@@ -981,4 +1172,12 @@ export function engineVitePreset(opts: EngineVitePresetOptions): EngineVitePrese
     build: { target: 'esnext' },
     catalogRoots,
   };
+}
+
+/** Select the browser export without resurrecting a deliberately excluded entry. */
+export function resolveBrowserPackageExportPath(entry: string | { browser?: string | null; import?: string } | null | undefined): string | undefined {
+  if (typeof entry === 'string') return entry;
+  if (entry?.browser === null) return undefined;
+  if (typeof entry?.browser === 'string') return entry.browser;
+  return typeof entry?.import === 'string' ? entry.import : undefined;
 }

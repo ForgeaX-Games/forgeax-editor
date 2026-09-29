@@ -4,7 +4,7 @@ import { panelBridge } from '@forgeax/editor-core';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { colorForAssetKind, ContentBrowserIcon, iconNameForAssetKind, labelForAssetKind } from './content-browser-icons';
 import { isAssetPlacementAvailable } from './content-browser-format';
-import type { CBAsset } from './types';
+import type { CBAsset, CBViewItem } from './types';
 import { getThumbnailData } from './hooks/useThumbnail';
 import { CBInlineRename } from './CBInlineRename';
 
@@ -26,7 +26,7 @@ interface Props {
    *  connected per-row backdrop behind them. */
   groupKey?: string;
   renaming?: boolean;
-  renameValidate?: (value: string) => string | null;
+  renameValidate?: (value: string, item: CBViewItem) => string | null;
   onRenameCommit?: (item: CBAsset, value: string) => void;
   onRenameCancel?: () => void;
 }
@@ -195,7 +195,7 @@ function CBAssetItemImpl({
       {renaming ? (
         <CBInlineRename
           initial={asset.name}
-          validate={renameValidate}
+          validate={renameValidate ? (value) => renameValidate(value, asset) : undefined}
           onCommit={(value) => onRenameCommit?.(asset, value)}
           onCancel={() => onRenameCancel?.()}
           ariaLabel={t('editor.contentBrowser.contextMenu.rename')}

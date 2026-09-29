@@ -8,14 +8,7 @@ describe('editor component vocabulary', () => {
     const context = await createWorldContext(world, [editorComponentVocabularyPlugin()]);
     try {
       expect([...world.components.entries().keys()]).toEqual(
-        expect.arrayContaining([
-          'Entity',
-          'Disabled',
-          'ParticleEffectPlayer',
-          'CharacterController',
-          'Collider',
-          'CollidingEntities',
-          'RigidBody',
+        expect.arrayContaining(['Entity', 'Disabled', 'ParticleEffectPlayer', 'RigidBody', 'Collider', 'CollidingEntities', 'CharacterController',
         ]),
       );
     } finally {

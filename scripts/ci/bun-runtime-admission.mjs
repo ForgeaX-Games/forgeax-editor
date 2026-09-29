@@ -14,7 +14,7 @@ import { dirname, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-export const DEFAULT_BUN_VERSION = '1.3.14';
+export const DEFAULT_BUN_VERSION = '1.4.0';
 export const TRUSTED_SOURCE = 'trusted-runner-preinstalled';
 export const DOWNLOAD_SOURCE = 'setup-bun-download';
 

@@ -53,7 +53,7 @@ class FakeElement extends FakeNode {
   }
 
   removeAttribute(name: string): void {
-    const index = this.attributes.findIndex(attribute => attribute.name === name);
+    const index = this.attributes.findIndex((attribute) => attribute.name === name);
     if (index >= 0) this.attributes.splice(index, 1);
   }
 
@@ -67,14 +67,17 @@ class FakeCanvas extends FakeElement {
   height = 0;
   toBlobCalls = 0;
   samplePixel: [number, number, number, number] = [0, 0, 0, 0];
-  readonly draws: Array<{ readonly source: unknown; readonly width: number; readonly height: number }> = [];
+  readonly draws: Array<{ readonly source: unknown; readonly width: number; readonly height: number;
+  }> = [];
   constructor(ownerDocument: FakeDocument) {
     super('canvas', ownerDocument);
   }
   toDataURL(): never {
     throw new Error('synchronous toDataURL must not be used');
   }
-  getContext(type: string): { drawImage: (source: unknown, x: number, y: number, width: number, height: number) => void } | null {
+  getContext(type: string,
+  ): { drawImage: (source: unknown, x: number, y: number, width: number, height: number) => void;
+  } | null {
     if (type !== '2d') return null;
     return {
       drawImage: (source, _x, _y, width, height) => {
@@ -86,8 +89,12 @@ class FakeCanvas extends FakeElement {
   }
   toBlob(callback: (blob: Blob | null) => void): void {
     this.toBlobCalls += 1;
-    if (!this.ownerDocument.autoEncodePng) { this.ownerDocument.pendingPng = callback; return; }
-    queueMicrotask(() => callback(new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' })));
+    if (!this.ownerDocument.autoEncodePng) {
+      this.ownerDocument.pendingPng = callback;
+      return;
+    }
+    queueMicrotask(() => callback(new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' })),
+    );
   }
 }
 
@@ -141,12 +148,16 @@ class FakeDocument {
       getPropertyValue: (_property: string) => '',
       getPropertyPriority: (_property: string) => '',
     }),
-    cancelAnimationFrame: (_id: number) => { this.cancelledFrames += 1; this.pendingFrames.splice(0); },
+    cancelAnimationFrame: (_id: number) => {
+      this.cancelledFrames += 1;
+      this.pendingFrames.splice(0);
+    },
     requestAnimationFrame: (callback: FrameRequestCallback) => {
       this.frameRequests += 1;
+      const id = this.frameRequests;
       if (this.autoPresentFrame) queueMicrotask(() => callback(performance.now()));
       else this.pendingFrames.push(callback);
-      return this.frameRequests;
+      return id;
     },
   };
 
@@ -160,7 +171,11 @@ class FakeDocument {
       this.canvases.push(canvas);
       return canvas;
     }
-    if (localName === 'img') { const image = new FakeImage(this); this.images.push(image); return image; }
+    if (localName === 'img') {
+      const image = new FakeImage(this);
+      this.images.push(image);
+      return image;
+    }
     return new FakeElement(localName, this);
   }
 
@@ -285,10 +300,12 @@ describe('gameplay viewport capture budgets', () => {
     const bitmapSources: unknown[] = [];
     installRasterFakes((source) => bitmapSources.push(source));
 
-    await expect(captureGameplayViewport(
-      container as unknown as HTMLElement,
-      renderCanvas as unknown as HTMLCanvasElement,
-    )).rejects.toThrow('viewport HUD exceeds the capture complexity budget');
+    await expect(
+      captureGameplayViewport(
+        container as unknown as HTMLElement,
+        renderCanvas as unknown as HTMLCanvasElement,
+      ),
+    ).rejects.toThrow('viewport HUD exceeds the capture complexity budget');
 
     const output = doc.canvases.at(-1)!;
     expect(output.width).toBe(1_920);
@@ -440,10 +457,12 @@ describe('gameplay viewport capture budgets', () => {
     const renderCanvas = new FakeCanvas(doc);
     installRasterFakes(() => {});
 
-    await expect(captureGameplayViewport(
-      container as unknown as HTMLElement,
-      renderCanvas as unknown as HTMLCanvasElement,
-    )).rejects.toThrow('viewport HUD root is unavailable');
+    await expect(
+      captureGameplayViewport(
+        container as unknown as HTMLElement,
+        renderCanvas as unknown as HTMLCanvasElement,
+      ),
+    ).rejects.toThrow('viewport HUD root is unavailable');
 
     expect(doc.canvases.at(-1)?.toBlobCalls).toBe(0);
     expect(readBlobs).toEqual([]);
@@ -458,10 +477,12 @@ describe('gameplay viewport capture budgets', () => {
     const renderCanvas = new FakeCanvas(doc);
     installRasterFakes(() => {});
 
-    await expect(captureGameplayViewport(
-      container as unknown as HTMLElement,
-      renderCanvas as unknown as HTMLCanvasElement,
-    )).rejects.toThrow('viewport HUD exceeds the capture complexity budget');
+    await expect(
+      captureGameplayViewport(
+        container as unknown as HTMLElement,
+        renderCanvas as unknown as HTMLCanvasElement,
+      ),
+    ).rejects.toThrow('viewport HUD exceeds the capture complexity budget');
 
     expect(doc.canvases.at(-1)?.toBlobCalls).toBe(0);
     expect(readBlobs).toEqual([]);
@@ -475,10 +496,12 @@ describe('gameplay viewport capture budgets', () => {
     const renderCanvas = new FakeCanvas(doc);
     installRasterFakes(() => {});
 
-    await expect(captureGameplayViewport(
-      container as unknown as HTMLElement,
-      renderCanvas as unknown as HTMLCanvasElement,
-    )).rejects.toThrow('viewport HUD contains unsupported <canvas> content');
+    await expect(
+      captureGameplayViewport(
+        container as unknown as HTMLElement,
+        renderCanvas as unknown as HTMLCanvasElement,
+      ),
+    ).rejects.toThrow('viewport HUD contains unsupported <canvas> content');
 
     expect(doc.canvases.at(-1)?.toBlobCalls).toBe(0);
     expect(readBlobs).toEqual([]);
@@ -504,8 +527,10 @@ describe('gameplay viewport capture budgets', () => {
     expect(deadline).toBeDefined();
     deadline?.();
 
-    await expect(capture).rejects.toMatchObject({ message: 'viewport capture timed out',
-      details: { stage: 'frame-wait', timeoutMs: 5000, surface: { canvasAvailable: true } } });
+    await expect(capture).rejects.toMatchObject({
+      message: 'viewport capture timed out',
+      details: { stage: 'frame-wait', timeoutMs: 5000, surface: { canvasAvailable: true } },
+    });
     expect(doc.cancelledFrames).toBe(1);
     expect(doc.pendingFrames).toHaveLength(0);
     expect(doc.canvases.at(-1)?.toBlobCalls).toBe(0);
@@ -521,14 +546,20 @@ for (const stage of ['hud-rasterization', 'png-encoding'] as const) {
     const canvas = new FakeCanvas(doc);
     installRasterFakes(() => {});
     let deadline!: () => void;
-    globals.setTimeout = ((callback: () => void) => { deadline = callback; return 1; }) as typeof globalThis.setTimeout;
+    globals.setTimeout = ((callback: () => void) => {
+      deadline = callback;
+      return 1;
+    }) as typeof globalThis.setTimeout;
     globals.clearTimeout = (() => {}) as typeof globalThis.clearTimeout;
-    const capture = captureGameplayViewport(container as unknown as HTMLElement, canvas as unknown as HTMLCanvasElement);
+    const capture = captureGameplayViewport(
+      container as unknown as HTMLElement,
+      canvas as unknown as HTMLCanvasElement,
+    );
     for (let i = 0; i < 30; i++) await Promise.resolve();
     if (stage === 'hud-rasterization') expect(doc.images).toHaveLength(1);
     else expect(doc.pendingPng).toBeDefined();
     deadline();
-    const error = await capture.catch(error => error);
+    const error = await capture.catch((error) => error);
     expect(error.details).toMatchObject({ stage, timeoutMs: 5000 });
     expect(error.details.deadlineAt - error.details.startedAt).toBe(5000);
     expect(error.details.elapsedMs).toBeGreaterThanOrEqual(0);
@@ -547,28 +578,50 @@ test('lifetime cancellation clears pending frame and permits a fresh capture', a
   const canvas = new FakeCanvas(doc);
   installRasterFakes(() => {});
   const lifetime = new AbortController();
-  const capture = captureGameplayViewport(container as unknown as HTMLElement, canvas as unknown as HTMLCanvasElement, lifetime.signal);
+  const capture = captureGameplayViewport(
+    container as unknown as HTMLElement,
+    canvas as unknown as HTMLCanvasElement,
+    lifetime.signal,
+  );
   lifetime.abort();
-  await expect(capture).rejects.toMatchObject({ message: 'viewport capture cancelled', details: { stage: 'frame-wait' } });
+  await expect(capture).rejects.toMatchObject({
+    message: 'viewport capture cancelled',
+    details: { stage: 'frame-wait' },
+  });
   expect(doc.pendingFrames).toHaveLength(0);
   expect(doc.canvases.at(-1)?.toBlobCalls).toBe(0);
   doc.autoPresentFrame = true;
-  await expect(captureGameplayViewport(container as unknown as HTMLElement, canvas as unknown as HTMLCanvasElement)).resolves.toStartWith('data:image/png');
+  await expect(
+    captureGameplayViewport(
+      container as unknown as HTMLElement,
+      canvas as unknown as HTMLCanvasElement,
+    ),
+  ).resolves.toStartWith('data:image/png');
 });
 
 test('replaced iframe surface cannot publish the prior capture', async () => {
   const doc = new FakeDocument();
   const child = new FakeDocument();
   const body = new FakeContainer(child, 1280, 720, makeHud(child, 0));
-  const childCanvas = new FakeCanvas(child); body.append(childCanvas);
-  Object.assign(child, { body }); child.autoPresentFrame = false;
+  const childCanvas = new FakeCanvas(child);
+  body.append(childCanvas);
+  Object.assign(child, { body });
+  child.autoPresentFrame = false;
   const container = new FakeContainer(doc, 1280, 720, makeHud(doc, 0));
-  const frame = new FakeIframe(doc); frame.contentDocument = child; container.append(frame);
+  const frame = new FakeIframe(doc);
+  frame.contentDocument = child;
+  container.append(frame);
   installRasterFakes(() => {});
-  const capture = captureGameplayViewport(container as unknown as HTMLElement, new FakeCanvas(doc) as unknown as HTMLCanvasElement);
+  const capture = captureGameplayViewport(
+    container as unknown as HTMLElement,
+    new FakeCanvas(doc) as unknown as HTMLCanvasElement,
+  );
   container.childNodes.splice(container.childNodes.indexOf(frame), 1);
   child.presentFrame();
-  await expect(capture).rejects.toMatchObject({ message: 'viewport capture surface changed', details: { stage: 'frame-wait' } });
+  await expect(capture).rejects.toMatchObject({
+    message: 'viewport capture surface changed',
+    details: { stage: 'frame-wait' },
+  });
   expect(child.canvases.at(-1)?.toBlobCalls).toBe(0);
 });
 
@@ -582,15 +635,23 @@ for (const stage of ['hud-svg-encoding', 'png-readback'] as const) {
     globals.FileReader = class extends BaseReader {
       readyState = 0;
       aborted = false;
-      abort() { this.aborted = true; this.readyState = 2; }
+      abort() {
+        this.aborted = true;
+        this.readyState = 2;
+      }
       readAsDataURL(blob: Blob) {
         if (blob.type === (stage === 'hud-svg-encoding' ? 'image/svg+xml' : 'image/png')) {
-          this.readyState = 1; stalled = this;
+          this.readyState = 1;
+          stalled = this;
         } else super.readAsDataURL(blob);
       }
     };
     const lifetime = new AbortController();
-    const capture = captureGameplayViewport(container as unknown as HTMLElement, new FakeCanvas(doc) as unknown as HTMLCanvasElement, lifetime.signal);
+    const capture = captureGameplayViewport(
+      container as unknown as HTMLElement,
+      new FakeCanvas(doc) as unknown as HTMLCanvasElement,
+      lifetime.signal,
+    );
     for (let i = 0; i < 30; i++) await Promise.resolve();
     expect(stalled).toBeDefined();
     lifetime.abort();

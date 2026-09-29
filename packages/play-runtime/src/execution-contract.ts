@@ -43,22 +43,17 @@ export function isPlayRendererProvenance(value: unknown): value is PlayRendererP
  * missing renderer facts into a plausible-looking diagnostic.
  */
 export function createPlayRendererProvenance(
-  renderer: Pick<Renderer, 'inspect'>,
+  renderer: Renderer,
   generation: number,
 ): PlayRendererProvenance | null {
   if (!Number.isSafeInteger(generation) || generation <= 0) return null;
-  let inspection: ReturnType<Renderer['inspect']>;
   try {
-    inspection = renderer.inspect();
-  } catch {
-    return null;
-  }
-  const caps = inspection.capabilities;
+  const caps = renderer.inspect().capabilities;
   const backend = caps.backendKind;
-  if (typeof backend !== 'string' || backend.trim().length === 0
-    || typeof caps !== 'object' || caps === null || Array.isArray(caps)) return null;
-  const capNames = Object.keys(caps).filter((name) => name !== 'backendKind').sort();
-  try {
+  const capNames = Object.entries(caps)
+    .filter(([, enabled]) => enabled === true)
+    .map(([name]) => name)
+    .sort();
     const uuid = globalThis.crypto?.randomUUID?.();
     if (typeof uuid !== 'string' || uuid.length === 0) return null;
     const provenance = {

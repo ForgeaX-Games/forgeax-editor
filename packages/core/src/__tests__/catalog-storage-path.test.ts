@@ -11,24 +11,32 @@ describe('catalogStoragePath', () => {
     expect(catalogStoragePath({
       packageUrl: '/preview/.forgeax/games/demo/assets/ui.pack.json',
       sourcePath: '.forgeax/games/demo/assets/ui.pack.json',
-    })).toBe('.forgeax/games/demo/assets/ui.pack.json');
+    }),
+    ).toBe('.forgeax/games/demo/assets/ui.pack.json');
   });
 
   it('keeps ScriptablePack sources as the writable container', () => {
     expect(catalogStoragePath({
       packageUrl: '/__forgeax-ddc/effect-orb-domain.pack.json',
       sourcePath: 'assets/authoring/abilities/catalog/effect-orb-domain.pack.ts',
-    })).toBe('assets/authoring/abilities/catalog/effect-orb-domain.pack.ts');
+    }),
+    ).toBe('assets/authoring/abilities/catalog/effect-orb-domain.pack.ts');
   });
 
   it('derives imported source sidecars and rejects runtime-only DDC rows', () => {
     expect(catalogStoragePath({
       packageUrl: '/__forgeax-ddc/mesh.pack.json',
       sourcePath: 'assets/hero.glb',
+    }),
+    ).toBe('assets/hero.glb.meta.json');
+    expect(catalogStoragePath({
+      packageUrl: '/__forgeax-ddc/mesh.pack.json',
+      sourcePath: 'assets/hero.glb.meta.json',
     })).toBe('assets/hero.glb.meta.json');
     expect(catalogStoragePath({
       packageUrl: '/__forgeax-ddc/generated.pack.json',
-    })).toBeNull();
+    }),
+    ).toBeNull();
   });
 });
 
@@ -44,7 +52,8 @@ describe('projectCatalogPathToRoots', () => {
 
   it('projects serve-mount paths into the declared-root space', () => {
     expect(projectCatalogPathToRoots('host-games/testgame0812/assets/bed.glb', roots))
-      .toBe('assets/bed.glb');
+      .toBe('assets/bed.glb',
+    );
     expect(projectCatalogPathToRoots('/host-games/testgame0812/assets/', roots))
       .toBe('assets');
   });
@@ -58,10 +67,12 @@ describe('storagePathToCatalogSourceKey', () => {
   const roots = [{ root: 'assets', catalogPrefix: 'host-games/game-test-347/assets' }] as const;
 
   it('maps host storage sidecars into catalog scan coordinates', () => {
-    expect(storagePathToCatalogSourceKey(
-      '.forgeax/games/game-test-347/assets/test-import-4/model.glb.meta.json',
-      roots,
-    )).toBe('host-games/game-test-347/assets/test-import-4/model.glb.meta.json');
+    expect(
+      storagePathToCatalogSourceKey(
+        '.forgeax/games/game-test-347/assets/test-import-4/model.glb.meta.json',
+        roots,
+      ),
+    ).toBe('host-games/game-test-347/assets/test-import-4/model.glb.meta.json');
   });
 
   it('returns null when no declared root matches the storage path', () => {
@@ -76,29 +87,39 @@ describe('catalogGameStoragePath', () => {
     expect(catalogGameStoragePath({
       packageUrl: '/__forgeax-ddc/mesh.pack.json',
       sourcePath: 'host-games/testgame0812/assets/bed.glb',
-    }, roots)).toBe('assets/bed.glb.meta.json');
+    }, roots,
+      ),
+    ).toBe('assets/bed.glb.meta.json');
   });
 
   it('derives a game-internal pack path for authored packs', () => {
     expect(catalogGameStoragePath({
       packageUrl: '/preview/host-games/testgame0812/assets/ui.pack.json',
       sourcePath: 'host-games/testgame0812/assets/ui.pack.json',
-    }, roots)).toBe('assets/ui.pack.json');
+    }, roots,
+      ),
+    ).toBe('assets/ui.pack.json');
   });
 
   it('returns null when the sourcePath matches no declared root', () => {
     expect(catalogGameStoragePath({
       packageUrl: '/__forgeax-ddc/mesh.pack.json',
       sourcePath: 'elsewhere/bed.glb',
-    }, roots)).toBeNull();
+    }, roots,
+      ),
+    ).toBeNull();
   });
 
   it('falls back to catalogStoragePath for rows without a sourcePath', () => {
     expect(catalogGameStoragePath({
       packageUrl: 'assets/ui.pack.json',
-    }, roots)).toBe('assets/ui.pack.json');
+    }, roots,
+      ),
+    ).toBe('assets/ui.pack.json');
     expect(catalogGameStoragePath({
       packageUrl: '/__forgeax-ddc/generated.pack.json',
-    }, roots)).toBeNull();
+    }, roots,
+      ),
+    ).toBeNull();
   });
 });

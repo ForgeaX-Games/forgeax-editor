@@ -10,12 +10,10 @@ import {
 } from './viewport/ViewportComponent';
 import {
   executeLiveGameplay,
-  registerLiveGameplayBridge,
-} from '@forgeax/editor-core';
+  registerLiveGameplayBridge } from '@forgeax/editor-core';
 import type {
   GameplayOperationRequest,
-  GameplayOperationResult,
-} from '@forgeax/editor-core';
+  GameplayOperationResult } from '@forgeax/editor-core';
 
 export {
   gateway,
@@ -33,7 +31,7 @@ export {
   resolveGamePath,
 } from '@forgeax/editor-core';
 
-import type { AppExtension } from '@forgeax/interface/core/app-shell/types';
+import type { AppExtension } from '@forgeax/app-shell/application';
 import { createElement } from 'react';
 import type { FunctionComponent } from 'react';
 import {

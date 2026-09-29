@@ -1,7 +1,7 @@
 // sync-radix-hoist — promote @radix-ui transitive deps from bun's .bun store to
 // the top-level node_modules/@radix-ui/ so Vite (and Node) can resolve them.
 //
-// Root cause: Bun 1.3.14's isolated install does NOT hoist @radix-ui transitive
+// Root cause: Bun's isolated install does NOT hoist @radix-ui transitive
 // dependencies (react-compose-refs, primitive, react-context, ...) to the
 // top-level node_modules/@radix-ui/. They live in node_modules/.bun/@radix-ui+*/
 // node_modules/@radix-ui/<pkg>/ but no symlink exposes them where Vite's

@@ -1,12 +1,17 @@
+import { World } from "@forgeax/engine-ecs";
+import { SceneInstance } from "@forgeax/engine-render";
+import {
+	ChildOf,
+	worldInstantiateScene,
+	worldSetSceneAssetResolver,
+} from "@forgeax/engine-scene";
 import { readFile } from "node:fs/promises";
-import { defineComponent, World } from "@forgeax/engine-ecs";
 import {
 	buildScriptablePack,
 	createStandardAssetOutputProducerRegistry,
 	type ScriptablePackAssetSnapshotSource,
 } from "@forgeax/engine-import";
 import { AssetGuid } from "@forgeax/engine-pack/guid";
-import { serializeSceneAssetToPack } from "@forgeax/engine-runtime";
 import type {
 	Asset,
 	AssetGuid as AssetGuidType,
@@ -15,34 +20,14 @@ import type {
 	SceneAsset,
 	TextureAsset,
 } from "@forgeax/engine-types";
-import {
-	AssetError,
-	err,
-	ok,
-	type SceneInstanceMount,
-} from "@forgeax/engine-types";
+import { AssetError, err, ok } from "@forgeax/engine-types";
 import { describe, expect, it } from "vitest";
-import inputPack from "../assets/procedural-inputs.pack";
+import inputPack, { INPUT_ASSET_IDS } from "../assets/procedural-inputs.pack";
 import showcasePack from "../assets/procedural-showcase.pack";
-import { sceneMount } from "../assets/procedural-showcase.pack-lib";
+import { SAMPLE_SCENE_COMPONENTS } from "../assets/procedural-showcase.pack-lib";
 
-defineComponent("Transform", {});
-defineComponent("ChildOf", { parent: { type: "entity" } });
-defineComponent("MeshFilter", { assetHandle: { type: "shared<MeshAsset>" } });
-defineComponent("MeshRenderer", {
-	materials: { type: "array<shared<MaterialAsset>>" },
-});
-defineComponent("ParticleEffectPlayer", {
-	effect: { type: "shared<ParticleEffectAsset>" },
-});
-defineComponent("SceneInstance", {
-	source: { type: "shared<SceneAsset>" },
-	mapping: { type: "array<entity>" },
-	state: { type: "unique<SceneInstanceState>" },
-});
-
-const TEMPLATE_GUID = "019ffdb4-0000-7000-8000-000000000001";
-const ACCENT_GUID = "019ffdb4-0000-7000-8000-000000000002";
+const TEMPLATE_GUID = "3e915dea-1871-5b8d-b182-e4c8d1663194";
+const ACCENT_GUID = "b6b811da-3b1e-5087-96c6-d5f835fbddb3";
 
 function guid(value: string): AssetGuidType {
 	const parsed = AssetGuid.parse(value);
@@ -59,7 +44,7 @@ async function source(
 		[TEMPLATE_GUID, inputs.value["mesh/template-shard"] as MeshAsset],
 		[ACCENT_GUID, inputs.value["material/accent"]],
 		[
-			"019ffdb4-0000-7000-8000-000000000004",
+			"73f94bbf-1b57-58d1-afbf-023bdaab0b6d",
 			inputs.value["scene/crystal-cluster"] as SceneAsset,
 		],
 		[
@@ -95,7 +80,7 @@ async function source(
 				return {
 					ok: false,
 					error: new AssetError({
-						code: "asset-not-imported",
+						code: "pack-output-reference-missing",
 						expected: `sample dependency ${key} to be published`,
 						hint: "publish the dependency pack before rebuilding the sample showcase",
 					}),
@@ -111,7 +96,15 @@ async function buildShowcase(missing: readonly string[] = []) {
 		definition: showcasePack,
 		sourcePath: "assets/procedural-showcase.pack.ts",
 		assetSource: await source(missing),
-		outputs: createStandardAssetOutputProducerRegistry(),
+		availableGuids: [
+			...Object.values(INPUT_ASSET_IDS).map((entry) =>
+				AssetGuid.format(entry.guid),
+			),
+			"6e6de455-9ff1-4d5c-a896-ff1426531791",
+			"263c8135-3f53-4e3d-9038-6c7288afce3f",
+			"019f56f2-0ac0-776a-9d28-50eb5a9edeb9",
+		].filter((id) => !missing.includes(id)),
+		outputs: createStandardAssetOutputProducerRegistry(SAMPLE_SCENE_COMPONENTS),
 		sourceClosure: [
 			{ path: "assets/procedural-showcase.pack.ts", digest: "sha256:showcase" },
 			{
@@ -119,7 +112,7 @@ async function buildShowcase(missing: readonly string[] = []) {
 				digest: "sha256:showcase-lib",
 			},
 		],
-		authoringContractVersion: "sample-scriptable/1",
+		authoringContractVersion: "sample-scriptable/2",
 	});
 }
 
@@ -127,32 +120,47 @@ async function buildInputs() {
 	return buildScriptablePack({
 		definition: inputPack,
 		sourcePath: "assets/procedural-inputs.pack.ts",
-		outputs: createStandardAssetOutputProducerRegistry(),
+		outputs: createStandardAssetOutputProducerRegistry(SAMPLE_SCENE_COMPONENTS),
 		sourceClosure: [
 			{ path: "assets/procedural-inputs.pack.ts", digest: "sha256:inputs" },
 		],
-		authoringContractVersion: "sample-scriptable/1",
+		authoringContractVersion: "sample-scriptable/2",
 	});
 }
 
 describe("sample ScriptablePack producer", () => {
 	it("keeps custom VFX shaders on the Engine renderer binding ABI", async () => {
-		for (const file of [
-			"arc-nova-sigil.wgsl",
-			"arc-nova-violet-sigil.wgsl",
-		]) {
-			const shader = await readFile(new URL(`../assets/vfx/${file}`, import.meta.url), "utf8");
-			expect(shader).toContain("@group(0) @binding(0) var scene_depth: texture_depth_2d;");
+		for (const file of ["arc-nova-sigil.wgsl", "arc-nova-violet-sigil.wgsl"]) {
+			const shader = await readFile(
+				new URL(`../assets/vfx/${file}`, import.meta.url),
+				"utf8",
+			);
+			expect(shader).toContain(
+				"@group(0) @binding(0) var scene_depth: texture_depth_2d;",
+			);
 			expect(shader).not.toContain("@group(0) @binding(0) var<uniform> view");
 		}
-		const flow = await readFile(new URL("../assets/vfx/arc-nova-flow.wgsl", import.meta.url), "utf8");
+		const flow = await readFile(
+			new URL("../assets/vfx/arc-nova-flow.wgsl", import.meta.url),
+			"utf8",
+		);
 		expect(flow).toContain("@location(4) center: vec3<f32>");
 		expect(flow).toContain("textureSample(flowTexture, flowTexture_sampler");
 		expect(flow).not.toContain("texture_depth_2d");
 		const effects = JSON.parse(
-			await readFile(new URL("../assets/vfx/particle-effects.pack.json", import.meta.url), "utf8"),
-		) as { assets: Array<{ payload?: { emitters?: Array<{ renderers?: Array<Record<string, unknown>> }> } }> };
-		const flowRenderer = effects.assets[0]?.payload?.emitters?.[0]?.renderers?.[0];
+			await readFile(
+				new URL("../assets/vfx/particle-effects.pack.json", import.meta.url),
+				"utf8",
+			),
+		) as {
+			assets: Array<{
+				payload?: {
+					emitters?: Array<{ renderers?: Array<Record<string, unknown>> }>;
+				};
+			}>;
+		};
+		const flowRenderer =
+			effects.assets[0]?.payload?.emitters?.[0]?.renderers?.[0];
 		expect(flowRenderer).toMatchObject({
 			kind: "mesh",
 			mesh: "9a7e15c1-5d02-4d64-9001-1a2b3c4d5e01",
@@ -183,39 +191,6 @@ describe("sample ScriptablePack producer", () => {
 		}
 	});
 
-	it("publishes the primitive input graph with reusable mesh slots", async () => {
-		const result = await buildInputs();
-		expect(result.ok).toBe(true);
-		if (!result.ok) return;
-		expect(
-			result.value.product.assets.filter((asset) => asset.kind === "mesh"),
-		).toHaveLength(2);
-		expect(
-			result.value.product.assets.filter((asset) => asset.kind === "material"),
-		).toHaveLength(1);
-		expect(
-			result.value.product.assets.filter((asset) => asset.kind === "scene"),
-		).toHaveLength(1);
-		const cluster = result.value.product.assets.find(
-			(asset) => asset.guid === "019ffdb4-0000-7000-8000-000000000004",
-		);
-		expect(cluster?.kind).toBe("scene");
-		if (cluster?.kind !== "scene") return;
-		const payload = cluster.payload as unknown as SceneAsset;
-		expect(payload.entities.map((entity) => entity.localId)).toEqual([0, 1]);
-		expect(payload.entities[1]?.components.ChildOf).toEqual({ parent: 0 });
-		expect(
-			payload.entities.every(
-				(entity) => entity.components.MeshFilter !== undefined,
-			),
-		).toBe(true);
-		expect(
-			payload.entities.every(
-				(entity) => entity.components.MeshRenderer !== undefined,
-			),
-		).toBe(true);
-	});
-
 	it("publishes the fixed ordinary output matrix", async () => {
 		const result = await buildShowcase();
 		expect(result.ok).toBe(true);
@@ -226,6 +201,26 @@ describe("sample ScriptablePack producer", () => {
 		expect(assets.filter((asset) => asset.kind === "mesh")).toHaveLength(3);
 		expect(assets.filter((asset) => asset.kind === "material")).toHaveLength(3);
 		expect(assets.filter((asset) => asset.kind === "scene")).toHaveLength(2);
+		for (const asset of assets.filter(
+			(candidate) => candidate.kind === "mesh",
+		)) {
+			const payload = asset.payload as MeshAsset;
+			expect(Object.keys(payload.attributes)).toEqual(
+				expect.arrayContaining(["position", "normal", "uv", "tangent"]),
+			);
+			expect(payload.attributes.position).toHaveLength(
+				(payload.vertices.length / 12) * 3,
+			);
+			expect(payload.attributes.normal).toHaveLength(
+				(payload.vertices.length / 12) * 3,
+			);
+			expect(payload.attributes.uv).toHaveLength(
+				(payload.vertices.length / 12) * 2,
+			);
+			expect(payload.attributes.tangent).toHaveLength(
+				(payload.vertices.length / 12) * 4,
+			);
+		}
 		expect(
 			assets.every((asset) =>
 				["mesh", "material", "scene"].includes(asset.kind),
@@ -238,53 +233,39 @@ describe("sample ScriptablePack producer", () => {
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		const arena = result.value.product.assets.find(
-			(asset) => asset.guid === "019ffdb4-1000-7000-8000-000000000008",
+			(asset) => asset.guid === "b05d3430-4c47-558d-9201-f2a8e54f8771",
 		);
 		expect(arena?.kind).toBe("scene");
 		if (arena?.kind !== "scene") return;
 		const payload = arena.payload as unknown as SceneAsset;
-		expect(payload.mounts).toHaveLength(11);
+		const instances = Object.values(payload.entities).flatMap((entity) =>
+			entity.instance ? [entity.instance] : [],
+		);
+		expect(instances).toHaveLength(11);
 		const sourceGuid = (source: number | string) =>
 			typeof source === "number" ? arena.refs[source]?.guid : source;
 		expect(
-			payload.mounts?.filter(
+			instances.filter(
 				(mount) =>
-					sourceGuid(mount.source) === "019ffdb4-0000-7000-8000-000000000004",
+					sourceGuid(mount.source) === "73f94bbf-1b57-58d1-afbf-023bdaab0b6d",
 			),
 		).toHaveLength(3);
 		expect(
-			payload.mounts?.filter(
+			instances.filter(
 				(mount) =>
-					sourceGuid(mount.source) === "019ffdb4-1000-7000-8000-000000000007",
+					sourceGuid(mount.source) === "3406dad5-c484-5fe0-b241-c5895a054192",
 			),
 		).toHaveLength(8);
-		const windows = payload.mounts?.map((mount) => [
-			mount.memberFirst as number,
-			(mount.memberFirst as number) + mount.memberCount,
-		]);
-		expect(new Set(windows?.map(([first]) => first)).size).toBe(
-			payload.mounts?.length,
+		expect(Object.keys(payload.entities)).toHaveLength(15);
+		expect(arena.refs).toContainEqual(
+			expect.objectContaining({ guid: "019f56f2-0ac0-776a-9d28-50eb5a9edeb9" }),
 		);
 		expect(result.value.externalEvidence).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
-					guid: "019ffdb4-0000-7000-8000-000000000004",
+					guid: "73f94bbf-1b57-58d1-afbf-023bdaab0b6d",
 					usage: "both",
 					generation: 7,
-				}),
-				expect.objectContaining({
-					guid: "6e6de455-9ff1-4d5c-a896-ff1426531791",
-					usage: "both",
-					generation: 7,
-				}),
-				expect.objectContaining({
-					guid: "263c8135-3f53-4e3d-9038-6c7288afce3f",
-					usage: "both",
-					generation: 7,
-				}),
-				expect.objectContaining({
-					guid: "019f56f2-0ac0-776a-9d28-50eb5a9edeb9",
-					usage: "reference",
 				}),
 			]),
 		);
@@ -328,12 +309,12 @@ describe("sample ScriptablePack producer", () => {
 		);
 		const markers = scenes.flatMap((asset) =>
 			asset.kind === "scene"
-				? (asset.payload as unknown as SceneAsset).entities.flatMap(
-						(entity) => {
-							const player = entity.components.ParticleEffectPlayer;
-							return player === undefined ? [] : [player];
-						},
-					)
+				? Object.values(
+						(asset.payload as unknown as SceneAsset).entities,
+					).flatMap((entity) => {
+						const player = entity.components.ParticleEffectPlayer;
+						return player === undefined ? [] : [player];
+					})
 				: [],
 		);
 		expect(markers.every((marker) => marker.seed === 424242)).toBe(true);
@@ -346,7 +327,7 @@ describe("sample ScriptablePack producer", () => {
 			scenes
 				.flatMap((asset) =>
 					asset.kind === "scene"
-						? (asset.payload as unknown as SceneAsset).entities
+						? Object.values((asset.payload as unknown as SceneAsset).entities)
 						: [],
 				)
 				.every(
@@ -385,7 +366,9 @@ describe("sample ScriptablePack producer", () => {
 			const result = await buildShowcase([dependency]);
 			expect(result.ok).toBe(false);
 			if (result.ok) continue;
-			expect(result.error).toMatchObject({ code: "asset-not-imported" });
+			expect(result.error).toMatchObject({
+				code: "pack-output-reference-missing",
+			});
 			expect("product" in result).toBe(false);
 		}
 	});
@@ -428,182 +411,106 @@ describe("sample ScriptablePack producer", () => {
 		]);
 		expect(sampler.assets[0]?.refs).toEqual([]);
 	});
+});
 
-	it("keeps the authored sample root with the Fox and Scriptable arena mounts", async () => {
-		const forge = JSON.parse(
-			await readFile(new URL("../forge.json", import.meta.url), "utf8"),
-		) as {
-			defaultScene: string;
-		};
+describe("sample keyed scene publication", () => {
+	it("publishes the input scene with stable keys and derived GUIDs", async () => {
+		const result = await buildInputs();
+		if (!result.ok) throw result.error;
+		expect(result.value.product.assets).toHaveLength(4);
+		for (const [sourceKey, declaration] of Object.entries(INPUT_ASSET_IDS)) {
+			const derived = AssetGuid.format(
+				AssetGuid.derive(inputPack.packageId, sourceKey),
+			);
+			expect(derived).toBe(AssetGuid.format(declaration.guid));
+			expect(
+				result.value.product.assets.find((asset) => asset.guid === derived)
+					?.kind,
+			).toBe(declaration.kind);
+		}
+		const scene = result.value.product.assets.find(
+			(asset) => asset.kind === "scene",
+		)?.payload as SceneAsset;
+		expect(Object.keys(scene.entities)).toEqual(["entity-0", "entity-1"]);
+		expect(scene.entities["entity-1"]?.components.ChildOf).toEqual({
+			parent: "entity-0",
+		});
+		expect(scene).not.toHaveProperty("mounts");
+	});
+
+	it("keeps the authored root connected to the Fox and migrated arena instances", async () => {
 		const scene = JSON.parse(
 			await readFile(
 				new URL("../assets/scene.pack.json", import.meta.url),
 				"utf8",
 			),
-		) as {
-			assets: Array<{
-				guid: string;
-				payload?: {
-					mounts?: Array<{
-						localId: number;
-						memberFirst: number;
-						memberCount: number;
-						source: number;
-						parent?: number;
-						overrides?: unknown[];
-					}>;
-				};
-				refs?: string[];
-			}>;
-		};
-		expect(forge.defaultScene).toBe("2b7c9a10-4d5e-5f60-8a1b-2c3d4e5f6071");
-		const authored = scene.assets.find(
-			(asset) => asset.guid === forge.defaultScene,
 		);
-		expect(authored?.payload?.mounts).toHaveLength(2);
-		const foxMount = authored?.payload?.mounts?.find((candidate) => candidate.source === 5);
-		const arenaMount = authored?.payload?.mounts?.find((candidate) => candidate.source === 8);
-		expect(foxMount).toMatchObject({
-			localId: 7,
-			memberFirst: 8,
-			memberCount: 26,
-			source: 5,
-			parent: 1,
-		});
-		expect(arenaMount).toMatchObject({
-			localId: 35,
-			memberFirst: 36,
-			memberCount: 37,
-			source: 8,
-			parent: 1,
-		});
-		expect(arenaMount?.overrides).toBeUndefined();
-		expect(authored?.refs?.[arenaMount?.source ?? -1]).toBe(
-			"019ffdb4-1000-7000-8000-000000000008",
+		const root = scene.assets[0];
+		const instances = Object.values(
+			root.payload.entities as Record<
+				string,
+				{
+					components: { ChildOf?: { parent: string } };
+					instance?: { source: number };
+				}
+			>,
+		).filter((entity) => entity.instance);
+		expect(instances).toHaveLength(2);
+		expect(
+			instances.every(
+				(entity) => entity.components.ChildOf?.parent === "entity-1",
+			),
+		).toBe(true);
+		expect(
+			instances.map((entity) => root.refs[entity.instance!.source]),
+		).toEqual(
+			expect.arrayContaining([
+				"019f56f2-0ac0-776a-9d28-50eb5a9edeb8",
+				AssetGuid.format(
+					AssetGuid.derive(showcasePack.packageId, "scene/scriptable-showcase"),
+				),
+			]),
 		);
-		expect(authored?.refs).toContain(
-			"019f56f2-0ac0-776a-9d28-50eb5a9edeb8",
-		);
-		expect(authored?.refs?.[foxMount?.source ?? -1]).toBe(
-			"019f56f2-0ac0-776a-9d28-50eb5a9edeb8",
-		);
+		for (const [key, entity] of Object.entries(root.payload.entities) as [
+			string,
+			{ components: { Entity?: { self: string } } },
+		][]) {
+			if (entity.components.Entity)
+				expect(entity.components.Entity.self).toBe(key);
+		}
+		expect(root.payload).not.toHaveProperty("mounts");
 	});
+});
 
-	it("round-trips the publication fence on the authored mount only", () => {
-		const publicationFence = {
-			schemaVersion: "scene-publication-fence/1" as const,
-			sourcePath: "assets/procedural-showcase.pack.ts",
-			sourceRevision: "sha256:showcase",
-			publicationGeneration: 3,
-			outputDigest: "sha256:arena",
-			outputSetDigest: "sha256:arena-set",
-			receiptIdentity: "sha256:showcase-inputs",
-		};
+it("rejects missing keyed instance sources and recursive instances", () => {
+	for (const cyclic of [false, true]) {
+		const world = new World();
+		world.components.register(ChildOf).unwrap();
+		world.components.register(SceneInstance).unwrap();
 		const scene: SceneAsset = {
 			kind: "scene",
-			entities: [{ localId: 0 as never, components: {} }],
-			mounts: [
-				{
-					localId: 1 as never,
-					source: "019ffdb4-1000-7000-8000-000000000008",
-					memberFirst: 2 as never,
-					memberCount: 1,
-					parent: 0 as never,
-					publicationFence,
+			entities: {
+				child: {
+					components: {},
+					instance: { source: "11111111-1111-4111-8111-111111111111" },
 				},
-			],
+			},
 		};
-		const packed = serializeSceneAssetToPack(
-			scene,
-			"2b7c9a10-4d5e-5f60-8a1b-2c3d4e5f6071",
+		const handle = world.allocSharedRef("SceneAsset", scene);
+		worldSetSceneAssetResolver(world, () =>
+			cyclic
+				? ok(handle)
+				: err({
+						code: "asset-not-imported",
+						expected: "published child scene",
+						hint: "publish dependency first",
+					}),
 		);
-		expect(packed.ok).toBe(true);
-		if (!packed.ok) return;
-		const serialized = packed.value.assets?.[0] as
-			| { payload?: SceneAsset }
-			| undefined;
-		expect(serialized?.payload?.mounts?.[0]?.publicationFence).toEqual(
-			publicationFence,
-		);
-		expect(serialized?.payload?.entities).toHaveLength(1);
-	});
-
-	it("accepts one non-overlapping mount window and rejects malformed fixtures before publication", () => {
-		const valid: SceneAsset = {
-			kind: "scene",
-			entities: [{ localId: 0 as never, components: {} }],
-			mounts: [sceneMount("crystal-cluster", 1, 2, 2)],
-		};
-		expect(valid.mounts).toHaveLength(1);
-		expect(valid.mounts?.[0]?.memberFirst).toBe(2);
-		expect(valid.mounts?.[0]?.memberCount).toBe(2);
-
-		expect(() => sceneMount("crystal-cluster", -1, 2, 2)).toThrow(/localId/);
-		expect(() => sceneMount("crystal-cluster", 1, 2, 0)).toThrow(/memberCount/);
-		expect(() => sceneMount("", 1, 2, 2)).not.toThrow();
-
-		const overlapping: SceneAsset = {
-			kind: "scene",
-			entities: [{ localId: 0 as never, components: {} }],
-			mounts: [
-				sceneMount("crystal-cluster", 1, 2, 2),
-				sceneMount("crystal-cluster", 2, 4, 1),
-			],
-		};
-		const overlapWorld = new World();
-		const overlapHandle = overlapWorld.allocSharedRef(
-			"SceneAsset",
-			overlapping,
-		);
-		overlapWorld._setSceneAssetResolver(() => ok(overlapHandle));
-		const overlapBefore = overlapWorld.inspect().entityCount;
-		const overlapResult = overlapWorld.instantiateScene(overlapHandle);
-		expect(overlapResult.ok).toBe(false);
-		expect(
-			overlapResult.ok
-				? undefined
-				: (overlapResult.error as { code?: string }).code,
-		).toBe("pack-mount-localid-overlap");
-		expect(overlapWorld.inspect().entityCount).toBe(overlapBefore);
-	});
-
-	it("fails closed for missing mount dependencies and cycles without a usable result", () => {
-		const missing: SceneAsset = {
-			kind: "scene",
-			entities: [{ localId: 0 as never, components: {} }],
-			mounts: [sceneMount("missing-scene", 1, 2, 1)],
-		};
-		const missingWorld = new World();
-		const missingHandle = missingWorld.allocSharedRef("SceneAsset", missing);
-		missingWorld._setSceneAssetResolver(() =>
-			err({
-				code: "asset-not-imported",
-				expected: "published child scene",
-				hint: "publish dependency first",
-			}),
-		);
-		const missingResult = missingWorld.instantiateScene(missingHandle);
-		expect(missingResult.ok).toBe(false);
-		expect(
-			missingResult.ok
-				? undefined
-				: (missingResult.error as { code?: string }).code,
-		).toBe("asset-not-imported");
-
-		const cycle: SceneAsset = {
-			kind: "scene",
-			entities: [{ localId: 0 as never, components: {} }],
-			mounts: [sceneMount("cycle-scene", 1, 2, 1)],
-		};
-		const cycleWorld = new World();
-		const cycleHandle = cycleWorld.allocSharedRef("SceneAsset", cycle);
-		cycleWorld._setSceneAssetResolver(() => ok(cycleHandle));
-		const cycleResult = cycleWorld.instantiateScene(cycleHandle);
-		expect(cycleResult.ok).toBe(false);
-		expect(
-			cycleResult.ok
-				? undefined
-				: (cycleResult.error as { code?: string }).code,
-		).toBe("pack-cyclic-reference");
-	});
+		const result = worldInstantiateScene(world, handle);
+		expect(result.ok).toBe(false);
+		if (!result.ok)
+			expect(result.error.code).toBe(
+				cyclic ? "pack-cyclic-reference" : "asset-not-imported",
+			);
+	}
 });

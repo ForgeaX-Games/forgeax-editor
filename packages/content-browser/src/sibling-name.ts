@@ -186,4 +186,3 @@ export function generateDefaultCreateName(
   const taken = collectTakenNamesForCreateScope(scope, data);
   return generateUniqueName(prefix, taken);
 }
-

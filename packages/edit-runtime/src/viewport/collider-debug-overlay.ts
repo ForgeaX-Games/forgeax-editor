@@ -24,6 +24,8 @@ export type ColliderDebugOverlayDeps = {
   readonly debugDraw?: DebugDrawSurface;
   readonly getSelection: () => EntityHandle | null;
   readonly getEntityComponents: (entity: EntityHandle) => Readonly<Record<string, unknown>> | undefined;
+  /** Skip wireframe when the selection is hidden in the viewport (Hierarchy eye). */
+  readonly isSelectionVisibleInViewport?: (entity: EntityHandle) => boolean;
   readonly isAuxVisible: () => boolean;
   /** Selection belongs to the authored edit world, never the transient play world. */
   readonly isEditMode: () => boolean;
@@ -38,6 +40,7 @@ export function installColliderDebugOverlay({
   debugDraw,
   getSelection,
   getEntityComponents,
+  isSelectionVisibleInViewport,
   isAuxVisible,
   isEditMode,
 }: ColliderDebugOverlayDeps): void {
@@ -49,6 +52,7 @@ export function installColliderDebugOverlay({
 
       const selected = getSelection();
       if (selected === null) return;
+      if (isSelectionVisibleInViewport?.(selected) === false) return;
 
       const components = getEntityComponents(selected);
       const collider = components?.Collider;

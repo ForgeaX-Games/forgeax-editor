@@ -2,36 +2,9 @@
 // The host owns the only capture listener, contextual precedence, surface/input
 // guards and registration identity. Editor owns the raw key policy and Gateway
 // callbacks; disposing this extension fences retained and pending commands.
-//
-// SSOT: forgeax-editor/packages/edit-runtime/src/editor-keyboard-extension.ts (#916)
-// Release delta: Studio host has no shortcuts capability yet and still boots
-// editorCommandsExtension — see RELEASE_KEYBOARD_FLAGS below. When merging to
-// main, flip the flags and drop the release-only import/type shims.
-
-import type { AppExtension } from '@forgeax/interface/core/app-shell/types';
+import type { AppExtension, ApplicationShortcut } from '@forgeax/app-shell/application';
 import { t } from '@forgeax/editor-core/i18n';
 import type { KeyboardRouterDepsShape } from './keyboard-router-deps';
-
-/** Main registers commands here; release keeps interface editorCommandsExtension. */
-const RELEASE_KEYBOARD_FLAGS = {
-  ownsEditorCommands: false,
-  ownsLegacyShortcuts: false,
-} as const;
-
-/** Structural mirror of @forgeax/app-shell/application ApplicationShortcut. */
-interface ApplicationShortcut {
-  combo: string;
-  group: string;
-  label: string;
-  priority?: number;
-  allowInInput?: boolean;
-  match: (event: KeyboardEvent) => boolean;
-  run: (event: KeyboardEvent) => boolean;
-}
-
-type ShortcutsHost = {
-  register: (shortcut: ApplicationShortcut) => () => void;
-};
 
 const mod = (event: KeyboardEvent): boolean => event.ctrlKey || event.metaKey;
 const lowerKey = (event: KeyboardEvent): string =>
@@ -168,23 +141,12 @@ function editorShortcuts(deps: KeyboardRouterDepsShape): ApplicationShortcut[] {
   ];
 }
 
-function readShortcutsHost(host: unknown): ShortcutsHost | null {
-  if (!host || typeof host !== 'object' || !('shortcuts' in host)) return null;
-  const shortcuts = (host as { shortcuts?: unknown }).shortcuts;
-  if (!shortcuts || typeof shortcuts !== 'object' || !('register' in shortcuts)) return null;
-  const register = (shortcuts as { register?: unknown }).register;
-  return typeof register === 'function' ? shortcuts as ShortcutsHost : null;
-}
-
 /** One host's Editor commands and application shortcuts; never installs a listener. */
 export function createEditorKeyboardExtension(deps: KeyboardRouterDepsShape): AppExtension {
   return {
     id: 'editor-keyboard',
     version: '1.0.0',
-    // Main also requires 'shortcuts'; release host lacks that capability.
-    requires: RELEASE_KEYBOARD_FLAGS.ownsLegacyShortcuts
-      ? ['commands', 'keybindings', 'shortcuts']
-      : ['commands', 'keybindings'],
+    requires: ['commands', 'keybindings', 'shortcuts'],
     setup(context) {
       let active = true;
       const cleanups: Array<() => void> = [];
@@ -202,9 +164,14 @@ export function createEditorKeyboardExtension(deps: KeyboardRouterDepsShape): Ap
           deps.dispatch({ kind: 'setDisplay', display: deps.getDisplay() === 'scene' ? 'game' : 'scene' }, 'human');
           return completed();
         }],
-        ['editor.undo', '撤销', () => { deps.undo(); return completed(); }],
-        ['editor.redo', '重做', () => { deps.redo(); return completed(); }],
-        ['editor.save', '保存', () => { deps.save(); return completed(); }],
+        ['editor.undo', '撤销', async () => { if (await deps.executeFocusedTextEditAction?.('undo')) return completed(); deps.undo(); return completed(); }],
+        ['editor.redo', '重做', async () => { if (await deps.executeFocusedTextEditAction?.('redo')) return completed(); deps.redo(); return completed(); }],
+        ['editor.save', '保存', async () => {
+          const result = await deps.save();
+          return result === false
+            ? { status: 'rejected' as const, reason: 'Editor save was rejected' }
+            : completed();
+        }],
         ['editor.selectAll', '全选实体', async () => {
           const result = await context.host.commands.execute<{ status: string }>('text.selectAll');
           if (!active) return unloaded();
@@ -214,11 +181,13 @@ export function createEditorKeyboardExtension(deps: KeyboardRouterDepsShape): Ap
         }],
         ['editor.deselect', '清除选择', () => { deps.dispatch({ kind: 'setSelection', id: null }, 'human'); return completed(); }],
         ['editor.frameSelected', '聚焦所选', () => { deps.dispatch({ kind: 'requestFrame' }, 'human'); return completed(); }],
-        ['editor.delete', '删除所选实体', () => {
+        ['editor.delete', '删除所选实体', async () => {
+          if (await deps.executeFocusedTextEditAction?.('delete')) return completed();
           const ids = deps.getEntitySelection();
           if (ids.length > 0) deps.deleteEntities(ids);
           return completed();
         }],
+        // Existing menu contract: a bus handoff, not a newly invented reload implementation.
         ['editor.reloadPreview', '重载预览 (partial: 事件已发,尚无消费者)', () => {
           context.bus.emit('preview:reload', {});
           return completed();
@@ -226,10 +195,8 @@ export function createEditorKeyboardExtension(deps: KeyboardRouterDepsShape): Ap
         ['editor.restartPreview', '重建预览运行时', () => { deps.restartPreview(); return completed(); }],
       ];
       try {
-        if (RELEASE_KEYBOARD_FLAGS.ownsEditorCommands) {
-          for (const [id, title, execute] of commands) {
-            cleanups.push(context.registerCommand({ id, title, execute: () => active ? execute() : unloaded() }));
-          }
+        for (const [id, title, execute] of commands) {
+          cleanups.push(context.registerCommand({ id, title, execute: () => active ? execute() : unloaded() }));
         }
         // Document save precedes fallback routing even without a viewport or
         // while an asset editor/input owns focus. The contextual host owns it.
@@ -237,13 +204,10 @@ export function createEditorKeyboardExtension(deps: KeyboardRouterDepsShape): Ap
           commandId: 'editor.save', keys: 'Mod+S', scope: 'application',
           allowInEditable: true, priority: 100,
         }));
-        const shortcutsHost = RELEASE_KEYBOARD_FLAGS.ownsLegacyShortcuts
-          ? readShortcutsHost(context.host)
-          : null;
-        if (shortcutsHost) {
-          for (const shortcut of editorShortcuts(deps)) {
-            cleanups.push(shortcutsHost.register(shortcut));
-          }
+        // Label getters stay live across locale changes without re-registration,
+        // so equal-priority contribution order and retained snapshots stay stable.
+        for (const shortcut of editorShortcuts(deps)) {
+          cleanups.push(context.host.shortcuts.register(shortcut));
         }
       } catch (error) {
         dispose();

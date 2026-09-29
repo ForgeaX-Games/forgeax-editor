@@ -1,16 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { pickNativeImportFiles, resetNativeImportPickerAvailabilityForTests } from '../native-file-picker';
+import {
+  isNativeImportPickerCachedUnavailable,
+  pickNativeImportFiles,
+  resetNativeImportPickerAvailabilityCacheForTests,
+} from '../native-file-picker';
 
 let originalFetch: typeof globalThis.fetch;
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
-  resetNativeImportPickerAvailabilityForTests();
+  resetNativeImportPickerAvailabilityCacheForTests();
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  resetNativeImportPickerAvailabilityForTests();
+  resetNativeImportPickerAvailabilityCacheForTests();
 });
 
 describe('native import file picker', () => {
@@ -28,14 +32,16 @@ describe('native import file picker', () => {
           { name: 42, data: 'ignored' },
           null,
         ],
-      }), { headers: { 'content-type': 'application/json' } });
+      }), { headers: { 'content-type': 'application/json' } },
+      );
     }) as typeof globalThis.fetch;
 
     const result = await pickNativeImportFiles('/projects/demo');
 
     expect(requestedUrl).toBe('/api/fs/pick-files');
     expect(requestedInit?.method).toBe('POST');
-    expect(JSON.parse(String(requestedInit?.body))).toEqual({ initialDir: '/projects/demo', multiple: true });
+    expect(JSON.parse(String(requestedInit?.body))).toEqual({ initialDir: '/projects/demo', multiple: true,
+    });
     expect(result.kind).toBe('selected');
     if (result.kind !== 'selected') return;
     expect(result.files).toHaveLength(2);
@@ -47,16 +53,37 @@ describe('native import file picker', () => {
 
   it('distinguishes cancellation, malformed responses, HTTP errors, and network errors', async () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({ cancelled: true }))) as unknown as typeof globalThis.fetch;
-    expect(await pickNativeImportFiles('/projects/demo')).toEqual({ kind: 'cancelled' });
+    expect(await pickNativeImportFiles('/projects/demo')).toEqual({ kind: 'cancelled',
+    });
 
-    globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true, files: 'not-an-array' }))) as unknown as typeof globalThis.fetch;
-    expect(await pickNativeImportFiles('/projects/demo')).toEqual({ kind: 'unavailable' });
+    globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true, files: 'not-an-array' }),
+      )) as unknown as typeof globalThis.fetch;
+    expect(await pickNativeImportFiles('/projects/demo')).toEqual({ kind: 'unavailable',
+    });
 
-    globalThis.fetch = (async () => new Response('server error', { status: 500 })) as unknown as typeof globalThis.fetch;
-    expect(await pickNativeImportFiles('/projects/demo')).toEqual({ kind: 'unavailable' });
+    globalThis.fetch = (async () => new Response('server error', { status: 500,
+      })) as unknown as typeof globalThis.fetch;
+    expect(await pickNativeImportFiles('/projects/demo')).toEqual({ kind: 'unavailable',
+    });
 
     globalThis.fetch = (async () => { throw new Error('offline'); }) as unknown as typeof globalThis.fetch;
-    expect(await pickNativeImportFiles('/projects/demo')).toEqual({ kind: 'unavailable' });
+    expect(await pickNativeImportFiles('/projects/demo')).toEqual({ kind: 'unavailable',
+    });
+    expect(isNativeImportPickerCachedUnavailable()).toBe(true);
+  });
+
+  it('skips further native probes after caching unavailability', async () => {
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response('server error', { status: 500 });
+    }) as unknown as typeof globalThis.fetch;
+    expect(await pickNativeImportFiles('/projects/demo')).toEqual({ kind: 'unavailable',
+    });
+    expect(await pickNativeImportFiles('/projects/demo')).toEqual({ kind: 'unavailable',
+    });
+    expect(fetchCalls).toBe(1);
+    expect(isNativeImportPickerCachedUnavailable()).toBe(true);
   });
 
   it('caches unavailable hosts so later calls skip the network round trip', async () => {
@@ -66,8 +93,12 @@ describe('native import file picker', () => {
       return new Response('missing', { status: 404 });
     }) as unknown as typeof globalThis.fetch;
 
-    expect(await pickNativeImportFiles('/projects/demo')).toEqual({ kind: 'unavailable' });
-    expect(await pickNativeImportFiles('/projects/demo')).toEqual({ kind: 'unavailable' });
+    expect(await pickNativeImportFiles('/projects/demo')).toEqual({
+      kind: 'unavailable',
+    });
+    expect(await pickNativeImportFiles('/projects/demo')).toEqual({
+      kind: 'unavailable',
+    });
     expect(calls).toBe(1);
   });
 });

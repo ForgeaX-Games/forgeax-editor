@@ -8,7 +8,7 @@
       "execution": "cooked",
       "name": "Arc Nova Skill",
       "payload": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "emitters": [
           {
             "id": "charge-textured-arcane-dial",
@@ -101,7 +101,7 @@
       "execution": "cooked",
       "name": "Ambient Dust",
       "payload": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "emitters": [
           {
             "id": "dust-loop",

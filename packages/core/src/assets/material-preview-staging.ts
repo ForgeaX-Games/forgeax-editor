@@ -44,10 +44,10 @@ export function resolveMaterialPreviewDisplayValues(
   const fromCatalog = resolveOverrides(guid, lookup);
   const staging = getMaterialStaging(guid);
   const fromStaging = staging
-    ? {
+    ? omitNullishValues({
       ...staging.staging.values,
       ...(staging.staging.textureGuids ?? {}),
-    }
+    })
     : {};
   const fromOverlay = getMaterialPreviewParams(guid);
   return omitNullishValues({

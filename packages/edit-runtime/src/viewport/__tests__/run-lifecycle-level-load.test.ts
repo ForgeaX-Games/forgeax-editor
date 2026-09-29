@@ -92,34 +92,40 @@ function makeFakeRenderer() {
   const instantiateCalls: Array<{ handle: unknown; world: unknown }> = [];
   const detachedWorlds: unknown[] = [];
   let disposeCalls = 0;
-  let onErrorUnsubscribeCalls = 0;
+  let rendererUnsubscribeCalls = 0;
+  const leases = new Map<object, unknown>();
   const renderer = {
-    ready: Promise.resolve({ ok: true }),
     assets: {
       instantiate(handle: unknown, world: unknown) {
         instantiateCalls.push({ handle, world });
         return { ok: true as const, value: 1 };
       },
     },
-    attachWorld() {
-      return { ok: true } as const;
-    },
-    detachWorld(world: unknown) {
-      detachedWorlds.push(world);
+    attach(world: unknown) {
+      const lease = {
+        dispose() {
+          detachedWorlds.push(world);
+          leases.delete(lease);
+        },
+      };
+      leases.set(lease, world);
+      return { ok: true as const, value: lease };
     },
     // Engine #643 migrated the frame loop to composited multi-world rendering:
     // renderer.draw(worlds, { owner }) takes an ARRAY of worlds. Record each
     // drawn world (flattened) so the per-world assertions below still hold.
-    draw(worlds: unknown, _opts?: unknown) {
-      if (Array.isArray(worlds)) drawWorlds.push(...worlds);
-      else drawWorlds.push(worlds);
+    draw(input: unknown) {
+      if (typeof input === 'object' && input !== null && 'leases' in input) {
+        const leasesInFrame = (input as { leases?: readonly object[] }).leases ?? [];
+        for (const lease of leasesInFrame) drawWorlds.push(leases.get(lease));
+      }
       return { ok: true } as const;
     },
     dispose() {
       disposeCalls += 1;
     },
-    onError(_cb: (e: unknown) => void) {
-      return () => { onErrorUnsubscribeCalls += 1; };
+    subscribe(_cb: (event: unknown) => void) {
+      return () => { rendererUnsubscribeCalls += 1; };
     },
   };
   return {
@@ -130,8 +136,8 @@ function makeFakeRenderer() {
     get disposeCalls() {
       return disposeCalls;
     },
-    get onErrorUnsubscribeCalls() {
-      return onErrorUnsubscribeCalls;
+    get rendererUnsubscribeCalls() {
+      return rendererUnsubscribeCalls;
     },
   };
 }
@@ -928,9 +934,9 @@ describe('▶ Play uiRoot + registerCleanup (■ Stop teardown)', () => {
     try {
       const t = buildUiRootLifecycle();
       await t.lifecycle.playSimulation();
-      expect(t.fr.onErrorUnsubscribeCalls).toBe(0);
+      expect(t.fr.rendererUnsubscribeCalls).toBe(0);
       t.lifecycle.stopSimulation();
-      expect(t.fr.onErrorUnsubscribeCalls).toBe(1);
+      expect(t.fr.rendererUnsubscribeCalls).toBe(1);
       expect(t.fr.disposeCalls).toBe(0);
     } finally {
       fakeRaf.restore();
@@ -1068,7 +1074,7 @@ describe('▶ Play uiRoot + registerCleanup (■ Stop teardown)', () => {
       });
 
       await t.lifecycle.playSimulation();
-      expect(t.gateway.events[1]?.error).toEqual({ code: 'play-bootstrap-failed', hint: 'bootstrap exploded' });
+      expect(t.gateway.events[1]?.error).toEqual({ code: 'play-bootstrap-failed', hint: 'bootstrap exploded', message: 'bootstrap exploded' });
       expect(t.editorApp.calls).toEqual(['pause', 'resume']);
       expect(t.container.children).toHaveLength(0);
       expect(t.lifecycle.currentPlayWorld()).toBeNull();

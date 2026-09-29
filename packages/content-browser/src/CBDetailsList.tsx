@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
-import { useKeybindingScope } from '@forgeax/interface/core/app-shell';
+import { useKeybindingScope } from '@forgeax/app-shell/application';
 import { useTranslation } from '@forgeax/editor-core/i18n';
-import { colorForAssetKind, colorForFileFamily, ContentBrowserIcon, iconNameForAssetKind, iconNameForFileFamily, labelForAssetKind } from './content-browser-icons';
+import { colorForAssetKind, colorForFileFamily, colorForFolder, ContentBrowserIcon, iconNameForAssetKind, iconNameForFileFamily, labelForAssetKind } from './content-browser-icons';
 import { CBInlineRename } from './CBInlineRename';
 import {
   dropRejectFallback,
@@ -45,7 +45,7 @@ interface Props {
   onContextMenu?: (e: MouseEvent, item: CBViewItem) => void;
   onFocusItem?: (item: CBViewItem) => void;
   renamingKey?: string | null;
-  renameValidate?: (value: string) => string | null;
+  renameValidate?: (value: string, item: CBViewItem) => string | null;
   onRenameCommit?: (item: CBViewItem, value: string) => void;
   onRenameCancel?: () => void;
   getDragPayload?: (item: CBViewItem) => CBDragPayload | null;
@@ -84,7 +84,7 @@ interface RowMeta {
   modifiedLabel: string;
 }
 
-const FOLDER_ICON_COLOR = 'var(--accent-amber, #ffc966)';
+const FOLDER_ICON_COLOR = colorForFolder();
 
 function metaForItem(item: CBViewItem, t: ReturnType<typeof useTranslation>['t']): RowMeta {
   if (item.type === 'folder') {
@@ -143,7 +143,7 @@ function CBDetailsRow({
   getDragPayload?: (item: CBViewItem) => CBDragPayload | null;
   onMoveDrop?: (payload: CBDragPayload, target: CBDropTarget) => void;
   renaming: boolean;
-  renameValidate?: (value: string) => string | null;
+  renameValidate?: (value: string, item: CBViewItem) => string | null;
   onRenameCommit?: (item: CBViewItem, value: string) => void;
   onRenameCancel?: () => void;
 }): ReactNode {
@@ -187,7 +187,7 @@ function CBDetailsRow({
         {renaming ? (
           <CBInlineRename
             initial={item.name}
-            validate={renameValidate}
+            validate={renameValidate ? (value) => renameValidate(value, item) : undefined}
             onCommit={(value) => onRenameCommit?.(item, value)}
             onCancel={() => onRenameCancel?.()}
             ariaLabel={t('editor.contentBrowser.contextMenu.rename')}

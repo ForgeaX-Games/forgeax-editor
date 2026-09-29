@@ -4,7 +4,7 @@ import { createSourceAuthoringTransport } from "../source-authoring-transport";
 const value = {
 	sourcePath: "assets/showcase.pack.ts",
 	revision: "a".repeat(64),
-	meta: { subAssets: [{ guid: "11111111-1111-4111-8111-111111111111" }] },
+	assets: [{ guid: "11111111-1111-4111-8111-111111111111" }],
 };
 
 describe("asset source authoring host seam", () => {
@@ -23,11 +23,11 @@ describe("asset source authoring host seam", () => {
 		await expect(runtime.preflightSource({
 			sourcePath: value.sourcePath,
 			requestId: "pack-preflight-1",
-		})).resolves.toEqual(value);
+		})).resolves.toEqual({ sourcePath: value.sourcePath, revision: value.revision, meta: { subAssets: value.assets } });
 		expect(headers?.get("x-forgeax-game-id")).toBe("game-a");
 		expect(request).toEqual({
-			kind: "preflight",
-			sourcePath: value.sourcePath,
+			operation: "asset.inspect",
+			subject: value.sourcePath,
 			requestId: "pack-preflight-1",
 		});
 	});
@@ -38,12 +38,12 @@ describe("asset source authoring host seam", () => {
 		const runtime = createSourceAuthoringTransport({
 			triggerCook: async (_guid, mode) => {
 				cookModes.push(mode ?? "rebuild");
-				return { ok: true, value: { attempts: 1, retryWaitMs: 0 } };
+				return { ok: true, value: { attempts: 1, retryWaitMs: 0, entries: [] } };
 			},
 			fetch: async (path, init) => {
 				const input = JSON.parse(String(init?.body)) as Record<string, unknown>;
 				events.push(
-					`fetch:${path}:${init?.method}:${input.kind}:${input.sourceKey}`,
+					`fetch:${path}:${init?.method}:${input.operation}:${input.sourceKey}`,
 				);
 				expect(input).not.toHaveProperty("_editorKind");
 				return Response.json({ ok: true, value });
@@ -55,7 +55,7 @@ describe("asset source authoring host seam", () => {
 
 		await expect(
 			runtime.execute({
-				kind: "asset-source.add-output",
+				kind: "asset-source.apply-values",
 				sourcePath: value.sourcePath,
 				sourceKey: "mesh:spire",
 				assetKind: "mesh",
@@ -65,18 +65,18 @@ describe("asset source authoring host seam", () => {
 			}),
 		).resolves.toEqual({
 			ok: true,
-			value: { ...value, sourceCommitted: true, catalogObserved: true },
+			value: { ...value, meta: { subAssets: value.assets }, sourceCommitted: true, catalogObserved: true },
 		});
 		expect(events).toEqual([
-			"fetch:/api/assets/source/execute:POST:add-output:mesh:spire",
-			`observe:asset-source.add-output:${value.revision}`,
+			"fetch:/api/assets/source/execute:POST:asset-source.apply-values:mesh:spire",
+			`observe:asset-source.apply-values:${value.revision}`,
 		]);
 		expect(cookModes).toEqual(["rebuild"]);
 	});
 
 	test("returns a recovery-bearing partial-success error when source committed but publication is not observable", async () => {
 		const runtime = createSourceAuthoringTransport({
-			triggerCook: async () => ({ ok: true, value: { attempts: 1, retryWaitMs: 0 } }),
+			triggerCook: async () => ({ ok: true, value: { attempts: 1, retryWaitMs: 0, entries: [] } }),
 			fetch: async () => Response.json({ ok: true, value }),
 			observePublication: async () => {
 				throw new Error("catalog row never became consumable");
@@ -114,11 +114,9 @@ describe("asset source authoring host seam", () => {
 					error: {
 						code: "pack-source-revision-conflict",
 						hint: "Expected revision is stale.",
-						retryable: true,
-						recoveryActions: ["asset.preflight"],
-						expected: "old",
+						expected: "expectedRevision to match the current source bytes",
 						actual: "new",
-						detail: { sourcePath: value.sourcePath },
+						detail: { sourcePath: value.sourcePath, expectedRevision: "old", actualRevision: "new" },
 					},
 				}),
 			observePublication: async () => undefined,

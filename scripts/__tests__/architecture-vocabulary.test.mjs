@@ -11,6 +11,8 @@ test('maintained Editor sources use the canonical product and transport vocabula
     '--',
     ':!packages/play-runtime/src/__tests__/carrier-handshake.test.ts',
     ':!scripts/__tests__/selfcheck-standalone-b2.test.mjs',
+    ':!scripts/selfcheck-standalone-b2.mjs',
+    ':!games/**',
   ], { encoding: 'utf8' });
 
   expect([0, 1]).toContain(result.status);

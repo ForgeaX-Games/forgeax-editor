@@ -6,7 +6,7 @@ const panel = readFileSync(resolve(import.meta.dir, '..', 'Hierarchy.tsx'), 'utf
 
 describe('Hierarchy boot refresh', () => {
   it('subscribes the panel to the boot/load signal that can create the runtime graph', () => {
-    expect(panel).toContain('useHierarchyProjection();');
+    expect(panel).toMatch(/useHierarchyProjection\s*\(/);
     expect(panel).toContain('hasLocalRuntimeGraph');
     expect(panel).toContain('useDocVersion();');
   });

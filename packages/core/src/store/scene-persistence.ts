@@ -334,11 +334,11 @@ const sceneList = createSceneList({
   loadDocFromDisk: () => diskIo.doLoadDocFromDisk(),
   loadDocFromStorage: () => storage.loadDocFromStorage(),
   replaceDoc: (doc) => diskIo.replaceDoc(doc),
-  activateSceneSession: (entry) => setAuthoringSession(
-    entry.provenance === 'catalog-default'
-      ? importedPreviewSession()
-      : AUTHORED_SCENE_AUTHORING_SESSION,
-  ),
+  // Catalog-default scenes load via loadSceneByGuid (no *.pack.json path). They
+  // edit the live World like authored scenes; persistence stays fail-closed in
+  // scenePath() until a pack exists. imported-preview is only for
+  // previewImportedScene — do not conflate with forge.json defaultScene binding.
+  activateSceneSession: () => setAuthoringSession(AUTHORED_SCENE_AUTHORING_SESSION),
 });
 gateway.registerSceneReadProvider(sceneList.getSceneReadModel);
 bindLocalSceneReadModelSource({
@@ -780,7 +780,7 @@ registerApplier('session', 'promoteImportedScene', (rawOp) => {
       } catch { /* observer failure cannot turn a durable commit into failure */ }
       ctx.currentSceneGuid = newGuid;
       ctx.currentSceneEntities = [...instantiated.value];
-      ctx.loadedEntityFloor = promotedScene.entities.length;
+      ctx.loadedEntityFloor = Object.keys(promotedScene.entities).length;
       ctx.loadedInlineAssetFloor = ((pack.assets as Array<{ kind?: string }>).filter((asset) => asset.kind !== 'scene')).length;
       ctx.loadedInlineAssets = null;
       ctx.previewState = null;
@@ -922,7 +922,7 @@ async function doCreateSceneFile(
   id: string,
   duplicateCurrent: boolean,
 ): Promise<SceneCreateEffect> {
-  if (ctx.currentSceneId === 'default') {
+  if (ctx.currentSceneId === 'default' && ctx.currentSceneGuid === null) {
     return { ok: false, error: { code: 'scene-create-invalid', hint: 'createSceneFile requires an active game scene id, not the default legacy slot.', retryable: false, recoveryActions: ['editor.discover'] } };
   }
   const slug = id.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -957,7 +957,7 @@ async function doCreateSceneFile(
       return { ok: false, error: { code: 'scene-create-serialize-failed', hint: `Could not isolate the duplicated scene envelope: ${error instanceof Error ? error.message : String(error)}`, current: { requestId, sceneId: slug, duplicateCurrent: true }, retryable: true, recoveryActions: ['operation.retry'] } };
     }
   } else {
-    const emptyPack = serializeSceneAssetToPack({ kind: 'scene', entities: [] }, gateway.activeWorld.components.entries(), newSceneGuid);
+    const emptyPack = serializeSceneAssetToPack({ kind: 'scene', entities: {} }, gateway.activeWorld.components.entries(), newSceneGuid);
     if (!emptyPack.ok) {
       return { ok: false, error: { code: 'scene-create-serialize-failed', hint: 'Could not serialize the canonical empty scene pack; the new file was not written.', current: { requestId, sceneId: slug, duplicateCurrent: false }, retryable: false, recoveryActions: ['editor.discover'] } };
     }
@@ -991,6 +991,12 @@ async function doCreateSceneFile(
   const previousAuthoringSession = getSceneAuthoringSession();
   const previousPreviewState = ctx.previewState;
   const listIndex = ctx.sceneList.length;
+  // A failed prior promotion may leave the persisted scene-file key pointing
+  // at this deterministic id even though its pack was rolled back. Clear that
+  // stale identity before switching so doSwitchSceneFile cannot short-circuit
+  // on a filename/GUID pair that is not backed by a durable file.
+  if (ctx.currentSceneFile === slug) ctx.currentSceneFile = null;
+  if (ctx.currentSceneGuid === newSceneGuid) ctx.currentSceneGuid = previousSceneGuid;
   ctx.sceneList.push({ id: slug, name: slug, pack: newPackPath, guid: newSceneGuid });
   sceneList.notifySceneListChanged();
 
@@ -1104,6 +1110,47 @@ export function createSceneFile(id: string, duplicateCurrent: boolean): Promise<
   const accepted = gateway.dispatch({ kind: 'createSceneFile', id, duplicateCurrent, requestId });
   if (!accepted.ok) return Promise.resolve(false);
   return gateway.waitOperationRun(requestId).then((terminal) => terminal.ok && terminal.value.status === 'succeeded');
+}
+
+/** Promote the currently loaded script-generated default scene through the
+ * canonical authored-scene creation path. This deliberately reuses
+ * createSceneFile so write, catalog publication, navigation, and rollback stay
+ * one transaction instead of duplicating the fragile disk materialization path. */
+export async function materializeGeneratedDefaultScene(): Promise<boolean> {
+  const existingAuthored = gateway.sceneReadModel().scenes.find(
+    (scene) => scene.id === 'authored-default' && typeof scene.guid === 'string',
+  );
+  if (typeof existingAuthored?.guid === 'string') {
+    const requestId = globalThis.crypto.randomUUID();
+    const published = await sceneList.setDefaultScene(existingAuthored.guid, requestId);
+    if (!published.ok) {
+      console.warn('[editor-core] existing authored scene default publication failed:', JSON.stringify(published.error));
+      return false;
+    }
+    return true;
+  }
+  const requestId = globalThis.crypto.randomUUID();
+  let created: SceneCreateEffect;
+  try {
+    created = await doCreateSceneFile(requestId, 'authored-default', true);
+  } catch (error) {
+    console.error('[editor] script scene promotion exception:', JSON.stringify({
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    }));
+    return false;
+  }
+  if (!created.ok) {
+    console.warn('[editor-core] script scene promotion failed:', JSON.stringify(created.error));
+    return false;
+  }
+  const setDefaultRequestId = globalThis.crypto.randomUUID();
+  const published = await sceneList.setDefaultScene(created.result.sceneGuid, setDefaultRequestId);
+  if (!published.ok) {
+    console.warn('[editor-core] script scene defaultScene publication failed:', JSON.stringify(published.error));
+    return false;
+  }
+  return true;
 }
 
 // ── storage cluster surface (createStorage) ───────────────────────────────────

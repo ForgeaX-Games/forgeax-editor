@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { useHost } from '@forgeax/interface/core/app-shell';
-import type { ContentBrowserRevealTarget } from '@forgeax/interface/core/app-shell/types';
-import { isPageDirty } from '@forgeax/interface/core/page-platform';
-import { publish } from '@forgeax/interface/lib/bus';
+import { useHost } from '@forgeax/app-shell/application';
+import type { ContentBrowserRevealTarget } from '@forgeax/app-shell/application';
+import { isPageDirty } from '@forgeax/app-shell/application';
 import { useTranslation } from '@forgeax/editor-core/i18n';
 import { Download, FolderPlus, LayoutGrid, List, Plus, Save, Settings2, Table2 } from 'lucide-react';
 // Asset-selection is a transient op dispatched through the one gateway door
 // (gateway.dispatch({ kind: 'setAssetSelection', … })), never the direct setter.
-import { cancelViewportRuntimeOperationRun, describeSceneActivation, dispatchActiveEditorOperation, generateAssetGuid, gateway, getSelection, getViewportRuntimeClientSnapshot, kindRequiresCatalogRoot, requestAddAssetsToChat, resolveCatalogAuthoringDir, resolveGamePath, showContextMenu, subscribeViewportRuntimeClient, waitViewportRuntimeOperationRun,
+import { cancelViewportRuntimeOperationRun, describeSceneActivation, dispatchActiveEditorOperation, gateway, generateAssetGuid, getSelection, getViewportRuntimeClientSnapshot, kindRequiresCatalogRoot, requestAddAssetsToChat, resolveCatalogAuthoringDir, resolveGamePath, showContextMenu, subscribeViewportRuntimeClient, waitViewportRuntimeOperationRun,
   ResizeHandle, useLocalSize, useSceneReadModel, validateAssetBasename } from '@forgeax/editor-core';
 import type { OperationRun } from '@forgeax/editor-core';
 // Editor-ui overlay services replace window.prompt/confirm — a themed modal
@@ -61,6 +60,17 @@ import { readCanonicalScriptablePackRevision } from './scriptable-pack-mutation'
 import { CREATABLE_ASSET_KINDS, type CreatableAssetSpec } from './creatable-asset-kinds';
 import { createMaterialInstanceAndOpen } from './create-material-instance';
 import { createInputMapAndOpen } from './create-input-map';
+import { executeCreateFolder } from './create-actions';
+import {
+  createNameScopeForAssetKind,
+  generateDefaultCreateName,
+  validateSiblingNameForItem,
+  type SiblingNameData,
+} from './sibling-name';
+import {
+  resolveInlineFolderCreateItem,
+  type PendingInlineFolderCreate,
+} from './inline-create-resolve';
 import { catalogPathToRoot, type CatalogAssetRoot } from './catalog-root';
 import { creatableKindAllowedAtPath, localCatalogRoots } from './catalog-authoring-ui';
 import { resolveFileActivateAction } from './folder-view';
@@ -79,6 +89,7 @@ import {
 } from './source-authoring/source-mutation-view-model';
 import { catalogSceneVirtualPaths, sceneActivationToOp, scenePromoteToOp } from './scene-activation-route';
 import { resolveContentBrowserReveal } from './resolve-content-browser-reveal';
+import { isVirtualRootPath } from './virtual-root';
 import type { CBAsset, CBFile, CBFolder, CBSelection, CBViewItem, CBViewMode, RenameSurface } from './types';
 import {
   viewItemKey,
@@ -438,14 +449,22 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         && importProgress.results.every(result => result.status === 'done'))
       ? 'cb-import-progress-fill cb-import-progress-fill--complete'
       : 'cb-import-progress-fill';
-  // release: liveFraction from import-run-progress-transport-poll (temporary; main uses subscribe).
   const importProgressFraction = importFailed
-    ? Math.max(importProgress?.liveFraction ?? currentImportRun?.progress.fraction ?? 0.08, 0.05)
-    : importProgress?.liveFraction
-      ?? currentImportRun?.progress.fraction
+    ? Math.max(currentImportRun?.progress.fraction ?? 0.08, 0.05)
+    : currentImportRun?.progress.fraction
       ?? (importProgress && importProgress.completed < importProgress.total
         ? importProgress.completed / Math.max(importProgress.total, 1)
         : 0);
+  const importProgressDetailMessage = useMemo(() => {
+    if (!importProgress) return undefined;
+    const failure = importProgress.lastFailure;
+    if (failure?.code === 'IMPORT_SOURCE_TARGET_CONFLICT') {
+      const normalized = failure.path.replace(/\\/g, '/');
+      const name = normalized.slice(normalized.lastIndexOf('/') + 1) || normalized;
+      return t('editor.contentBrowser.importProgress.targetAlreadyExists', { name });
+    }
+    return importProgress.actionError;
+  }, [importProgress, t]);
   const [dragOver, setDragOver] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [collapsedSourceFolders, setCollapsedSourceFolders] = useState<Record<string, boolean>>({});
@@ -496,6 +515,9 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   // new path so a selected file/folder stays selected across the rename (assets are
   // guid-keyed and survive on their own).
   const pendingReselectRef = useRef<{ oldPath: string; newPath: string; newName: string } | null>(null);
+  // After inline create, select the new row and open rename once the catalog rebuilds.
+  const pendingInlineFolderCreateRef = useRef<PendingInlineFolderCreate | null>(null);
+  const [inlineCreatePoll, bumpInlineCreatePoll] = useState(0);
   const [expandedPacks, setExpandedPacks] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -511,6 +533,12 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   // filters to nothing.
   const navPathRef = useRef(nav.currentPath);
   useEffect(() => { navPathRef.current = nav.currentPath; }, [nav.currentPath]);
+  // Folder changes must drop inline-unpacked resource groups from the prior path;
+  // otherwise expanded pack tiles from the child folder can linger visually in the
+  // grid until the next unrelated state update (breadcrumb / back / tree navigate).
+  useEffect(() => {
+    setExpandedPacks((prev) => (prev.size === 0 ? prev : new Set()));
+  }, [nav.currentPath]);
   // Filter menu offers a FIXED set of spec-defined file families (`FE_FILTERABLE`)
   // — a static type filter, independent of the current folder's contents.
   const filter = useFilter();
@@ -598,7 +626,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   // being browsed and only moves on NAVIGATION — a tree click, a folder
   // double-click, the breadcrumb/back-forward, or an explicit reveal (all of
   // which write nav.currentPath). Plain right-panel card selection never does.
-  const treeCurrentPath = nav.currentPath || null;
+  const treeCurrentPath = nav.currentPath;
   const selectedImportPath = useMemo(
     () => selectedItem
       ? importDirectoryForViewItem(selectedItem, selectedSourcePath, nav.currentPath || 'assets')
@@ -619,6 +647,12 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       return next;
     });
   }, []);
+
+  const siblingNameData = useMemo<SiblingNameData>(() => ({
+    allDirs,
+    diskFiles,
+    sceneIds: sceneModel.scenes.map((scene) => scene.id),
+  }), [allDirs, diskFiles, sceneModel.scenes]);
 
   const multiSelect = useMultiSelect(viewItems);
   const selectItem = useCallback((item: CBViewItem) => {
@@ -923,12 +957,134 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
         // and routes through the ResourceEditorResolver (same door the Files
         // sidebar / Agents workspace use), so a third-party resource editor can
         // claim the extension without any CB change.
-        publish('resource-editor:open-file', { path: item.diskPath });
+        host.bus.emit('resource-editor:open-file', { path: item.diskPath });
       }
       return;
     }
     openAsset(item);
   }, [nav, openAsset, selectItem, togglePackExpansion, viewMode]);
+
+  const queueInlineFolderCreate = useCallback(async (folderPath: string | null) => {
+    if (!folderPath) return;
+    pendingInlineFolderCreateRef.current = { path: folderPath, startedAt: Date.now() };
+    reload();
+    await fetchDiskDirs();
+    bumpInlineCreatePoll((tick) => tick + 1);
+    const poll = window.setInterval(() => {
+      if (!pendingInlineFolderCreateRef.current) {
+        window.clearInterval(poll);
+        return;
+      }
+      reload();
+      void fetchDiskDirs();
+      bumpInlineCreatePoll((tick) => tick + 1);
+    }, 300);
+    window.setTimeout(() => window.clearInterval(poll), 12_000);
+  }, [fetchDiskDirs, reload]);
+
+  const createFolderInCurrentPath = useCallback((parentPath: string = nav.currentPath) => {
+    void (async () => {
+      const name = generateDefaultCreateName(
+        'NewFolder',
+        { kind: 'directory', parentPath },
+        siblingNameData,
+      );
+      const folderPath = await executeCreateFolder(parentPath, name);
+      await queueInlineFolderCreate(folderPath);
+    })();
+  }, [nav.currentPath, queueInlineFolderCreate, siblingNameData]);
+
+  const createAssetInCurrentPath = useCallback((spec: CreatableAssetSpec) => {
+    void (async () => {
+      const localRoots = localCatalogRoots(catalogAssetRoots);
+      let packDir: string;
+      if (kindRequiresCatalogRoot(spec.kind)) {
+        const resolved = resolveCatalogAuthoringDir(nav.currentPath, localRoots);
+        if (!resolved.ok) {
+          toast.error(spec.kind === 'material' ? 'createMaterial' : 'createAsset', {
+            description: t('editor.contentBrowser.catalogAuthoringOutsideAssets'),
+          });
+          return;
+        }
+        packDir = resolved.dir;
+      } else {
+        packDir = (nav.currentPath || 'assets').replace(/^\/+|\/+$/g, '') || 'assets';
+      }
+      const defaultName = generateDefaultCreateName(
+        spec.defaultNamePrefix,
+        createNameScopeForAssetKind(spec.kind, packDir),
+        siblingNameData,
+      );
+      const name = (await contentBrowserPrompt({
+        title: t('editor.contentBrowser.actions.createAsset', { label: labelForAssetKind(spec.kind, t) }),
+        label: t('editor.contentBrowser.dialogs.newAssetNameLabel'),
+        defaultValue: defaultName,
+        placeholder: spec.defaultNamePrefix,
+        confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
+        cancelText: t('editor.contentBrowser.dialogs.cancel'),
+        validate: (v) => {
+          const r = validateAssetBasename(v);
+          return r.ok ? null : r.hint;
+        },
+      }))?.trim();
+      if (!name) return;
+
+      if (spec.kind === 'scriptable-pack') {
+        const result = await dispatchActiveEditorOperation({
+          kind: 'asset-source.create',
+          sourcePath: `${packDir}/${name}.pack.ts`,
+          name,
+          initialOutput: { sourceKey: 'scene/main', kind: 'scene', name: `${name} Scene` },
+          requestId: crypto.randomUUID(),
+        }, 'human');
+        if (!result.ok) toast.error('asset-source.create', { description: result.error.hint });
+        return;
+      }
+
+      if (spec.kind === 'scene') {
+        const requestId = crypto.randomUUID();
+        const result = await dispatchActiveEditorOperation({
+          kind: 'createSceneFile',
+          id: name,
+          duplicateCurrent: false,
+          requestId,
+        }, 'human');
+        if (!result.ok) toast.error('createSceneFile', { description: result.error.hint });
+        return;
+      }
+
+      if (spec.kind === 'material') {
+        void dispatchActiveEditorOperation({
+          kind: 'createMaterial',
+          guid: generateAssetGuid(),
+          name,
+          baseColor: [1, 1, 1, 1],
+          metallic: 0,
+          roughness: 0.5,
+          packPath: `${packDir}/Materials.pack.json`,
+        }, 'human');
+        return;
+      }
+
+      if (spec.kind === 'material-instance') {
+        await createMaterialInstanceAndOpen(name, packDir);
+        return;
+      }
+
+      if (spec.kind === 'input-map') {
+        await createInputMapAndOpen(name, packDir);
+        return;
+      }
+
+      void dispatchActiveEditorOperation({
+        kind: 'createAsset',
+        packPath: `${packDir}/${name}.pack.json`,
+        guid: generateAssetGuid(),
+        assetKind: spec.kind,
+        name,
+      }, 'human');
+    })();
+  }, [catalogAssetRoots, nav, siblingNameData, t]);
 
   const crudCallbacks: CRUDCallbacks = useMemo(() => ({
     onReload: reload,
@@ -947,19 +1103,9 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       });
     },
     onNewFolder: (parentPath: string) => {
-      void (async () => {
-        const name = await contentBrowserPrompt({
-          title: t('editor.contentBrowser.actions.createFolder'),
-          label: t('editor.contentBrowser.dialogs.newFolderPrompt'),
-          confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
-          cancelText: t('editor.contentBrowser.dialogs.cancel'),
-          validate: (v) => { const r = validateAssetBasename(v); return r.ok ? null : r.hint; },
-        });
-        if (!name) return;
-        void dispatchActiveEditorOperation({ kind: 'createDirectory', parentPath, name }, 'human');
-      })();
+      void createFolderInCurrentPath(parentPath);
     },
-  }), [host, reload, requestDelete, setSourceMutationAsset, t, workspaceSnapshot]);
+  }), [host, reload, requestDelete, setSourceMutationAsset, createFolderInCurrentPath, workspaceSnapshot]);
 
   const sourceMutationViewModel = useMemo(() => {
     if (!sourceMutationAsset?.sourceKey) return null;
@@ -1030,108 +1176,6 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     }
   }, [dispatchCatalogReconcile, operationRunSnapshot, operationRunSource, sourceMutationAsset, sourceMutationViewModel]);
 
-  const createFolderInCurrentPath = useCallback(() => {
-    void (async () => {
-      const name = await contentBrowserPrompt({
-        title: t('editor.contentBrowser.actions.createFolder'),
-        label: t('editor.contentBrowser.dialogs.newFolderPrompt'),
-        confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
-        cancelText: t('editor.contentBrowser.dialogs.cancel'),
-        validate: (v) => { const r = validateAssetBasename(v); return r.ok ? null : r.hint; },
-      });
-      if (!name) return;
-      const result = await dispatchActiveEditorOperation(
-        { kind: 'createDirectory', parentPath: nav.currentPath, name },
-        'human',
-      );
-      if (!result.ok) console.warn('[content-browser] createDirectory rejected', result.error);
-    })();
-  }, [nav.currentPath, t]);
-
-  const createAssetInCurrentPath = useCallback((spec: CreatableAssetSpec) => {
-    void (async () => {
-      const localRoots = localCatalogRoots(catalogAssetRoots);
-      let packDir: string;
-      if (kindRequiresCatalogRoot(spec.kind)) {
-        const resolved = resolveCatalogAuthoringDir(nav.currentPath, localRoots);
-        if (!resolved.ok) {
-          toast.error(spec.kind === 'material' ? 'createMaterial' : 'createAsset', {
-            description: t('editor.contentBrowser.catalogAuthoringOutsideAssets'),
-          });
-          return;
-        }
-        packDir = resolved.dir;
-      } else {
-        packDir = (nav.currentPath || 'assets').replace(/^\/+|\/+$/g, '') || 'assets';
-      }
-      const name = (await contentBrowserPrompt({
-        title: t('editor.contentBrowser.actions.createAsset', { label: labelForAssetKind(spec.kind, t) }),
-        label: t('editor.contentBrowser.dialogs.newAssetNameLabel'),
-        defaultValue: spec.defaultNamePrefix,
-        confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
-        cancelText: t('editor.contentBrowser.dialogs.cancel'),
-      }))?.trim();
-      if (!name) return;
-      if (spec.kind === 'scriptable-pack') {
-        const requestId = crypto.randomUUID();
-        const accepted = await dispatchActiveEditorOperation({
-          kind: 'asset-source.create',
-          sourcePath: `${packDir}/${name}.pack.ts`,
-          name,
-          initialOutput: { sourceKey: 'scene/main', kind: 'scene', name: `${name} Scene` },
-          requestId,
-        }, 'human');
-        if (!accepted.ok) console.warn('[content-browser] create ScriptablePack rejected', accepted.error);
-        return;
-      }
-      if (spec.kind === 'scene') {
-        const requestId = crypto.randomUUID();
-        const result = await dispatchActiveEditorOperation({ kind: 'createSceneFile', id: name, duplicateCurrent: false, requestId }, 'human');
-        if (!result.ok) {
-          console.warn('[content-browser] create scene dispatch rejected', result.error);
-          toast.error('createSceneFile', { description: result.error.hint });
-          return;
-        }
-        toast.success(t('editor.contentBrowser.actions.createAsset', { label: labelForAssetKind('scene', t) }), {
-          description: t('editor.contentBrowser.dialogs.sceneCreatedOpened', { name }),
-        });
-        return;
-      }
-      // packPath must stay GAME-RELATIVE — appliers call resolveGamePath themselves.
-      // Pre-resolving here double-prefixes the host game root onto itself.
-      if (spec.kind === 'material') {
-        void dispatchActiveEditorOperation({
-          kind: 'createMaterial',
-          guid: generateAssetGuid(),
-          name,
-          baseColor: [1, 1, 1, 1],
-          metallic: 0,
-          roughness: 0.5,
-          packPath: `${packDir}/Materials.pack.json`,
-        }, 'human');
-      } else if (spec.kind === 'material-instance') {
-        await createMaterialInstanceAndOpen(name, packDir);
-      } else if (spec.kind === 'input-map') {
-        await createInputMapAndOpen(name, packDir);
-      } else {
-        const requestId = crypto.randomUUID();
-        await dispatchActiveEditorOperation({
-          kind: 'createAsset',
-          packPath: `${packDir}/${name}.pack.json`,
-          guid: generateAssetGuid(),
-          assetKind: spec.kind,
-          name,
-          requestId,
-        }, 'human');
-      }
-    })();
-  }, [catalogAssetRoots, nav.currentPath, t]);
-
-  // Per-card favorite state + toggle, threaded through CBGrid so every card's
-  // ⭐ toggles favorites directly (same identity as the context menu: folders and
-  // files key on their game-relative path, assets on their guid — a pack file
-  // holds N assets, so a path cannot tell them apart).
-  // The header "favorites only" filter then narrows the content view to these.
   const isItemFavorite = useCallback((item: CBViewItem): boolean => (
     item.type === 'asset' ? favorites.isFavorite({ kind: 'asset', guid: item.guid }) : item.isFavorite
   ), [favorites.isFavorite]);
@@ -1154,10 +1198,11 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   const cancelRename = useCallback(() => setRename(null), []);
   // Same basename SSOT the applier enforces; the inline editor shows the hint as
   // red feedback instead of silently rejecting on commit.
-  const renameValidate = useCallback((value: string): string | null => {
+  const renameValidate = useCallback((value: string, item: CBViewItem): string | null => {
     const result = validateAssetBasename(value);
-    return result.ok ? null : result.hint;
-  }, []);
+    if (!result.ok) return result.hint;
+    return validateSiblingNameForItem(value, item, siblingNameData, t);
+  }, [siblingNameData, t]);
   const commitRename = useCallback((item: CBViewItem, rawName: string) => {
     setRename(null);
     const newName = rawName.trim();
@@ -1186,6 +1231,30 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       void dispatchActiveEditorOperation({ kind: 'renameSourceFile', path: item.path, newName }, 'human');
     }
   }, [nav, workspaceSnapshot]);
+
+  // After inline folder create: select and open rename once the row is visible.
+  useEffect(() => {
+    const pending = pendingInlineFolderCreateRef.current;
+    if (!pending) return;
+
+    const item = resolveInlineFolderCreateItem(pending.path, viewItems);
+    if (!item) {
+      if (Date.now() - pending.startedAt > 12_000) {
+        pendingInlineFolderCreateRef.current = null;
+        console.warn('[content-browser] inline folder create timed out waiting for row', pending.path);
+      }
+      return;
+    }
+
+    pendingInlineFolderCreateRef.current = null;
+    selectItem(item);
+    focusGridItem(item);
+    void dispatchActiveEditorOperation({
+      kind: 'setFolderSelection',
+      items: [{ path: item.path, kind: 'dir' }],
+    });
+    beginRename(item, 'grid');
+  }, [beginRename, focusGridItem, inlineCreatePoll, selectItem, viewItems]);
 
   // ── Internal move DnD ──────────────────────────────────────────────────────
   // Build the drag payload at pick-up: dragging a card that is part of the
@@ -1429,6 +1498,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
   }, []);
 
   const openFolderContextMenu = useCallback((pos: { clientX: number; clientY: number; preventDefault: () => void }, folder: CBFolder, surface: RenameSurface = 'grid') => {
+    if (isVirtualRootPath(folder.path)) return;
     const assetsInFolder = scopedAssets
       .filter(s => s.rel === folder.path || s.rel.startsWith(`${folder.path}/`))
       .map(s => s.asset);
@@ -1697,19 +1767,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
     const pos = { clientX: e.clientX, clientY: e.clientY, preventDefault: () => {} };
     const menuItems = buildBlankAreaContextMenu(
       nav.currentPath,
-      (parentPath) => {
-        void (async () => {
-          const name = await contentBrowserPrompt({
-            title: t('editor.contentBrowser.actions.createFolder'),
-            label: t('editor.contentBrowser.dialogs.newFolderPrompt'),
-            confirmText: t('editor.contentBrowser.dialogs.createConfirm'),
-            cancelText: t('editor.contentBrowser.dialogs.cancel'),
-            validate: (v) => { const r = validateAssetBasename(v); return r.ok ? null : r.hint; },
-          });
-          if (!name) return;
-          void dispatchActiveEditorOperation({ kind: 'createDirectory', parentPath, name }, 'human');
-        })();
-      },
+      (parentPath) => { createFolderInCurrentPath(parentPath); },
       CREATABLE_ASSET_KINDS
         .filter((spec) => creatableKindAllowedAtPath(spec.kind, nav.currentPath, catalogAssetRoots))
         .map((spec) => ({
@@ -1728,7 +1786,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
       disabled: m.disabled,
     }));
     setTimeout(() => showContextMenu(pos, resolved), 0);
-  }, [catalogAssetRoots, nav.currentPath, t, createAssetInCurrentPath]);
+  }, [catalogAssetRoots, nav.currentPath, t, createAssetInCurrentPath, createFolderInCurrentPath]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (!(e.ctrlKey || e.metaKey)) return;
@@ -1872,6 +1930,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
                   </div>
                 ) : layout === 'column' ? (
                   <CBDetailsList
+                    key={nav.currentPath}
                     items={viewItems}
                     multiSelect={multiSelect}
                     sort={sort}
@@ -1888,6 +1947,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
                   />
                 ) : (
                   <CBGrid
+                    key={nav.currentPath}
                     items={viewItems}
                     thumbnailSize={thumbnailSize}
                     multiSelect={multiSelect}
@@ -1908,7 +1968,7 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
                     onRenameCancel={cancelRename}
                     getDragPayload={buildGridDragPayload}
                     onMoveDrop={handleMoveDrop}
-                    currentDir={nav.currentPath || 'assets'}
+                    currentDir={nav.currentPath}
                   />
                 )}
               </div>
@@ -1962,8 +2022,8 @@ export function ContentBrowser({ operationRuns }: ContentBrowserProps = {}) {
               style={{ width: `${Math.round(importProgressFraction * 100)}%` }}
             />
           </div>
-          {importProgress.actionError && (
-            <span className="cb-import-progress-error">{importProgress.actionError}</span>
+          {importProgressDetailMessage && (
+            <span className="cb-import-progress-error">{importProgressDetailMessage}</span>
           )}
           {currentImportIsActive && (
             <Button

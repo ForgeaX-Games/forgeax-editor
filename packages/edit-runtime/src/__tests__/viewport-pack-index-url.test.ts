@@ -26,7 +26,7 @@ describe('viewport asset catalog identity', () => {
     expect(playUrlSource).toContain('runtimeGeneration: String(binding.generation)');
     expect(playUrlSource).not.toContain('runtimeGeneration: String(runtimeIdentity.runtimeGeneration)');
     expect(playUrlSource).toContain('runtimeId: runtimeIdentity.runtimeId');
-    expect(playUrlSource).toContain('carrierId: `${runtimeIdentity.carrierId}:play`');
+    expect(playUrlSource).toContain('carrierId: `${runtimeIdentity.carrierId}:play:${generation}`');
     expect(playUrlSource).toContain("carrierKind: 'iframe'");
   });
 

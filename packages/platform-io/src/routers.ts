@@ -1,0 +1,28 @@
+/** Public HTTP router factories and their host-facing seams. */
+export { createFilesRouter } from './api/files';
+export {
+  type FileBackend,
+  studioFileBackend,
+  singleGameFileBackend,
+  WHITELIST_ERROR,
+} from './api/lib/file-backend';
+export { createFsBrowserRouter } from './api/fs-browser';
+export { createGameAssetsRouter } from './api/game-assets';
+export {
+  createGameHostRouter,
+  createVersionControlRouter,
+  resolveGameVersionControlRoot,
+  validateVersionControlPayload,
+  type GameHostOptions,
+} from './api/game-host';
+export { createLogsRouter, logsDir, appendToStream } from './api/logs';
+export { createVersionRouter, getVersion } from './api/version';
+export { createChangelogRouter, parseChangelog } from './api/changelog';
+export {
+  readStudioRuntimePorts,
+  resolveStudioRuntimePorts,
+  studioRuntimePortsFromEnv,
+  type StudioRuntimePorts,
+} from './api/runtime-manifest';
+export { createPrefsRouter } from './api/prefs';
+export { createBootSplashRouter } from './api/boot-splash';

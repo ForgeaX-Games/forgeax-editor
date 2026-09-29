@@ -68,8 +68,7 @@
     "candidateSourceSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "sourceSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "submodulePins": [
-      {"path": "packages/engine", "sha": "1111111111111111111111111111111111111111"},
-      {"path": "packages/interface", "sha": "2222222222222222222222222222222222222222"}
+      {"path": "packages/engine", "sha": "1111111111111111111111111111111111111111"}
     ],
     "contractDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "workflowDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",

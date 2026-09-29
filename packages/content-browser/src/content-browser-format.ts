@@ -84,7 +84,8 @@ export function dirOfPath(path: string): string {
   return i < 0 ? '' : path.slice(0, i);
 }
 
-export function normalizeGameRelativePath(path: string, gameRootPath: string, gameSlug: string): string {
+export function normalizeGameRelativePath(path: string, gameRootPath: string, gameSlug: string,
+): string {
   const p = path.replace(/\\/g, '/').replace(/^\/+/, '');
   const root = gameRootPath.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/$/, '');
   if (p === root) return '';
@@ -146,11 +147,11 @@ export function viewItemKey(item: CBViewItem): string {
 
 /** Project the producer-owned placement capability with the engine's legacy-row
  * fallback. UI surfaces share this helper instead of maintaining kind switches. */
-export function isAssetPlacementAvailable(
-  asset: Pick<CBAsset, 'kind' | 'authoring'>,
-): boolean {
-  return (asset.authoring ?? authoringCapabilityForAssetKind(asset.kind))
-    .placement.operation !== 'unavailable';
+export function isAssetPlacementAvailable(asset: Pick<CBAsset, 'kind' | 'authoring'>): boolean {
+  return (
+    (asset.authoring ?? authoringCapabilityForAssetKind(asset.kind)).placement.operation !==
+    'unavailable'
+  );
 }
 
 export function copyText(text: string): void {
@@ -241,25 +242,40 @@ const FILE_KIND_FALLBACK_LABELS: Record<CBFileFamily, string> = {
   other: 'File',
 };
 
-export function fileKindLabel(tOrFamily: TFunction | CBFileFamily | undefined, familyArg?: CBFileFamily): string {
+export function fileKindLabel(
+  tOrFamily: TFunction | CBFileFamily | undefined,
+  familyArg?: CBFileFamily,
+): string {
   const family = familyArg ?? (typeof tOrFamily === 'string' ? tOrFamily : 'other');
-  const translate = (key: string, fallback: string) => (
-    typeof tOrFamily === 'function' ? tOrFamily(key) : fallback
-  );
+  const translate = (key: string, fallback: string) =>
+    typeof tOrFamily === 'function' ? tOrFamily(key) : fallback;
   switch (family) {
-    case 'code': return translate('editor.contentBrowser.fileKinds.code', FILE_KIND_FALLBACK_LABELS.code);
-    case 'config': return translate('editor.contentBrowser.fileKinds.config', FILE_KIND_FALLBACK_LABELS.config);
-    case 'doc': return translate('editor.contentBrowser.fileKinds.doc', FILE_KIND_FALLBACK_LABELS.doc);
-    case 'scene': return translate('editor.contentBrowser.fileKinds.scene', FILE_KIND_FALLBACK_LABELS.scene);
-    case 'pack': return translate('editor.contentBrowser.fileKinds.pack', FILE_KIND_FALLBACK_LABELS.pack);
-    case 'meta': return translate('editor.contentBrowser.fileKinds.meta', FILE_KIND_FALLBACK_LABELS.meta);
-    case 'image': return translate('editor.contentBrowser.fileKinds.image', FILE_KIND_FALLBACK_LABELS.image);
-    case 'audio': return translate('editor.contentBrowser.fileKinds.audio', FILE_KIND_FALLBACK_LABELS.audio);
-    case 'model': return translate('editor.contentBrowser.fileKinds.model', FILE_KIND_FALLBACK_LABELS.model);
-    case 'font': return translate('editor.contentBrowser.fileKinds.font', FILE_KIND_FALLBACK_LABELS.font);
-    case 'ui': return translate('editor.contentBrowser.fileKinds.ui', FILE_KIND_FALLBACK_LABELS.ui);
-    case 'data': return translate('editor.contentBrowser.fileKinds.data', FILE_KIND_FALLBACK_LABELS.data);
-    default: return translate('editor.contentBrowser.fileKinds.other', FILE_KIND_FALLBACK_LABELS.other);
+    case 'code':
+      return translate('editor.contentBrowser.fileKinds.code', FILE_KIND_FALLBACK_LABELS.code);
+    case 'config':
+      return translate('editor.contentBrowser.fileKinds.config', FILE_KIND_FALLBACK_LABELS.config);
+    case 'doc':
+      return translate('editor.contentBrowser.fileKinds.doc', FILE_KIND_FALLBACK_LABELS.doc);
+    case 'scene':
+      return translate('editor.contentBrowser.fileKinds.scene', FILE_KIND_FALLBACK_LABELS.scene);
+    case 'pack':
+      return translate('editor.contentBrowser.fileKinds.pack', FILE_KIND_FALLBACK_LABELS.pack);
+    case 'meta':
+      return translate('editor.contentBrowser.fileKinds.meta', FILE_KIND_FALLBACK_LABELS.meta);
+    case 'image':
+      return translate('editor.contentBrowser.fileKinds.image', FILE_KIND_FALLBACK_LABELS.image);
+    case 'audio':
+      return translate('editor.contentBrowser.fileKinds.audio', FILE_KIND_FALLBACK_LABELS.audio);
+    case 'model':
+      return translate('editor.contentBrowser.fileKinds.model', FILE_KIND_FALLBACK_LABELS.model);
+    case 'font':
+      return translate('editor.contentBrowser.fileKinds.font', FILE_KIND_FALLBACK_LABELS.font);
+    case 'ui':
+      return translate('editor.contentBrowser.fileKinds.ui', FILE_KIND_FALLBACK_LABELS.ui);
+    case 'data':
+      return translate('editor.contentBrowser.fileKinds.data', FILE_KIND_FALLBACK_LABELS.data);
+    default:
+      return translate('editor.contentBrowser.fileKinds.other', FILE_KIND_FALLBACK_LABELS.other);
   }
 }
 
@@ -298,21 +314,33 @@ export function orderContextMenuEntries(entries: CBContextMenuEntry[]): CBContex
 
 export function menuIconForId(id: string): string {
   switch (id) {
-    case 'open': return 'folder';
-    case 'new-folder': return 'folder-plus';
-    case 'rename': return 'pencil';
-    case 'duplicate': return 'copy';
-    case 'delete': return 'trash-2';
-    case 'copy-guid': return 'hash';
-    case 'copy-path': return 'copy';
-    case 'add-to-scene': return 'box';
-    case 'assign': return 'crosshair';
+    case 'open':
+      return 'folder';
+    case 'new-folder':
+      return 'folder-plus';
+    case 'rename':
+      return 'pencil';
+    case 'duplicate':
+      return 'copy';
+    case 'delete':
+      return 'trash-2';
+    case 'copy-guid':
+      return 'hash';
+    case 'copy-path':
+      return 'copy';
+    case 'add-to-scene':
+      return 'box';
+    case 'assign':
+      return 'crosshair';
     case 'add-to-chat':
     case 'add-folder-chat':
     case 'add-folder-summary':
-    case 'add-with-deps': return 'spark';
-    case 'toggle-fav': return 'star';
-    default: return 'file';
+    case 'add-with-deps':
+      return 'spark';
+    case 'toggle-fav':
+      return 'star';
+    default:
+      return 'file';
   }
 }
 
@@ -324,62 +352,153 @@ export function fileSpecificMenuItems(
 ): { id: string; label: string; icon: string; disabled?: boolean }[] {
   switch (file.family) {
     case 'doc':
-      return [{ id: 'render-preview', label: t('editor.contentBrowser.contextMenu.renderPreview'), icon: 'eye' }];
+      return [
+        {
+          id: 'render-preview',
+          label: t('editor.contentBrowser.contextMenu.renderPreview'),
+          icon: 'eye',
+        },
+      ];
     case 'code':
       return [
-        { id: 'open-external-ide', label: t('editor.contentBrowser.contextMenu.openExternalIde'), icon: 'square-arrow-out-up-right', disabled: true },
+        {
+          id: 'open-external-ide',
+          label: t('editor.contentBrowser.contextMenu.openExternalIde'),
+          icon: 'square-arrow-out-up-right',
+          disabled: true,
+        },
       ];
     case 'scene':
       return [
-        { id: 'play', label: t('editor.contentBrowser.contextMenu.play'), icon: 'play', disabled: true },
+        {
+          id: 'play',
+          label: t('editor.contentBrowser.contextMenu.play'),
+          icon: 'play',
+          disabled: true,
+        },
         {
           id: 'set-default-scene',
           label: t('editor.contentBrowser.contextMenu.setDefaultScene'),
           icon: 'flag',
-          disabled: sceneProjection?.sceneGuid === undefined || sceneProjection.sceneGuid === sceneProjection.defaultSceneGuid,
+          disabled:
+            sceneProjection?.sceneGuid === undefined ||
+            sceneProjection.sceneGuid === sceneProjection.defaultSceneGuid,
         },
-        { id: 'expand-sub-assets', label: t('editor.contentBrowser.contextMenu.expandSubAssets'), icon: 'chevrons-up-down' },
+        {
+          id: 'expand-sub-assets',
+          label: t('editor.contentBrowser.contextMenu.expandSubAssets'),
+          icon: 'chevrons-up-down',
+        },
         { id: 'copy-guid', label: t('editor.contentBrowser.contextMenu.copyGuid'), icon: 'hash' },
       ];
     case 'pack':
       return [
-        { id: 'expand-sub-assets', label: t('editor.contentBrowser.contextMenu.expandSubAssets'), icon: 'chevrons-up-down' },
+        {
+          id: 'expand-sub-assets',
+          label: t('editor.contentBrowser.contextMenu.expandSubAssets'),
+          icon: 'chevrons-up-down',
+        },
         ...(file.name?.toLowerCase().endsWith('.pack.ts')
           ? [
               { id: 'asset-source-inspect', label: 'Inspect Asset Source', icon: 'search' },
               { id: 'asset-source-rebuild', label: 'Rebuild Asset Source', icon: 'refresh-cw' },
               { id: 'asset-source-cold-cook', label: 'Cold Cook Asset Source', icon: 'flame' },
             ]
-          : [{ id: 'reimport', label: t('editor.contentBrowser.contextMenu.reimport'), icon: 'refresh-cw', disabled: firstAsset?.sourcePath === undefined }]),
+          : [
+              {
+                id: 'reimport',
+                label: t('editor.contentBrowser.contextMenu.reimport'),
+                icon: 'refresh-cw',
+                disabled: firstAsset?.sourcePath === undefined,
+              },
+            ]),
         { id: 'copy-guid', label: t('editor.contentBrowser.contextMenu.copyGuid'), icon: 'hash' },
       ];
     case 'meta':
       return [
-        { id: 'expand-sub-assets', label: t('editor.contentBrowser.contextMenu.expandSubAssets'), icon: 'chevrons-up-down' },
-        { id: 'reimport', label: t('editor.contentBrowser.contextMenu.reimport'), icon: 'refresh-cw', disabled: firstAsset?.sourcePath === undefined },
-        { id: 'locate-source-file', label: t('editor.contentBrowser.contextMenu.locateSourceFile'), icon: 'crosshair', disabled: true },
+        {
+          id: 'expand-sub-assets',
+          label: t('editor.contentBrowser.contextMenu.expandSubAssets'),
+          icon: 'chevrons-up-down',
+        },
+        {
+          id: 'reimport',
+          label: t('editor.contentBrowser.contextMenu.reimport'),
+          icon: 'refresh-cw',
+          disabled: firstAsset?.sourcePath === undefined,
+        },
+        {
+          id: 'locate-source-file',
+          label: t('editor.contentBrowser.contextMenu.locateSourceFile'),
+          icon: 'crosshair',
+          disabled: true,
+        },
         { id: 'copy-guid', label: t('editor.contentBrowser.contextMenu.copyGuid'), icon: 'hash' },
       ];
     case 'model':
       return [
-        { id: 'import-as-asset', label: t('editor.contentBrowser.contextMenu.importAsAsset'), icon: 'box', disabled: true },
-        { id: 'reimport', label: t('editor.contentBrowser.contextMenu.reimport'), icon: 'refresh-cw', disabled: firstAsset?.sourcePath === undefined },
-        { id: 'generate-meta', label: t('editor.contentBrowser.contextMenu.generateMeta'), icon: 'file-cog', disabled: true },
+        {
+          id: 'import-as-asset',
+          label: t('editor.contentBrowser.contextMenu.importAsAsset'),
+          icon: 'box',
+          disabled: true,
+        },
+        {
+          id: 'reimport',
+          label: t('editor.contentBrowser.contextMenu.reimport'),
+          icon: 'refresh-cw',
+          disabled: firstAsset?.sourcePath === undefined,
+        },
+        {
+          id: 'generate-meta',
+          label: t('editor.contentBrowser.contextMenu.generateMeta'),
+          icon: 'file-cog',
+          disabled: true,
+        },
       ];
     case 'image':
       return [
-        { id: 'import-as-texture', label: t('editor.contentBrowser.contextMenu.importAsTexture'), icon: 'image', disabled: true },
-        { id: 'set-as-icon', label: t('editor.contentBrowser.contextMenu.setAsIcon'), icon: 'app-window', disabled: true },
+        {
+          id: 'import-as-texture',
+          label: t('editor.contentBrowser.contextMenu.importAsTexture'),
+          icon: 'image',
+          disabled: true,
+        },
+        {
+          id: 'set-as-icon',
+          label: t('editor.contentBrowser.contextMenu.setAsIcon'),
+          icon: 'app-window',
+          disabled: true,
+        },
       ];
     case 'audio':
       return [
-        { id: 'import-as-audio', label: t('editor.contentBrowser.contextMenu.importAsAudio'), icon: 'music', disabled: true },
+        {
+          id: 'import-as-audio',
+          label: t('editor.contentBrowser.contextMenu.importAsAudio'),
+          icon: 'music',
+          disabled: true,
+        },
         { id: 'audition', label: t('editor.contentBrowser.contextMenu.audition'), icon: 'play' },
       ];
     case 'font':
-      return [{ id: 'import-as-font', label: t('editor.contentBrowser.contextMenu.importAsFont'), icon: 'type', disabled: true }];
+      return [
+        {
+          id: 'import-as-font',
+          label: t('editor.contentBrowser.contextMenu.importAsFont'),
+          icon: 'type',
+          disabled: true,
+        },
+      ];
     case 'data':
-      return [{ id: 'visualize-in-scene', label: t('editor.contentBrowser.contextMenu.visualizeInScene'), icon: 'box-select', disabled: true }];
+      return [
+        {
+          id: 'visualize-in-scene',
+          label: t('editor.contentBrowser.contextMenu.visualizeInScene'),
+          icon: 'box-select',
+          disabled: true,
+        },
+      ];
     default:
       return [];
   }

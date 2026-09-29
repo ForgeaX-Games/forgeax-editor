@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { build as viteBuild } from 'vite';
+import { spawnSync } from 'node:child_process';
 import {
   mkdtempSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -12,8 +15,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import {
+  discoverMaterialPackages,
   discoverForgeaxWorkspacePackages,
-  discoverGameMaterialPackages,
   discoverParticleCodeModules,
   engineVitePreset,
   resolveBrowserPackageExportPath,
@@ -74,7 +77,62 @@ describe('particle code module discovery', () => {
   });
 });
 
+describe('authored material package discovery', () => {
+  test('returns only single-material Pack contracts from the active roots', () => {
+    const root = tempRoot();
+    const assets = join(root, 'assets');
+    mkdirSync(assets);
+    const materialPath = join(assets, 'pulse.pack.json');
+    writeFileSync(
+      materialPath,
+      JSON.stringify({
+        schemaVersion: '2.0.0',
+        kind: 'internal-text-package',
+        assets: [{ kind: 'material', sourceKey: 'pulse.wgsl' }],
+      }),
+    );
+    writeFileSync(
+      join(assets, 'scene.pack.json'),
+      JSON.stringify({
+        schemaVersion: '2.0.0',
+        kind: 'internal-text-package',
+        assets: [{ kind: 'scene', sourceKey: 'scene.pack.json' }, { kind: 'scene', sourceKey: 'other' },
+        ],
+      }),
+    );
+
+    expect(discoverMaterialPackages([assets])).toEqual([materialPath]);
+  });
+});
+
 describe('shared engine Vite preset', () => {
+  test('discovers packaged dependencies from resources without a source checkout layout', () => {
+    const resources = tempRoot();
+    for (const name of ['engine-app', 'engine-render', 'packaged-fixture']) {
+      mkdirSync(join(resources, 'engine/node_modules/@forgeax', name), { recursive: true,
+      });
+    }
+    const entry = resolve(import.meta.dir, '../vite/engine-vite-preset.ts');
+    const result = spawnSync(process.execPath, ['-e', `import {discoverForgeaxWorkspacePackages} from ${JSON.stringify(entry)}; console.log(JSON.stringify(discoverForgeaxWorkspacePackages()));`,
+      ],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          FORGEAX_STARTUP_PROFILE: 'desktop-prod',
+          FORGEAX_RESOURCE_ROOT: resources,
+        },
+      },
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).sort()).toEqual([
+      '@forgeax/engine-app',
+      '@forgeax/engine-render',
+      '@forgeax/packaged-fixture',
+      '@forgeax/scene',
+    ]);
+  });
+
   test('discovers workspace exclusions from the Windows hoisted fallback', () => {
     const root = tempRoot();
     const incompleteLocalScope = join(root, 'packages', 'edit-runtime', 'node_modules', '@forgeax');
@@ -84,97 +142,111 @@ describe('shared engine Vite preset', () => {
     mkdirSync(join(hoistedScope, 'engine-render'), { recursive: true });
     mkdirSync(join(hoistedScope, 'editor-core'), { recursive: true });
 
-    expect(discoverForgeaxWorkspacePackages([
-      incompleteLocalScope,
-      hoistedScope,
-    ])).toEqual(expect.arrayContaining([
-      '@forgeax/scene',
-      '@forgeax/engine-render',
-      '@forgeax/editor-core',
-    ]));
-  });
-
-  test('discovers the packaged engine resource scope a desktop host declares', () => {
-    const root = tempRoot();
-    const packagedScope = join(root, 'engine', 'node_modules', '@forgeax');
-    mkdirSync(join(packagedScope, 'engine-app'), { recursive: true });
-    mkdirSync(join(packagedScope, 'engine-render'), { recursive: true });
-    mkdirSync(join(packagedScope, 'editor-core'), { recursive: true });
-    const previous = process.env.FORGEAX_ENGINE_RESOURCE_ROOT;
-    process.env.FORGEAX_ENGINE_RESOURCE_ROOT = join(root, 'engine');
-    try {
-      expect(discoverForgeaxWorkspacePackages()).toEqual(expect.arrayContaining([
-        '@forgeax/scene',
-        '@forgeax/engine-render',
-        '@forgeax/editor-core',
-      ]));
-    } finally {
-      if (previous === undefined) delete process.env.FORGEAX_ENGINE_RESOURCE_ROOT;
-      else process.env.FORGEAX_ENGINE_RESOURCE_ROOT = previous;
-    }
+    expect(discoverForgeaxWorkspacePackages([incompleteLocalScope, hoistedScope])).toEqual(
+      expect.arrayContaining(['@forgeax/scene', '@forgeax/engine-render', '@forgeax/editor-core']),
+    );
   });
 
   test('fails before optimizeDeps when no workspace package graph is materialized', () => {
     const root = tempRoot();
-    expect(() => discoverForgeaxWorkspacePackages([
-      join(root, 'missing-local-scope'),
-      join(root, 'missing-hoisted-scope'),
-    ])).toThrow('run the workspace dependency setup before starting');
-  });
-
-  test('registers only source-backed material packages with the shader plugin', () => {
-    const root = tempRoot();
-    const authoredPath = join(root, 'hit-flash-material.pack.json');
-    const runtimeOnlyPath = join(root, 'base-material.pack.json');
-    writeFileSync(authoredPath, JSON.stringify({
-      schemaVersion: '2.0.0',
-      kind: 'internal-text-package',
-      assets: [{
-        guid: '019e7535-5e5e-45fe-a328-0b08e3a72747',
-        kind: 'material',
-        sourceKey: 'shaders/hit-flash.wgsl',
-        payload: { kind: 'material', passes: [] },
-        refs: [],
-      }],
-    }));
-    writeFileSync(runtimeOnlyPath, JSON.stringify({
-      schemaVersion: '2.0.0',
-      kind: 'internal-text-package',
-      assets: [{
-        guid: 'eb5bf6e6-2e47-4d9a-99fd-81843228c9b3',
-        kind: 'material',
-        payload: { kind: 'material', passes: [] },
-        refs: [],
-      }],
-    }));
-
-    expect(discoverGameMaterialPackages([root])).toEqual([authoredPath]);
-    const source = readFileSync(resolve(import.meta.dir, '../vite/engine-vite-preset.ts'), 'utf8');
-    expect(source).toContain('materialPackagesProvider');
-    expect(source).toContain('discoverGameMaterialPackages(packRootsProvider)');
+    expect(() =>
+      discoverForgeaxWorkspacePackages([
+        join(root, 'missing-local-scope'),
+        join(root, 'missing-hoisted-scope'),
+      ]),
+    ).toThrow('run the workspace dependency setup before starting');
   });
 
   test('keeps the host-facing config-time facade on the same implementation', () => {
     expect(publicEngineVitePreset).toBe(engineVitePreset);
   });
 
+  test('loads the public preset through an external Vite config loader', async () => {
+    const root = tempRoot();
+    const packageDir = join(root, 'node_modules', '@forgeax');
+    mkdirSync(packageDir, { recursive: true });
+    symlinkSync(resolve(import.meta.dir, '../..'), join(packageDir, 'editor'), 'dir');
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module' }));
+    const configPath = join(root, 'vite.config.ts');
+    writeFileSync(
+      configPath,
+      [
+        "import { engineVitePreset } from '@forgeax/editor/vite-preset';",
+        "export default engineVitePreset({ base: '/', gameDirAbs: null });",
+        '',
+      ].join('\n'),
+    );
+    const loaderPath = join(root, 'extensionless-ts-loader.mjs');
+    writeFileSync(
+      loaderPath,
+      [
+        'export async function resolve(specifier, context, nextResolve) {',
+        '  try { return await nextResolve(specifier, context); }',
+        '  catch (error) {',
+        "    if (error?.code === 'ERR_MODULE_NOT_FOUND' && context.parentURL?.endsWith('/target-profile-importer.ts') && specifier === './target-profile-asset') return nextResolve('./target-profile-asset.ts', context);",
+        '    throw error;',
+        '  }',
+        '}',
+      ].join('\n'),
+    );
+
+    const result = spawnSync(
+      'node',
+      [
+        '--experimental-strip-types',
+        '--experimental-loader',
+        loaderPath,
+        '--input-type=module',
+        '-e',
+        [
+          "import { loadConfigFromFile } from 'vite';",
+          `const loaded = await loadConfigFromFile({ command: 'build', mode: 'production' }, ${JSON.stringify(configPath)}, ${JSON.stringify(root)}, 'silent', undefined, 'bundle');`,
+          `if (!loaded || loaded.path !== ${JSON.stringify(configPath)} || !loaded.config.plugins) throw new Error('public Vite preset config was not loaded');`,
+        ].join('\n'),
+      ],
+      { cwd: resolve(import.meta.dir, '../..'), encoding: 'utf8' },
+    );
+
+    if (result.status !== 0) {
+      throw new Error(
+        `external Vite config loader failed for ${configPath}:\n${result.stdout}\n${result.stderr}`,
+      );
+    }
+    expect(readFileSync(resolve(import.meta.dir, '../../engine-vite-preset.ts'), 'utf8')).toContain(
+      "export * from './scripts/vite/engine-vite-preset.ts';",
+    );
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain('ERR_MODULE_NOT_FOUND');
+  });
+
+  test('keeps forgeaxShader as the sole shader registration owner', () => {
+    const preset = engineVitePreset({ base: '/', gameDirAbs: null });
+    const shaderPlugins = preset.plugins
+      .filter(
+        (plugin): plugin is { name: string } =>
+          typeof plugin === 'object' &&
+          plugin !== null &&
+          'name' in plugin &&
+          typeof plugin.name === 'string',
+      )
+      .filter((plugin) => plugin.name === 'forgeax:shader');
+
+    expect(shaderPlugins).toHaveLength(1);
+  });
+
   test('pre-bundles late physics imports while leaving Noble subpaths native', () => {
     const preset = engineVitePreset({ base: '/', gameDirAbs: null });
 
     expect(preset.optimizeDeps.include).toHaveLength(1);
-    expect(preset.optimizeDeps.include[0]).toEndWith(
-      'packages/engine/packages/physics-rapier3d/node_modules/@dimforge/rapier3d-compat',
-    );
+    expect(preset.optimizeDeps.include[0]).toEndWith('node_modules/@dimforge/rapier3d-compat');
     expect(preset.optimizeDeps.include.some((entry) => entry.includes('@noble/'))).toBe(false);
   });
 
   test('keeps dynamic Rapier compat imports on native ESM resolution', () => {
     const preset = engineVitePreset({ base: '/', gameDirAbs: null });
 
-    expect(preset.optimizeDeps.exclude).toEqual(expect.arrayContaining([
-      '@dimforge/rapier2d-compat',
-      '@dimforge/rapier3d-compat',
-    ]));
+    expect(preset.optimizeDeps.exclude).toEqual(
+      expect.arrayContaining(['@dimforge/rapier2d-compat', '@dimforge/rapier3d-compat']),
+    );
   });
 
   test('keeps project publication under the game and build cache under the host', () => {
@@ -207,18 +279,16 @@ describe('shared engine Vite preset', () => {
     }
   });
 
-  test('does not let a nested Play host dedupe through the parent checkout', () => {
-    const playNodeModules = resolve(import.meta.dir, '../../packages/play-runtime/node_modules');
+  test('dedupes Play dependencies from this checkout hoisted graph', () => {
+    const playNodeModules = resolve(import.meta.dir, '../../node_modules');
     const preset = engineVitePreset({
       base: '/preview/',
       gameDirAbs: null,
       gameSource: { packageRoots: [playNodeModules] },
     });
 
-    // engine-plugin is intentionally transitive in Play. Dedupe would anchor
-    // it at Play's root, walk out of a nested worktree, and select the primary
-    // checkout's incompatible package. engine-app is a direct Play dependency
-    // and remains deduped at the host root.
+    // Direct Play dependencies resolve from the hoisted checkout graph;
+    // retain the existing native-resolution policy for engine-plugin.
     expect(preset.resolve.dedupe).not.toContain('@forgeax/engine-plugin');
     expect(preset.resolve.dedupe).toContain('@forgeax/engine-app');
   });
@@ -262,11 +332,15 @@ describe('shared engine Vite preset', () => {
 
 describe('browser package export resolution', () => {
   test('prefers browser over Node import for dual-export packages', () => {
-    expect(resolveBrowserPackageExportPath({
-      browser: './dist/browser.mjs',
-      import: './dist/index.mjs',
-    })).toBe('./dist/browser.mjs');
-    expect(resolveBrowserPackageExportPath({ import: './dist/index.mjs' })).toBe('./dist/index.mjs');
+    expect(
+      resolveBrowserPackageExportPath({
+        browser: './dist/browser.mjs',
+        import: './dist/index.mjs',
+      }),
+    ).toBe('./dist/browser.mjs');
+    expect(resolveBrowserPackageExportPath({ import: './dist/index.mjs' })).toBe(
+      './dist/index.mjs',
+    );
     expect(resolveBrowserPackageExportPath('./dist/flat.mjs')).toBe('./dist/flat.mjs');
     expect(resolveBrowserPackageExportPath(undefined)).toBeUndefined();
   });
@@ -275,19 +349,24 @@ describe('browser package export resolution', () => {
     const hostRoot = tempRoot();
     const packageDir = resolve(hostRoot, 'packages/engine-dual-export');
     mkdirSync(packageDir, { recursive: true });
-    writeFileSync(join(packageDir, 'package.json'), JSON.stringify({
-      name: '@forgeax/engine-dual-export',
-      exports: {
-        '.': {
-          types: './dist/index.d.ts',
-          browser: './dist/browser.mjs',
-          import: './dist/index.mjs',
+    writeFileSync(
+      join(packageDir, 'package.json'),
+      JSON.stringify({
+        name: '@forgeax/engine-dual-export',
+        exports: {
+          '.': {
+            types: './dist/index.d.ts',
+            browser: './dist/browser.mjs',
+            import: './dist/index.mjs',
+          },
         },
-      },
-    }));
-    expect(resolveGameEngineEntry('@forgeax/engine-dual-export', { packageRoots: [hostRoot] })).toBe(
-      resolve(packageDir, 'dist/browser.mjs'),
+      }),
     );
+    expect(
+      resolveGameEngineEntry('@forgeax/engine-dual-export', {
+        packageRoots: [hostRoot],
+      }),
+    ).toBe(resolve(packageDir, 'dist/browser.mjs'));
   });
 });
 
@@ -317,10 +396,9 @@ describe('DDC consumer census', () => {
   }
 
   test('records every TypeScript root/rebind consumer and the fixed generation seam', () => {
-    const findings = Object.fromEntries(tsConsumers.map((relativePath) => [
-      relativePath,
-      ddcRootLiteral.test(source(relativePath)),
-    ]));
+    const findings = Object.fromEntries(
+      tsConsumers.map((relativePath) => [relativePath, ddcRootLiteral.test(source(relativePath))]),
+    );
 
     expect(findings).toEqual({
       'scripts/vite/engine-vite-preset.ts': true,
@@ -329,12 +407,17 @@ describe('DDC consumer census', () => {
       'scripts/fx.ts': false,
     });
     expect(source('scripts/fx.ts')).toContain('FORGEAX_RUNTIME_GENERATION');
-    expect(source('packages/play-runtime/vite.config.ts')).toContain('createRuntimeScopeController');
+    expect(source('packages/play-runtime/vite.config.ts')).toContain(
+      'createRuntimeScopeController',
+    );
   });
 
   test('keeps mjs/cjs script and JSON/pack fixture channels free of host roots', () => {
     const scriptFiles = filesWithExtension(resolve(repoRoot, 'scripts'), ['.mjs', '.cjs']);
-    const fixtureRoots = [resolve(repoRoot, 'packages/play-runtime'), resolve(repoRoot, 'apps/standalone')];
+    const fixtureRoots = [
+      resolve(repoRoot, 'packages/play-runtime'),
+      resolve(repoRoot, 'apps/standalone'),
+    ];
     const fixtureFiles = fixtureRoots.flatMap((root) =>
       filesWithExtension(root, ['.json', '.pack.json']),
     );
@@ -345,4 +428,64 @@ describe('DDC consumer census', () => {
       expect(readFileSync(path, 'utf8')).not.toMatch(ddcRootLiteral);
     }
   });
+});
+
+test('shared preset produces UI payloads for template assets', async () => {
+  const root = tempRoot();
+  const assets = join(root, 'assets');
+  mkdirSync(assets);
+  const guid = '019e3969-1d48-7c3b-ac24-6d68f457065f';
+  writeFileSync(join(root, 'main.js'), 'export default 1;');
+  writeFileSync(join(assets, 'hud.ui.html'), '<div class="hud">HUD</div>');
+  writeFileSync(join(assets, 'hud.ui.css'), '.hud { color: white; }');
+  writeFileSync(
+    join(assets, 'hud.ui.html.meta.json'),
+    JSON.stringify({
+      schemaVersion: '1.0.0',
+      kind: 'external-asset-package',
+      importer: 'ui',
+      source: 'hud.ui.html',
+      importSettings: {},
+      subAssets: [{ guid, sourceIndex: 0, kind: 'ui' }],
+    }),
+  );
+  const preset = engineVitePreset({ base: '/', gameDirAbs: root });
+  const dist = join(root, 'dist');
+  await viteBuild({
+    root,
+    configFile: false,
+    logLevel: 'silent',
+    plugins: [preset.pack],
+    build: { outDir: dist, rollupOptions: { input: join(root, 'main.js') } },
+  });
+  const files = readdirSync(dist, { recursive: true }) as string[];
+  const payloadFile = files.find((file) => file.includes(guid));
+  expect(payloadFile).toBeDefined();
+  if (!payloadFile) throw new Error('UI payload was not produced');
+  const payload = JSON.parse(readFileSync(join(dist, payloadFile), 'utf8'));
+  expect(payload.assets[0].payload.html).toContain('HUD');
+  expect(payload.assets[0].payload.css).toContain('.hud');
+}, 30_000);
+
+test('standalone host resolves Engine browser entrypoints without exposing Node build APIs', () => {
+  const configPath = resolve(import.meta.dir, '../../vite.config.ts');
+  const result = spawnSync(
+    process.execPath,
+    [
+      '-e',
+      `
+    import config from ${JSON.stringify(configPath)};
+    const plugin = config.plugins.flat(Infinity).find(p => p?.name === 'forgeax:standalone-engine-worktree-resolve');
+    console.log(JSON.stringify({
+      importer: plugin.resolveId('@forgeax/engine-import'),
+      build: plugin.resolveId('@forgeax/engine-pack/build'),
+    }));
+  `,
+    ],
+    { cwd: resolve(import.meta.dir, '../..'), encoding: 'utf8' },
+  );
+  if (result.status !== 0) throw new Error(result.stderr);
+  const resolved = JSON.parse(result.stdout.trim());
+  expect(resolved.importer).toEndWith('/import/dist/browser.mjs');
+  expect(resolved.build).toBeNull();
 });

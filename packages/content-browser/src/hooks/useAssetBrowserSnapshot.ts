@@ -128,7 +128,8 @@ export function useAssetBrowserSnapshot(
       timer = setTimeout(() => {
         timer = null;
         setLoading(true);
-        void model.refresh(hint).finally(() => setLoading(false));
+        void model.refresh(hint === 'scene-document-changed' ? 'pack-changed' : hint)
+          .finally(() => setLoading(false));
       }, 200);
     });
     if (!model) {

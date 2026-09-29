@@ -135,12 +135,34 @@ import { bus, dispatch, useSelection } from '@forgeax/editor-core';
 |:--|:--|
 | `.` | UI 组件（`ViewportBar`）、引擎集成（`createViewport`）、热重载（`applyScriptChange`、`initHotReload`） |
 | `./host-boot` | host 会话装配（`initHostSession`、`configureHostSession`），复用单 realm host 入口 |
+| `./keyboard-router-deps` | `buildKeyboardRouterDeps` and `createEditorKeyboardExtension`: Editor-owned keyboard policy and command contributions |
 | `./viewport/viewport-component` | `ViewportComponent`：一个 Runtime realm 内的引擎 viewport（canvas、World、renderer、camera）；host 可把该 realm 放入 iframe/page/WebView |
 | `./package.json` | 包元信息 |
 
+## Application keyboard contributions
+
+Standalone and IDE assembly each install `createEditorKeyboardExtension(deps)`
+once in their application extensions. Product consumers use the existing
+`@forgeax/editor/keyboard-router-deps` facade; the factory never installs a DOM
+listener or reads live Editor state during construction.
+
+| Owner | Contract |
+|:--|:--|
+| Application host | One capture router, focused-context first refusal, input/surface guards, and shortcut registration identity |
+| Editor extension | Raw Editor key policy, existing Gateway callbacks, Editor commands, and application-scope document save |
+| Settings | Reads the current host shortcut descriptions; locale changes preserve registration order and identity |
+
+Setup registers commands, contextual save, and raw shortcuts as one disposable
+unit. Unloading rejects retained command callbacks and fences pending select-all
+fallbacks. Labels remain live across locale changes without re-registration.
+
+> [!NOTE]
+> This boundary does not remove standalone's published Interface shell, startup,
+> or CSS dependency, and does not add a keyboard router to detached shells.
+
 ## VFX 生命周期契约
 
-Edit 侧由 `ViewportComponent` 创建且只创建一个 `VfxRuntimeHost`。这个 host 的 `feature` 在 `createApp` 前注入；`createApp` 成功后，它先绑定持久的 Edit World 与共享 `AssetRegistry`，再在每次 Play 中绑定一个全新的 Play World。GPU 模拟、资源 registry 和实体身份仍由 engine 所有，编辑器只提供 camera 读取、生命周期委托，并把 Renderer 的 `renderFeatureDiagnostics()` 投影到现有 diagnostics gateway。
+Edit 侧由 `ViewportComponent` 创建且只创建一个 `VfxRuntimeHost`。这个 host 的 `feature` 在 `createApp` 前注入；`createApp` 成功后，它先绑定持久的 Edit World 与共享 `AssetRegistry`，再在每次 Play 中绑定一个全新的 Play World。GPU 模拟、资源 registry 和实体身份仍由 engine 所有，编辑器只提供 camera 读取、生命周期委托，并把 Renderer `inspect().featureDiagnostics` 投影到现有 diagnostics gateway。
 
 ```mermaid
 sequenceDiagram

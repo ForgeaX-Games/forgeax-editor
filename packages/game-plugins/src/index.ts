@@ -21,8 +21,10 @@ interface NativeGameModule {
 }
 
 function isNativePlugin(value: unknown): value is Plugin {
-  return typeof value === 'function'
-    || (typeof value === 'object' && value !== null && 'apply' in value && typeof value.apply === 'function');
+  return (
+    typeof value === 'function'
+    || (typeof value === 'object' && value !== null && 'apply' in value && typeof value.apply === 'function')
+  );
 }
 
 /**
@@ -33,8 +35,9 @@ function isNativePlugin(value: unknown): value is Plugin {
  * only needs the same default Cordis Plugin shape before World installation.
  */
 function resolveNativePlugin(imported: unknown): Plugin | undefined {
-  const candidate = (typeof imported === 'object' && imported !== null)
-    ? (imported as NativeGameModule).default
+  const candidate =
+    typeof imported === 'object' && imported !== null
+      ? (imported as NativeGameModule).default
     : undefined;
   if (isNativePlugin(candidate)) return candidate;
   return undefined;
@@ -65,9 +68,14 @@ export function editorComponentVocabularyPlugin(): Plugin {
           if (!lease.ok) throw lease.error;
           return lease.value;
         });
-        const releasePhysicsComponents = registerPhysicsComponents(ctx.world);
+        // Register physics component schemas (RigidBody, Collider, etc.) so
+        // authored scenes carrying physics entities can be instantiated in the
+        // EDIT world. This registers ONLY the component definitions — NOT the
+        // physics simulation systems (those live in physicsPlugin, which the
+        // edit assembly intentionally does NOT call; see no-edit-physics-sim.test.ts).
+        const disposePhysics = registerPhysicsComponents(ctx.world as World);
         return () => {
-          releasePhysicsComponents();
+          disposePhysics();
           for (let index = leases.length - 1; index >= 0; index -= 1) {
             leases[index]?.dispose();
           }
@@ -208,6 +216,12 @@ export interface GamePluginLoad {
   readonly contexts?: readonly Context[];
 }
 
+/** Scene vocabulary owners opt in to activation before SceneAsset instantiation. */
+export function activatesBeforeScene(plugin: Plugin): boolean {
+  if (typeof plugin !== 'object' || plugin === null) return false;
+  return 'beforeScene' in plugin && plugin.beforeScene === true;
+}
+
 export interface GamePluginSystemDiagnostic {
   readonly pluginId: string;
   readonly system: string;
@@ -248,6 +262,103 @@ export interface BootstrapContext {
 
 export type BootstrapEntry = (world: World, ctx?: BootstrapContext) => void | Promise<void>;
 
+/** Resolved forge entry: legacy bootstrap fn, native Cordis plugin, or apply()-style module. */
+export type PlayGameEntry =
+  | BootstrapEntry
+  | Plugin
+  | { apply(ctx?: BootstrapContext): void | Promise<void> };
+
+/** Match play-runtime entry resolution so Editor ▶ Play loads game-3d-style default plugins. */
+export function normalizePlayGameEntry(module: unknown): PlayGameEntry | null {
+  if (typeof module !== 'object' || module === null) return null;
+  const record = module as { default?: unknown; bootstrap?: unknown };
+  if (typeof record.bootstrap === 'function') return record.bootstrap as BootstrapEntry;
+  const candidate = record.default ?? record.bootstrap;
+  if (typeof candidate === 'function') return candidate as BootstrapEntry;
+  if (
+    typeof candidate === 'object'
+    && candidate !== null
+    && typeof (candidate as { apply?: unknown }).apply === 'function'
+  ) {
+    return candidate as PlayGameEntry;
+  }
+  return null;
+}
+
+export function isNativeCordisPlugin(entry: PlayGameEntry): entry is Plugin {
+  return (
+    typeof entry === 'object'
+    && entry !== null
+    && Array.isArray((entry as { readonly inject?: unknown }).inject)
+  );
+}
+
+/** forge.json 2.0 engine-realm plugin modules (relative paths like assets/plugin.ts). */
+export interface ForgePluginEntryLike {
+  readonly name: string;
+  readonly disabled?: boolean;
+  readonly realm?: string;
+  readonly group?: boolean;
+  readonly config?: unknown;
+}
+
+/** Rapier backend declared in forge.json 2.0 `plugins` (matches edit-runtime resolveEditPhysics). */
+export type ForgePhysicsBackend = 'rapier-3d' | 'rapier-2d';
+
+export function resolvePhysicsBackendFromForgePlugins(
+  plugins: readonly ForgePluginEntryLike[] | undefined,
+): ForgePhysicsBackend | undefined {
+  if (plugins === undefined || plugins.length === 0) return undefined;
+  const names = new Set<string>();
+  const visit = (entries: readonly ForgePluginEntryLike[]): void => {
+    for (const entry of entries) {
+      if (entry.disabled === true) continue;
+      names.add(entry.name);
+      if (entry.group === true && Array.isArray(entry.config)) {
+        visit(entry.config as readonly ForgePluginEntryLike[]);
+      }
+    }
+  };
+  visit(plugins);
+  if (names.has('@forgeax/engine/physics/rapier3d')) return 'rapier-3d';
+  if (names.has('@forgeax/engine/physics/rapier2d')) return 'rapier-2d';
+  return undefined;
+}
+
+export function listForgeEnginePluginModulePaths(
+  plugins: readonly ForgePluginEntryLike[],
+): string[] {
+  const paths: string[] = [];
+  const visit = (entries: readonly ForgePluginEntryLike[]): void => {
+    for (const entry of entries) {
+      if (entry.disabled === true) continue;
+      if (entry.realm === 'host' || entry.realm === 'build') continue;
+      if (entry.name.startsWith('./') || entry.name.startsWith('../')) {
+        paths.push(entry.name.replace(/^\.\//, ''));
+      }
+      if (entry.group === true && Array.isArray(entry.config)) {
+        visit(entry.config as readonly ForgePluginEntryLike[]);
+      }
+    }
+  };
+  visit(plugins);
+  return [...new Set(paths)];
+}
+
+/** Prefer forge.json 2.0 plugin paths; fall back to asset-resident *.plugin.ts paths. */
+export function resolveGamePluginModuleDescriptors(
+  forgePaths: readonly string[],
+  assetPluginPaths: readonly string[],
+  gameRoot: string,
+  gameFsBase: string,
+): GamePluginModule[] {
+  const relPaths = forgePaths.length > 0 ? [...forgePaths] : assetPluginPaths;
+  return relPaths.map((clientPath) => ({
+    clientPath,
+    url: gamePluginImportUrl(clientPath, gameRoot, gameFsBase),
+  }));
+}
+
 export interface GameContext {
   readonly app: App;
   readonly world: World;
@@ -264,7 +375,8 @@ function validateProducer(
   | { readonly ok: true; readonly producer: GamePluginProducer }
   | { readonly ok: false; readonly message: string } {
   if (!isRecord(value) || typeof value.register !== 'function' || !isRecord(value.descriptor)) {
-    return { ok: false, message: 'gameplay export must provide descriptor and register(context)' };
+    return { ok: false, message: 'gameplay export must provide descriptor and register(context)',
+    };
   }
   const descriptor = value.descriptor as unknown as GamePluginDescriptor;
   if (descriptor.contract !== GAMEPLAY_PRODUCER_CONTRACT) {
@@ -280,10 +392,16 @@ function validateProducer(
     };
   }
   if (typeof descriptor.id !== 'string' || descriptor.id.trim() === '') {
-    return { ok: false, message: 'gameplay producer descriptor.id must be non-empty' };
+    return {
+      ok: false,
+      message: 'gameplay producer descriptor.id must be non-empty',
+    };
   }
   if (typeof descriptor.title !== 'string' || descriptor.title.trim() === '') {
-    return { ok: false, message: 'gameplay producer descriptor.title must be non-empty' };
+    return {
+      ok: false,
+      message: 'gameplay producer descriptor.title must be non-empty',
+    };
   }
   return { ok: true, producer: value as unknown as GamePluginProducer };
 }
@@ -330,7 +448,10 @@ export async function loadGamePluginModules(deps: {
     if (gameplay !== undefined) {
       const validation = validateProducer(gameplay);
       if (!validation.ok) {
-        errors.push({ clientPath: module.clientPath, message: validation.message });
+        errors.push({
+          clientPath: module.clientPath,
+          message: validation.message,
+        });
       } else {
         producer = validation.producer;
         descriptor = producer.descriptor;
@@ -353,7 +474,10 @@ export async function loadGamePluginModules(deps: {
   if (deps.world !== undefined && plugins.length > 0) {
     const beforeComponents = new Set(deps.world.components.entries().keys());
     const beforeSystems = new Set(deps.world.inspect().systems.map((system) => system.name));
-    const context = await createWorldContext(deps.world, plugins.flatMap((entry) => entry.plugin === undefined ? [] : [entry.plugin]));
+    const context = await createWorldContext(
+      deps.world,
+      plugins.flatMap((entry) => (entry.plugin === undefined ? [] : [entry.plugin])),
+    );
     contexts.push(context);
     for (const name of deps.world.components.entries().keys()) {
       if (!beforeComponents.has(name)) allComponents.push(name);
@@ -418,11 +542,20 @@ export function describeGamePluginSystems(
 /** Install producer-owned actions/reads and lifecycle hooks for one Play World. */
 export async function installGamePluginProducers(
   load: GamePluginLoad,
-  deps: { readonly world: World; readonly gameProjection?: GameProjectionRegistrar },
+  deps: {
+    readonly world: World;
+    readonly gameProjection?: GameProjectionRegistrar;
+  },
 ): Promise<GamePluginInstallResult> {
   const diagnostics: GamePluginDiagnostic[] = [];
-  const cleanups: Array<{ readonly pluginId: string; readonly fn: () => void }> = [];
-  const reloads: Array<{ readonly pluginId: string; readonly fn: () => void | Promise<void> }> = [];
+  const cleanups: Array<{
+    readonly pluginId: string;
+    readonly fn: () => void;
+  }> = [];
+  const reloads: Array<{
+    readonly pluginId: string;
+    readonly fn: () => void | Promise<void>;
+  }> = [];
   const descriptors = load.plugins.flatMap((plugin) =>
     plugin.descriptor ? [plugin.descriptor] : [],
   );
@@ -557,34 +690,65 @@ async function listPluginFiles(deps: GamePluginDeps): Promise<string[]> {
   return collectPluginPaths(json.tree ?? null).sort();
 }
 
-export function gamePluginImportUrl(clientPath: string, gameRoot: string, gameFsBase: string): string {
+export function gamePluginImportUrl(
+  clientPath: string,
+  gameRoot: string,
+  gameFsBase: string,
+): string {
   const prefix = gameRoot ? `${gameRoot}/` : '';
   const relativePath = clientPath.startsWith(prefix) ? clientPath.slice(prefix.length) : clientPath;
   return `${gameFsBase}/${relativePath}`;
 }
 
+async function listForgeEnginePluginFiles(deps: GamePluginDeps): Promise<string[] | null> {
+  const forgePath = deps.gameRoot ? `${deps.gameRoot}/forge.json` : 'forge.json';
+  try {
+    const response = await deps.fetch(
+      `/api/files?path=${encodeURIComponent(forgePath)}&optional=1`,
+      { cache: 'no-store' },
+    );
+    if (!response.ok) return null;
+    const json = (await response.json()) as { content?: string };
+    if (!json.content) return null;
+    const forge = JSON.parse(json.content) as {
+      schemaVersion?: string;
+      plugins?: readonly ForgePluginEntryLike[];
+    };
+    if (forge.schemaVersion !== '2.0.0' || !Array.isArray(forge.plugins)) return null;
+    const paths = listForgeEnginePluginModulePaths(forge.plugins);
+    return paths.length > 0 ? paths : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function ensureGamePluginsLoaded(deps: GamePluginDeps): Promise<GamePluginLoad> {
   const gameFsBase = await deps.resolveGameFsBase();
   return (async (): Promise<GamePluginLoad> => {
-    let files: string[];
-    try {
-      files = await listPluginFiles(deps);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const assetsRoot = deps.gameRoot ? `${deps.gameRoot}/assets` : 'assets';
-      console.warn('[editor] game-plugins: listing failed:', message);
-      return {
-        plugins: [],
-        systems: [],
-        components: [],
-        errors: [{ clientPath: assetsRoot, message }],
-      };
+    const forgeFiles = await listForgeEnginePluginFiles(deps);
+    let assetFiles: string[] = [];
+    if (forgeFiles === null) {
+      try {
+        assetFiles = await listPluginFiles(deps);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const assetsRoot = deps.gameRoot ? `${deps.gameRoot}/assets` : 'assets';
+        console.warn('[editor] game-plugins: listing failed:', message);
+        return {
+          plugins: [],
+          systems: [],
+          components: [],
+          errors: [{ clientPath: assetsRoot, message }],
+        };
+      }
     }
 
-    const modules: GamePluginModule[] = files.map((clientPath) => ({
-      clientPath,
-      url: gamePluginImportUrl(clientPath, deps.gameRoot, gameFsBase),
-    }));
+    const modules = resolveGamePluginModuleDescriptors(
+      forgeFiles ?? [],
+      assetFiles,
+      deps.gameRoot,
+      gameFsBase,
+    );
     return loadGamePluginModules({
       modules,
       importModule: (url) => import(/* @vite-ignore */ url),

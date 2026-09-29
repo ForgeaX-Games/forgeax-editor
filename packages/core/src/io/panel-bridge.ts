@@ -67,13 +67,15 @@ export interface PanelBridgeEvents {
   /** In-process edit-runtime diagnostics; play keeps its real iframe VAG wire. */
   editorHealth: { level: 'info' | 'warn' | 'error'; code: string; message: string; ts: number };
   editorConsole: { level: 'log' | 'warn' | 'error' | 'info' | 'debug'; text: string; ts: number };
-  editorNetwork: { kind: 'fetch' | 'xhr' | 'ws'; method: string; url: string; status: number; ms: number; ok: boolean; ts: number };
+  editorNetwork: { kind: 'fetch' | 'xhr' | 'ws'; method: string; url: string; status: number; ms: number; ok: boolean; ts: number;
+  };
   editorRef: EditorRefPayload;
   addAssetToChat: AssetChatRef[];
 }
 
 export type EditorRefPayload =
-  | { kind: 'entity'; id: EntityId; name: string; components: string[]; source?: { plugin?: string; docId?: string } }
+  | { kind: 'entity'; id: EntityId; name: string; components: string[]; source?: { plugin?: string; docId?: string };
+    }
   | { kind: 'component'; entityId: EntityId; entityName: string; comp: string; value: unknown }
   | { kind: 'asset'; guid: string; assetKind: string; name: string; packPath?: string };
 

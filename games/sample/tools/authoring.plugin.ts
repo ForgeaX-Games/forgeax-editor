@@ -6,7 +6,7 @@ import { dirname, join, relative } from 'node:path';
 import { defineToolPlugin, type Plugin } from '@forgeax/engine-plugin';
 import { defineTool, type JsonValue, type ToolContribution, type ToolDomainFailure, type ToolSchema } from '@forgeax/engine-tool-runtime';
 import { cookParticleCodeEffect, type ParticleCodeModuleSet } from '@forgeax/engine-vfx-compiler';
-import { parseParticleEffectSourceV2, type ParticleEffectSourceV2 } from '@forgeax/engine-vfx';
+import { parseParticleEffectSourceV3, type ParticleEffectSourceV3 } from '@forgeax/engine-vfx';
 
 /**
  * This fixture is a Project-owned build plugin. The Editor only transports
@@ -26,8 +26,8 @@ type MeshState = { readonly sourceKey: string; readonly materialSlots: readonly 
 type MeshPatch = { readonly materialSlots: readonly MeshSlot[]; readonly materialSlotDefaultOverrides?: MeshDefaults | null };
 type MeshSubAsset = { readonly guid?: unknown; readonly kind?: unknown; readonly sourceKey?: unknown; readonly sourceIndex?: unknown };
 type MeshMeta = { readonly subAssets?: readonly MeshSubAsset[]; readonly sourceOverrides?: Readonly<Record<string, MeshState>>; readonly [key: string]: unknown };
-type VfxState = ParticleEffectSourceV2;
-type VfxPatch = { readonly source: ParticleEffectSourceV2 };
+type VfxState = ParticleEffectSourceV3;
+type VfxPatch = { readonly source: ParticleEffectSourceV3 };
 
 /**
  * A Project source identity is intentionally smaller than a runtime catalog
@@ -452,7 +452,7 @@ async function vfxCurrent(subjectGuid: string): Promise<{ readonly bytes: string
       && record(asset.payload));
     const asset = index < 0 ? undefined : root.assets[index];
     if (!record(asset)) return undefined;
-    const parsed = parseParticleEffectSourceV2(asset.payload);
+    const parsed = parseParticleEffectSourceV3(asset.payload);
     return parsed.ok ? { bytes, root, index, state: parsed.value } : undefined;
   } catch { return undefined; }
 }
@@ -509,7 +509,7 @@ const readSourceSnapshotTool = defineTool<{ readonly subject: Subject }, SourceS
     }
 
     const loaded = await vfxCurrent(subject.guid);
-    if (loaded === undefined) return domainFailure({ code: 'vfx-source-invalid', expected: 'a readable ParticleEffectSourceV2 Project source', hint: 'The VFX source is missing or invalid.' });
+    if (loaded === undefined) return domainFailure({ code: 'vfx-source-invalid', expected: 'a readable ParticleEffectSourceV3 Project source', hint: 'The VFX source is missing or invalid.' });
     return {
       ok: true,
       value: makeSourceSnapshot({
@@ -589,20 +589,20 @@ const vfx = defineTool<UpdateArgs<VfxState, VfxPatch>, UpdateResult<VfxState>>(
   {
     id: 'vfx.author.update',
     title: 'Update VFX source',
-    summary: 'Validates, CAS-writes, and republishes a ParticleEffectSourceV2 source.',
+    summary: 'Validates, CAS-writes, and republishes a ParticleEffectSourceV3 source.',
     realm: 'build',
-    argsSchema: schema('{ subject: { kind: \'vfx\', guid: string }, snapshot: { revision: string, state: object }, expectedRevision: string, patch: { source: ParticleEffectSourceV2 } }', 'vfx'),
+    argsSchema: schema('{ subject: { kind: \'vfx\', guid: string }, snapshot: { revision: string, state: object }, expectedRevision: string, patch: { source: ParticleEffectSourceV3 } }', 'vfx'),
     resultSchema: resultSchema<VfxState>(),
     evidence: [],
   },
   async ({ subject, expectedRevision, patch }) => {
     const loaded = await vfxCurrent(subject.guid);
-    if (loaded === undefined) return domainFailure({ code: 'vfx-source-invalid', expected: 'a readable ParticleEffectSourceV2 Project source', hint: 'The VFX source is missing or invalid.' });
+    if (loaded === undefined) return domainFailure({ code: 'vfx-source-invalid', expected: 'a readable ParticleEffectSourceV3 Project source', hint: 'The VFX source is missing or invalid.' });
     const beforeRevision = revision(loaded.bytes);
     const normalizedExpectedRevision = normalizeRevision(expectedRevision);
     if (beforeRevision !== normalizedExpectedRevision) return domainFailure({ code: 'vfx-source-revision-conflict', expected: normalizedExpectedRevision, current: beforeRevision, draft: loaded.state, hint: 'The VFX source changed; refresh before retrying.' });
-    const parsed = parseParticleEffectSourceV2(patch.source);
-    if (!parsed.ok) return domainFailure({ code: 'vfx-source-invalid', expected: 'ParticleEffectSourceV2 schemaVersion 2', hint: parsed.error.hint });
+    const parsed = parseParticleEffectSourceV3(patch.source);
+    if (!parsed.ok) return domainFailure({ code: 'vfx-source-invalid', expected: 'ParticleEffectSourceV3 schemaVersion 2', hint: parsed.error.hint });
     const cooked = await cookVfx(parsed.value);
     if (!cooked.ok) {
       return domainFailure({
@@ -654,3 +654,19 @@ const vfx = defineTool<UpdateArgs<VfxState, VfxPatch>, UpdateResult<VfxState>>(
 
 const plugin: Plugin = { name: 'sample-authoring', apply() {} };
 export default defineToolPlugin(plugin, [readSourceSnapshotTool, material, mesh, vfx] as readonly ToolContribution<unknown, unknown>[]);
+
+// Preserve each producer's domain validation when invoked through the pure
+// command contract; cold discovery must not import compiler/runtime modules.
+function commandExecutor<A, R>(tool: ToolContribution<A, R>) {
+  return (args: unknown, context: Parameters<typeof tool.execute>[1]) => {
+    const parsed = tool.descriptor.argsSchema.parse(args);
+    if (!parsed.ok) return domainFailure({
+      code: 'authoring-arguments-invalid', expected: 'valid Project authoring arguments', hint: String(parsed.error),
+    });
+    return tool.execute(parsed.value, context);
+  };
+}
+export const readAuthoringSnapshot = commandExecutor(readSourceSnapshotTool);
+export const updateMaterial = commandExecutor(material);
+export const updateMesh = commandExecutor(mesh);
+export const updateVfx = commandExecutor(vfx);

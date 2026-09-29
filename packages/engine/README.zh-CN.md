@@ -1,254 +1,243 @@
 <!-- LANG-SWITCH -->
 **Language**: **简体中文** · [English](README.md)
 
+# ForgeaX Engine
+
+**AI 原生：为最大化 AI 能效而设计的游戏引擎。**
+
+ForgeaX 是以 **AI agent 为第一用户**的 TypeScript 游戏引擎。数据、生命周期、API 与工具围绕同一目标设计：让 AI 理解系统、准确操作、检查结果并完成修复。
+
 > [!IMPORTANT]
-> README 维护两份语言版本（[`README.md`](README.md) 主版本 · [`README.zh-CN.md`](README.zh-CN.md) 镜像），**任何改动须同时同步两份**。
+> **能效是目标，设计是方法。** 让 AI 用更少上下文、更少试错和更短反馈时间，完成更多经过验证的游戏开发工作。
 
----
+[AI 能效](#ai-efficiency) · [设计原则](#design) · [引擎架构](#architecture) · [开始使用](#start) · [深入阅读](#explore)
 
-# forgeax-engine
+<a id="ai-efficiency"></a>
+## AI 能效
 
-> [!IMPORTANT]
-> 含有 `.forgeax-public-distribution` 的源码树是 SDK 内置的公开源码面。
-> 它可独立完成 Engine 包开发：不要执行 `git submodule update`，不要添加
-> 私有资产仓库，使用 `pnpm install` 后运行 `pnpm build:engine`。SDK 已将
-> WASM 构建结果放入对应包的 `pkg/` 目录。
+能效关注**经过验证的结果**，同时考虑错误定位与返工、上下文和工具往返成本。
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.base.json)
-[![WebGPU](https://img.shields.io/badge/WebGPU-native-005A9C?logo=webgpu&logoColor=white)](./packages/rhi)
-[![Rust](https://img.shields.io/badge/Rust-wgpu_29_+_naga_29-000000?logo=rust&logoColor=white)](./packages/wgpu-wasm)
-[![ESM](https://img.shields.io/badge/module-ESM_only-f7df1e?logo=javascript&logoColor=black)](./AGENTS.md)
+| 能力 | 如何提高 AI 能效 |
+|:--|:--|
+| **渲染透明** | [RHI-debug](packages/rhi-debug/README.md) 录制并重放自包含帧，检查 draw/dispatch、binding、资源与像素，定位异常输入 |
+| **运行时逻辑与数据透明** | [ECS](packages/ecs/README.md) 显式描述组件、查询和调度；[Remote](packages/remote/README.md) 查询活实例，依据真实状态定位逻辑错误 |
+| **资产可编写、可溯源** | [ScriptablePack / Pack](packages/pack/README.md) 以 TypeScript 生成或 JSON 声明内容；稳定 GUID 连接源与产物，修复沿 producer 返回源输入 |
+| **插件变更可撤销** | [原生 Cordis](packages/plugin/README.md) 统一依赖、激活与清理；配置更新失败可回到上一个工作的 Fiber |
+| **性能与结果可验证** | [Profiler](packages/profiler/README.md) 提供有界 CPU capture 与离线比较；[Preview](packages/preview/README.md)、浏览器截图和项目测试提供运行证据 |
+| **CLI 优先操作** | [DevKit](packages/devkit/README.md) 统一 `forgeax` 命令发现、JSON 输入输出和持久实例，使操作可组合、可重复 |
+| **按需获取上下文** | [Skills](skills/)、包契约与工具描述逐层展开，只加载当前任务需要的知识 |
+| **结构化失败与恢复** | [`Result` 与闭合错误 union](packages/types/README.md) 提供 code、预期、提示与详情；能力、执行层级和恢复状态显式可查 |
 
-> **AI-first TypeScript 游戏引擎，目标超越 Three.js。**
+> [!NOTE]
+> 截图、结构检查和真实 GPU 执行回答不同问题；CPU capture 也不能替代 GPU 性能测量。
 
-### Material owner contract
+<a id="design"></a>
+## 设计原则
 
-一个 `MaterialAsset` subject 依次经过 types、Pack cook/publication、
-shader-compiler reflection，以及 runtime/render 的只读 projection。
-契约只接受 runtime bool/value、真实 module-slot composition 和 closed
-compiler context；material macro 与 feature define 会被拒绝。分层 identity
-包括 `materialContractDigest`、`sourceClosureDigest`、`layoutIdentity`、
-`programIdentity`、`cookIdentity` 和 `materialPublicationIdentity`。恢复时
-比较 `current` 与 `generation`，修复首个 producer divergence，以同一 GUID
-cold-cook，再核验 receipt、artifact 与真实 WASM provenance。
+**压缩即智能：减少理解局部行为所需的概念数。** 避免重复状态源、额外生命周期和隐式分支。
 
-引擎的第一用户不是人类开发者——是 **AI agent**。每一处 API 都是可机读契约：schema 类型化、返回 `Result`、自描述。AI-friendly 与 human-friendly 冲突时，**AI 胜出**。详见 [AI 用户宪章](.claude/skills/forgeax-closed-loop/agents/ai-user-charter.md)。
+| 设计原则 | 在 ForgeaX 中的落实 |
+|:--|:--|
+| **AI 是第一用户** | 优先机器可发现、可调用、可验证的契约；与人类使用习惯冲突时，优先服务 AI |
+| **单一事实来源** | World 拥有游戏状态，Renderer 拥有渲染投影，源资产与 Meta 拥有作者事实；其他层读取或推导 |
+| **从声明推导，避免手动同步** | 材质 `paramSchema` 推导布局；RenderGraph 从访问声明推导资源依赖与生命周期；Catalog 从项目声明生成 |
+| **组合能力，保持领域边界** | 物理、渲染、资产、音频各自拥有执行数据；插件负责装配，ECS 负责帧内逻辑 |
+| **原生生命周期，统一撤销** | Cordis 的 `Context / Entry / Fiber` 管理能力存在性，`inject / provide / effect` 表达依赖、服务与清理 |
+| **显式状态与失败** | 闭合 union、结构化错误、明确的能力缺失与 fallback 报告，减少隐藏分支 |
+| **构建期准备，运行时消费** | 导入、WGSL 组合与反射、VFX 编译在构建期完成；运行时加载已发布内容 |
 
----
+完整约束见 [AI-first 设计公理](AGENTS.md#design-axiom--compression--intelligence) 与 [模块职责地图](AGENTS.md#module-design-map--cognitive-injection)。
 
-## ✨ 为什么是 forgeax
+<a id="architecture"></a>
+## 架构
 
-- 🤖 **AI-first，而非事后改造** — 每个接口都是可机读契约（schema / manifest / 类型 union），AI 不读教程也能正确调用。
-- 🧊 **原生 WebGPU，双份实现** — 一套 spec-aligned RHI，两个独立后端：浏览器原生 WebGPU 与编译为 WebAssembly 的 Rust `wgpu 29` 内核。
-- 🦀 **Rust + WASM 着色器内核** — `wgpu 29 + naga 29 + naga_oil 0.22` 合并 wasm-bindgen crate，**单一 ~1.17 MB gzip 产物**。
-- 🧩 **声明式 RenderGraph** — 资源 + pass 即数据，graph 自己管生命周期与 barrier 插入。告别手写 `beginRenderPass` 簿记。
-- 🎬 **可编程渲染管线（SRP）** — 登记具名管线，用 config 驱动；引擎自带前向管线用的是它暴露给你的**同一套公开词汇**（真 dogfood）。
-- 🖌️ **WGSL "ShaderLab" 组合** — Bevy 约定的 `#import namespace::path` 模块图、`#ifdef` 变体、16 个引擎内建可组合模块（PBR / IBL / tonemap）。
-- 🎞️ **RenderDoc 思想的 RHI 调试器** — 录一帧到 tape，在全新 device 上确定性 replay，离线 inspect 每个 draw 的 bindings + render-target PNG。
-- 🧮 **Archetype ECS** — SoA 列、声明式系统、延迟命令、关系、三层反射。
-- ⚙️ **开箱即用** — Rapier 2D/3D 物理、Web Audio、glTF/FBX/image/font 导入、类型化状态机、immediate-mode 调试绘制、kubectl 式活体 inspector。
-- 🛡️ **处处结构化失败** — `Result<T, E>` + 闭合 `.code` union + `.expected` / `.hint` / `.detail`；无意外抛错，无 `err.message.match()`。
-
-## 设计宗旨
-
-| 原则 | 含义 |
-|---|---|
-| **可机读 > 散文叙述** | API 通过 schema / manifest / 结构化类型自描述，AI 不读教程也能正确调用 |
-| **显式失败 > 静默行为** | `Result<T, E>` + `.code` / `.expected` / `.hint`，禁止字符串传语义、禁止静默吞错 |
-| **一致抽象 > 暴露实现** | 统一接口优先，性能 opt-in |
-| **上下文经济** | API 表面积小、命名自解释、类型即文档 |
-
-> 压缩即智能。度量不是代码行数，而是**读者理解任意一处代码所需持有的概念数**。详见 [`architecture-principles.md`](../forgeax-harness/rules/architecture-principles.md)。
-
----
-
-## 🗺️ 架构总览
-
-两条独立依赖链在 **RHI 缝合面** 交汇——那是每个后端都实现的纯接口。
+**一个权威 World。** Runtime 装配服务，Render 维护渲染投影，构建工具生产资源。
 
 ```mermaid
-flowchart TD
-    subgraph GAME["🎮 游戏层"]
-        APP["@forgeax/engine-app<br/>rAF 循环 · 输入 · 状态"]
-        ECS["@forgeax/engine-ecs<br/>archetype World"]
-        FEAT["physics · audio · debug-draw · math"]
-    end
-
-    subgraph RUNTIME["🖼️ Runtime 链"]
-        RT["@forgeax/engine-runtime<br/>Renderer + SRP 注册表"]
-        RG["@forgeax/engine-render-graph<br/>声明式 pass"]
-    end
-
-    subgraph SEAM["🧊 RHI 缝合面（纯接口）"]
-        RHI["@forgeax/engine-rhi<br/>opaque handle · math-free · spec-aligned"]
-    end
-
-    subgraph BACKENDS["双实现"]
-        WEBGPU["@forgeax/engine-rhi-webgpu<br/>浏览器原生 WebGPU"]
-        WGPU["@forgeax/engine-rhi-wgpu<br/>Rust wgpu 29 经 WASM"]
-    end
-
-    subgraph BUILD["🛠️ 构建期着色器链"]
-        SC["@forgeax/engine-shader-compiler<br/>WGSL 组合 + 反射"]
-        NAGA["@forgeax/engine-naga"]
-        WASM["@forgeax/engine-wgpu-wasm<br/>🦀 wgpu 29 + naga 29 + naga_oil"]
-    end
-
-    GAME --> RUNTIME --> RG --> SEAM
-    SEAM --> WEBGPU
-    SEAM --> WGPU
-    WGPU --> WASM
-    SC --> NAGA --> WASM
-    RT -. "runtime shader registry" .-> SC
+flowchart TB
+    PROJECT["游戏工程<br/>forge.json · 代码 · 资产源"]
+    DEVKIT["DevKit / CLI<br/>项目操作 · 构建 · 检查"]
+    COOK["构建期生产<br/>导入 · cook · shader / VFX 编译"]
+    ASSETS["AssetRegistry<br/>GUID → 已发布内容"]
+    APP["App + 原生 Cordis<br/>realm 装配 · 输入 · 帧节奏 · 生命周期"]
+    WORLD["ECS World<br/>状态 · 时间 · Update / FixedUpdate"]
+    DOMAINS["领域系统<br/>场景 · 动画 · 物理 · 音频意图 · 网络"]
+    RUNTIME["Runtime<br/>选择后端与服务 · 装配 Renderer"]
+    RENDER["Render<br/>持久投影 · extract / prepare / record"]
+    GRAPH["RenderGraph<br/>资源访问 · pass 依赖 · 生命周期"]
+    RHI["RHI<br/>不透明句柄 · capabilities"]
+    GPU["rhi-webgpu / rhi-wgpu<br/>浏览器 WebGPU / wgpu WASM"]
+    NULL["rhi-null<br/>结构验证"]
+    DEBUG["RHI-debug<br/>capture · replay · inspect"]
+    PROJECT --> DEVKIT
+    DEVKIT --> COOK
+    COOK --> ASSETS
+    DEVKIT --> APP
+    APP --> WORLD
+    APP --> RUNTIME
+    WORLD <--> DOMAINS
+    RUNTIME --> RENDER
+    WORLD -->|"变化证据与场景数据"| RENDER
+    ASSETS --> RENDER
+    RENDER --> GRAPH
+    GRAPH --> RHI
+    RHI --> GPU
+    RHI --> NULL
+    RHI -.->|"可选录制"| DEBUG
 ```
 
----
+### 渲染与 GPU
 
-## 🔬 特性详解
+| 子系统 | 关键设计与职责 | 深入阅读 |
+|:--|:--|:--|
+| **Render / RenderGraph** | 持久 CPU 投影与能力门控的 GPU Scene；可编程管线与 RenderFeature；图推导依赖、资源使用与生命周期，按声明顺序执行 raster / compute / copy pass | [Render](packages/render/README.md) · [RenderGraph](packages/render-graph/README.md) |
+| **Shader / Material** | 材质 schema 推导参数和绑定布局；WGSL 组合、Naga 验证与反射；运行时查询内容寻址的已编译产物 | [Shader](packages/shader/README.md) · [Compiler](packages/shader-compiler/README.md) |
+| **GPU VFX** | GPU 模拟与间接绘制；代码定义、构建期编译；粒子、ribbon、trail、beam、billboard 与 mesh 效果 | [VFX](packages/vfx/README.md) · [VFX render](packages/vfx-render/README.md) |
+| **RHI / 后端** | 按 capability 统一浏览器 WebGPU、wgpu WASM 与 null 后端；接口规范对齐，采用不透明句柄且无数学依赖 | [RHI](packages/rhi/README.md) · [wgpu](packages/rhi-wgpu/README.md) |
 
-<details>
-<summary><b>🧊 RHI — 纯渲染缝合面</b></summary>
+### ECS 与多 Worker
 
-一套按 `@webgpu/types` 塑形的 **spec-aligned、math-free 接口**，暴露 14 个 opaque handle 类型与 capability-gated 的 op-set（wgpu 超集）。它刻意**不含实现**，以便两个后端字节级共存：
-
-| 后端 | 路径 | 运行于 |
-|---|---|---|
-| `rhi-webgpu` | 浏览器 `GPUDevice` 之上的薄 shim | 原生 WebGPU 浏览器 |
-| `rhi-wgpu` | Rust `wgpu 29` WASM 内核之上的 TS 壳 | 任何跑 WASM 的地方 |
-| `rhi-null` | headless no-op | 结构性单测（零 GPU/DOM） |
-
-每次调用返回 `Result<T, RhiError>`；能力经 `device.caps` 查询，从不假设。
-</details>
-
-<details>
-<summary><b>🦀 WASM — Rust wgpu + naga 单产物</b></summary>
-
-`@forgeax/engine-wgpu-wasm` 是合并的 **`wgpu 29` + `naga 29` + `naga_oil 0.22`** wasm-bindgen crate。单一 `~1.17 MB gzip` 产物承载**两条独立 surface**：
-
-- **RHI raw bindings**（`rhi.rs`）→ 14 opaque handle + 17 描述符 + queue/command-encoder 段，由 `rhi-wgpu` 包装。
-- **着色器管线 bindings** → `parse` / `validate` / `emit_reflection` + `naga_oil::Composer`，由 `naga` + `shader-compiler` 包装。
-
-AI 用户从不直接 import 它——上述两个 TS 薄壳才是公开面。
-</details>
-
-<details>
-<summary><b>🧩 RenderGraph — 声明式帧</b></summary>
-
-把*「打开 2000 行 record 文件、复制 texture lazy-alloc 模板、手写 `beginRenderPass` + bind group」*换成寥寥几条声明：
-
-```ts
-graph.addPass({ reads, writes, execute });
-```
-
-`compile()` 解析资源生命周期并**自动插入 barrier**；你的 `execute` 闭包是唯一自定义逻辑。本包是 RHI-pure 的——只依赖 `@forgeax/engine-rhi` + `@forgeax/engine-math`，绝不 import runtime。
-</details>
-
-<details>
-<summary><b>🎬 SRP — 可编程渲染管线</b></summary>
+[ECS World](packages/ecs/README.md) 统一管理实体、组件、关系、资源和时间；`Update` / `FixedUpdate` 系统声明访问与调度。[Scene](packages/scene/README.md) 管理层级与变换，[State](packages/state/README.md) 管理状态所属实体；Renderer 消费 World 变化，维护持久渲染投影。
 
 ```mermaid
 flowchart LR
-    REG["registerPipeline(id, impl)"] --> INST["installPipeline({ pipelineId, config })"]
-    INST --> BUILD["buildGraph(ctx, data)"]
-    BUILD --> EXEC["execute → RenderGraph"]
-    CFG["config.passCount / postEffects"] -.-> BUILD
+    HOST["Host<br/>DOM / UI · 输入 · Web Audio · 帧 credit"]
+    ENGINE["Engine Worker<br/>World + Renderer + Assets + 游戏插件"]
+    KERNEL["Kernel Worker 池<br/>共享数值列上的 QuerySpan 分片"]
+    HOST -->|"输入与一帧执行许可"| ENGINE
+    ENGINE -->|"结果与音频意图"| HOST
+    ENGINE -->|"满足条件的数值任务"| KERNEL
+    KERNEL -->|"完成屏障"| ENGINE
 ```
 
-同一 logic id + 不同 `config` → 不同 pass 拓扑。引擎自带前向管线 `forgeax::urp`（9-pass 链：shadow → skybox → main → 4× bloom → tonemap → fxaa）用的是它交给你的**同一套公开词汇**（`addScenePass` / `addShadowPass` / `addBloomPasses` / `addTonemapPass` …）。要写自定义管线，照着 dogfood 抄。
-</details>
-
-<details>
-<summary><b>🖌️ 着色器创作 — WGSL "ShaderLab" 组合</b></summary>
-
-你写自己的 `.wgsl`；引擎提供 **16 个可组合模块**（PBR BRDF、IBL、光照、tonemapping、helper）。组合遵循 Bevy 约定，Bevy 着色器片段可原样粘贴：
-
-```wgsl
-#import forgeax_pbr::brdf::{specular_ggx}
-#import forgeax_view::common::{View}
-```
-
-构建期 `compileShader(source, options)` 是**纯函数**，返回 `Result<CompileResult, ShaderError>`——7 成员错误分类 + 类型化 `.detail`（import-not-found、DFS 预检的 circular-import …）。运行期材质经 `ShaderRegistry.registerMaterialShader` 登记，那是 wgsl 源码 + 参数 schema + binding layout 的唯一真源。
-</details>
-
-<details>
-<summary><b>🎞️ RHI-debug — Web 引擎的 RenderDoc</b></summary>
-
-record → replay → inspect，第一用户是 AI subagent（经 `WS:5732` JSON-RPC、CLI、直接 import 暴露）：
-
-- **Record** 一帧 RHI 到自洽 tape。
-- **Replay** 在全新 device 上确定性重放。
-- **Inspect** 离线查：每个 draw 的 bindings、draw-call 参数、render-target PNG 回读——定位黑屏 / 错贴图 / 错 binding 症状。
-</details>
-
-<details>
-<summary><b>🤖 AI authoring CLI — 发现、组合、取证</b></summary>
-
-DevKit 项目通过顶层 `forgeax` CLI 暴露一条可机读操作路径：
-`list -> describe -> run -> terminal`。同一个
-根命令把同一个 `ToolContribution` 路由到完整 private executor 或已准入的环回 service，
-不会生出第二套 operation registry 或并列产品入口。
-
-```bash
-forgeax list --json
-forgeax describe project.build --json
-forgeax run project.build --input request.json --json
-forgeax exec program.mjs --json
-```
-
-项目文件与 `forge.json` 仍是 author truth。Hidden preview 依然执行真实 WebGPU，并返回 RHI tape、
-PNG 与 CPU profile 引用。使用时先读
-唯一的 [`forgeax-engine-cli`](skills/forgeax-engine-cli/SKILL.md)；包级契约见
-[`tool-runtime`](packages/tool-runtime/README.md) 与 [`devkit`](packages/devkit/README.md)。
-</details>
-
----
-
-## 📦 包家族
-
-聚焦职责的公共包共享前缀 `@forgeax/engine-`，AI 用户经 IDE 自动补全发现。
-
-| 簇 | 包 | 角色 |
+| 执行层级 | 放置方式 | 约束与适用边界 |
 |:--|:--|:--|
-| **RHI 缝合面** | `rhi` · `rhi-webgpu` · `rhi-wgpu` · `rhi-null` · `wgpu-wasm` | 纯接口 + 双实现 + headless + 🦀 WASM 内核 |
-| **渲染** | `runtime` · `render-graph` · `shader` · `shader-compiler` · `naga` | Renderer、SRP、RenderGraph、WGSL 组合 + 反射 |
-| **核心** | `ecs` · `app` · `input` · `math` · `types` · `state` · `plugin` · `animation` | Archetype World、游戏循环、数学、`Result` SSOT、状态机 |
-| **仿真** | `physics` · `physics-rapier2d` · `physics-rapier3d` · `audio` · `audio-webaudio` | Rapier 2D/3D、Web Audio |
-| **资产** | `pack` · `import` · `gltf` · `fbx` · `image` · `font` · `project`（`packages/project/` ↔ `@forgeax/engine-project`） | GUID sidecar 管线、导入器、`forge.json` manifest |
-| **工具** | `tool-runtime` · `devkit` · `rhi-debug` · `debug-draw` · `remote` · `vite-plugin-*` | AI authoring operation、帧调试器、活体 inspector、Vite 集成 |
+| `shared` | Engine Worker 加持久 Kernel Worker 池 | 需要跨源隔离、SharedArrayBuffer 等能力；仅符合条件的数值任务并行 |
+| `engine-worker` | World、Renderer、资产与游戏插件共置于一个 Worker | Host 保留 DOM、输入与音频；需要对应 Worker 渲染能力 |
+| `main-serial` | World 与 Renderer 在主线程 | 最直接的串行执行路径 |
+| `auto` | 根据能力选择可用层级 | 报告实际选择和原因；显式指定不可用层级则返回错误 |
 
 > [!NOTE]
-> 用户只需安装 **`@forgeax/engine`**，并通过 `@forgeax/engine/<pkg>` 子路径使用聚焦能力。仓库内部仍以 `@forgeax/engine-*` 作为实际所有者和发布单元；每个 `packages/<pkg>/README.md` 是其 API、错误码、能力门的 SSOT。
-> `animation` 对普通 `Transform` 实体与骨骼关节使用同一种动画目标模型。
+> 多 Worker 保持**一个逻辑 World**，结构变更串行，不传递活对象或拆分 RenderGraph；共享写入部分失败须重建 World。详见 [App 执行契约](packages/app/README.md#execution-tiers) 与 [多线程示例](apps/hello/multithreaded-execution/README.md)。
 
-## 布局
+### 文本化与脚本化资产
 
-| 路径 | 内容 |
+**程序生成与参数复用，让内容创作进入代码工作流。** AI 能批量生成资产，也能直接编辑文本、审查 diff 和自动验证。
+
+| 创作形式 | 用途 |
 |:--|:--|
-| [`packages/`](packages/) | 引擎包（runtime / build-time 双链、RHI dual-impl、inspector、Rust wasm crate） |
-| [`apps/`](apps/) | Demo / smoke / parity-bench 应用 |
-| [`.forgeax-harness/knowledge-base/wiki/`](.forgeax-harness/knowledge-base/wiki/) | 设计基线（RHI / shader 策略、vs-threejs 路线 SSOT） |
-| [`.claude/skills/`](.claude/skills/) | AI 协作 skill 集（charter + 闭环工作流） |
-| [`.forgeax-harness/`](.forgeax-harness/) | 闭环工件（每个 feat/bug 的 plan / research / verify） |
-| `forgeax-engine-assets/` | 仅贡献者 checkout：二进制证据 git submodule（公开 SDK 源码中不存在） |
+| **ScriptablePack · `.pack.ts`** | 用函数、循环与组合生成资产集合，复用场景和几何生成逻辑 |
+| **参数化实例** | 独立包身份、父源与稀疏覆盖，复用定义生成变体 |
+| **Pack · `.pack.json`** | 声明资产、引用与实例参数，直接编辑字段、审查差异 |
+| **导入资产与 sidecar** | glTF / FBX / 图像等外部源与元数据，共享身份和 cook 路径 |
 
-包级契约、错误 union、RHI 形态约束、度量登记、smoke gate、演进规则统一落在 [AGENTS.md](./AGENTS.md)。README 刻意保持精简。
-
----
-
-## 🚀 快速开始
-
-> [!IMPORTANT]
-> 需要 **Node ≥ 22.13.0**、**pnpm ≥ 11.1.3**、**Bun ≥ 1.2.0**（SSOT：`.nvmrc` / `.pnpm-version` / `.bun-version`）。首次 clone 使用 `git clone --recurse-submodules <url>`。
-
-```bash
-pnpm install && pnpm build            # tsup (.mjs) + tsc -b (.d.ts)
-pnpm test
-pnpm dev                              # → http://localhost:5173
+```mermaid
+flowchart LR
+    SCRIPT["ScriptablePack<br/>.pack.ts"]
+    TEXT["Pack<br/>.pack.json"]
+    IMPORT["外部源 + Meta<br/>模型 · 图像 · 字体"]
+    COOK["生产者校验与 cook"]
+    PUBLISH["发布产物<br/>稳定 GUID · receipt · Catalog"]
+    RUNTIME["运行时<br/>按 GUID 加载"]
+    SCRIPT --> COOK
+    TEXT --> COOK
+    IMPORT --> COOK
+    COOK --> PUBLISH
+    PUBLISH --> RUNTIME
 ```
 
-命令清单、smoke gate、Bun 管线、Rust toolchain 详见 [AGENTS.md §Commands](./AGENTS.md#commands)。
+> [!IMPORTANT]
+> **源与产物分离。** `.pack.ts` 在构建期执行，运行时按稳定 GUID 加载 cook 产物；纹理、模型、音频仍可使用二进制源。修复回到源输入，再重新 cook。详见 [Pack 创作契约](packages/pack/README.md)。
+
+### 游戏插件与引擎插件
+
+游戏插件与引擎插件共享原生 Cordis 的依赖、激活、更新与退出机制。
+
+| 插件层次 | 典型职责 | 组合方式 |
+|:--|:--|:--|
+| 项目装配 | 选择安装哪些插件、配置与所在 realm | `forge.json.plugins[]` 声明 Entry；DevKit 生成静态 Catalog，由原生 Loader 激活 |
+| 引擎插件 | 场景、输入、物理、音频等服务与 ECS 能力 | 原生 `inject / provide` 声明依赖与服务，通过 `effect` 注册贡献及其逆操作 |
+| 游戏插件 | 角色移动、镜头、游戏 UI 与玩法系统 | 参考模板在 `assets/plugin.ts` 用 `definePluginGroup` / `usePlugin` 组合子插件 |
+
+`effect` 的逆操作随 Fiber 退出执行；帧内逻辑由 ECS 调度，插件装配不进入热路径。参考 [插件契约](packages/plugin/README.md) 与 [`game-3d` 根插件](templates/game-3d/assets/plugin.ts)。
+
+### 模拟与交互
+
+| 子系统 | 关键设计与职责 | 深入阅读 |
+|:--|:--|:--|
+| **网络** | Session 拥有复制、ACK、重试、baseline / delta 与连接恢复；WebSocket 只提供传输 | [Net](packages/net/README.md) · [WebSocket](packages/net-websocket/README.md) |
+| **物理** | ECS 物理契约与 Rapier 2D / 3D 后端分离；同步输入、推进模拟、写回状态 | [Physics](packages/physics/README.md) |
+| **动画 / 蒙皮** | 动画图、clip 与播放系统独立于 Renderer；Skin 负责骨骼绑定与关节路径解析 | [Animation](packages/animation/README.md) · [Skinning](packages/skinning/README.md) |
+| **运行时智能服务** | 可选的 provider 无关 Activity / Session；有界输出、取消与轮询；异步服务不阻塞 ECS 帧循环 | [Intelligence](packages/intelligence/README.md) |
+| **输入 / UI / 音频** | 帧起点冻结输入快照；Shadow DOM UI；realm 无关的音频意图交给 Host Web Audio 播放 | [Input](packages/input/README.md) · [UI](packages/ui/README.md) · [Audio](packages/audio/README.md) |
+
+<a id="start"></a>
+## 开始使用
+
+安装 **`@forgeax/engine`**，通过 `/ecs`、`/app` 等子路径使用聚焦能力，统一命令为 `forgeax`。
+
+```bash
+pnpm dlx @forgeax/engine project new my-game --template game-3d
+cd my-game
+pnpm exec forgeax help --tree --json
+pnpm exec forgeax project check
+pnpm exec forgeax dev start --headless false --json
+```
+
+`game-3d` 是第三人称参考工程，`empty` 是最小起点。先读生成的 README 与技能；操作入口见 [Engine](packages/engine/README.md) 与 [CLI 使用指南](skills/forgeax-engine-cli/SKILL.md)。
+
+<details>
+<summary>运行与验证</summary>
+
+```bash
+pnpm exec forgeax dev status --json
+pnpm exec forgeax dev capture --json
+pnpm exec forgeax dev stop --json
+pnpm exec forgeax project test
+pnpm exec forgeax project package --format web-zip
+```
+
+观察结果携带 `revision`，截图返回 PNG 与报告引用。实体查找、摄像机控制和实例身份约束见 [持久运行实例](packages/devkit/README.md#persistent-live-control)。
+
+</details>
+
+<details>
+<summary>源码与 SDK</summary>
+
+工具链版本以 [`.nvmrc`](.nvmrc)、[`.pnpm-version`](.pnpm-version)、[`.bun-version`](.bun-version) 为准。
+
+```bash
+pnpm install
+pnpm build:engine
+pnpm test
+```
+
+| 场景 | 入口 |
+|:--|:--|
+| 获取 SDK | `pnpm dlx @forgeax/engine sdk install ./forgeax-sdk` |
+| SDK 的 `source/engine/` | 独立公开源码面，带 `.forgeax-public-distribution` 标记与预构建 WASM；运行上述 install / build，无需私有子模块 |
+| 完整贡献者 checkout | 首次 clone 使用 `--recurse-submodules` 获取有权限访问的私有资产；完整应用构建运行 `pnpm build` |
+| 单个示例迭代 | `pnpm build:app hello/triangle`；更大范围验收遵循 [Smoke gate](AGENTS.md#smoke-gate) |
+
+SDK 包含构建产物、模板、技能与 Engine 源码。详见 [SDK 指南](skills/forgeax-engine-sdk/SKILL.md)。
+
+</details>
+
+<a id="explore"></a>
+## 深入阅读
+
+| 入口 | 用途 |
+|:--|:--|
+| [AGENTS.md](AGENTS.md) | 设计公理、模块职责、错误模型、源码工作与验证约束 |
+| [Packages](packages/) | 各包 README 的 API、生命周期与能力契约 |
+| [Schemas](schemas/) / [CI 指南](scripts/ci/README.md) | 机器可读契约与验证流程 |
+| [Engine skills](skills/) | 按任务发现引擎能力与操作路径 |
+| [Apps](apps/) / [Templates](templates/) | 示例、回归场景与游戏起点 |
+| [故宫建筑示例](apps/showcase/palace/README.md) | `pack.ts` 建筑、灯光和持续 CLI 观察示例；视觉效果仍在迭代 |
+
+> [!NOTE]
+> 本 README 维护[英文主版本](README.md)与[简体中文镜像](README.zh-CN.md)，内容变更须在同一提交中同步。具体能力和限制以链接的包契约为准。
 
 ## License
 
-Apache-2.0，完整文本见 [LICENSE](./LICENSE)。
+[Apache-2.0](LICENSE).

@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from 'bun:test';
-import { registerPropagateTransforms, Transform, Name } from '@forgeax/engine-scene';
+import { registerPropagateTransforms, Transform, GlobalTransform, Name } from '@forgeax/engine-scene';
 import { EditGateway } from '../io/gateway';
 import { createEditSession } from '../session/document';
 import type { EditSession } from '../types';
@@ -30,12 +30,12 @@ describe('transform propagation sync after document writes', () => {
     expect(opAffectsWorldTransform({ kind: 'setComponent', entity, component: 'Name', patch: { value: 'A' } })).toBe(false);
   });
 
-  it('setComponent Transform updates Transform.world before the next world.update()', () => {
+  it('setComponent Transform updates GlobalTransform.world before the next world.update()', () => {
     const world = gw.activeWorld;
     const before = world.get(entity, Transform);
     expect(before.ok).toBe(true);
     if (before.ok) {
-      expect(before.value.world[12]).toBe(0);
+      expect(world.get(entity, GlobalTransform).unwrap().world[12]).toBe(0);
     }
 
     const r = gw.dispatch({ kind: 'setComponent', entity, component: 'Transform', patch: { pos: [3, 4, 5] } });
@@ -45,9 +45,27 @@ describe('transform propagation sync after document writes', () => {
     expect(after.ok).toBe(true);
     if (after.ok) {
       expect(after.value.pos[0]).toBe(3);
-      expect(after.value.world[12]).toBeCloseTo(3);
-      expect(after.value.world[13]).toBeCloseTo(4);
-      expect(after.value.world[14]).toBeCloseTo(5);
+      expect(world.get(entity, GlobalTransform).unwrap().world[12]).toBeCloseTo(3);
+      expect(world.get(entity, GlobalTransform).unwrap().world[13]).toBeCloseTo(4);
+      expect(world.get(entity, GlobalTransform).unwrap().world[14]).toBeCloseTo(5);
+    }
+  });
+
+  it('undo setComponent Transform updates GlobalTransform.world before the next world.update()', () => {
+    const world = gw.activeWorld;
+    const move = gw.dispatch({ kind: 'setComponent', entity, component: 'Transform', patch: { pos: [3, 4, 5] } });
+    expect(move.ok).toBe(true);
+
+    const undone = gw.undo();
+    expect(undone).toBe(true);
+
+    const after = world.get(entity, Transform);
+    expect(after.ok).toBe(true);
+    if (after.ok) {
+      expect(after.value.pos[0]).toBe(0);
+      expect(world.get(entity, GlobalTransform).unwrap().world[12]).toBeCloseTo(0);
+      expect(world.get(entity, GlobalTransform).unwrap().world[13]).toBeCloseTo(0);
+      expect(world.get(entity, GlobalTransform).unwrap().world[14]).toBeCloseTo(0);
     }
   });
 });

@@ -12,12 +12,21 @@ export async function resolveCarrierScope(
   try {
     const options = { cache: 'no-store' as const, signal: controller.signal };
     const [healthResponse, activeResponse] = await Promise.all([
-      fetchImpl('/api/health', options), fetchImpl('/api/projects/active', options),
+      fetchImpl('/api/health', options),
+      fetchImpl('/api/projects/active', options),
     ]);
     if (!healthResponse.ok || !activeResponse.ok) return null;
     const [health, active] = await Promise.all([healthResponse.json(), activeResponse.json()]);
-    if (typeof health?.instanceRootAbs !== 'string' || !health.instanceRootAbs || active?.activeSlug !== gameId) return null;
+    if (
+      typeof health?.instanceRootAbs !== 'string' ||
+      !health.instanceRootAbs ||
+      active?.activeSlug !== gameId
+    )
+      return null;
     return { projectId: health.instanceRootAbs, gameId };
-  } catch { return null; }
-  finally { clearTimeout(timer); }
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }

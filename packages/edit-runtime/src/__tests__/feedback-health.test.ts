@@ -14,15 +14,19 @@ import {
 
 describe('passive feedback health normalization', () => {
   it('maps concrete save owners to the documented save failure families', () => {
-    expect(normalizeSaveFailureCode({ code: 'scene-serialization-error' })).toBe('save-serialization-failed');
-    expect(normalizeSaveFailureCode({ code: 'pack-validation-error' })).toBe('save-pack-validation-failed');
+    expect(normalizeSaveFailureCode({ code: 'scene-serialization-error' })).toBe('save-serialization-failed',
+    );
+    expect(normalizeSaveFailureCode({ code: 'pack-validation-error' })).toBe('save-pack-validation-failed',
+    );
     expect(normalizeSaveFailureCode({ code: 'platform-write-denied' })).toBe('save-write-failed');
   });
 
   it('maps Play lifecycle errors without parsing their human hint', () => {
     expect(normalizePlayFailureCode({ code: 'play-save-rejected' })).toBe('play-save-failed');
-    expect(normalizePlayFailureCode({ code: 'play-carrier-boot-failed' })).toBe('play-bootstrap-failed');
-    expect(normalizePlayFailureCode({ code: 'scene-assets-not-ready' })).toBe('play-assemble-failed');
+    expect(normalizePlayFailureCode({ code: 'play-carrier-boot-failed' })).toBe('play-bootstrap-failed',
+    );
+    expect(normalizePlayFailureCode({ code: 'scene-assets-not-ready' })).toBe('play-assemble-failed',
+    );
   });
 
   it('classifies a dead render loop as renderer, not as a failed Play launch', () => {
@@ -30,9 +34,11 @@ describe('passive feedback health normalization', () => {
     // as `app-system-update-failed`. Requirements §4 classifies by blocked work
     // surface — Play started, then rendering died → 渲染进程异常终止.
     expect(normalizePlayFailureCode({ code: 'app-system-update-failed' })).toBe('renderer-error');
-    expect(normalizePlayFailureCode({ code: 'renderer-process-terminated' })).toBe('renderer-process-terminated');
+    expect(normalizePlayFailureCode({ code: 'renderer-process-terminated' })).toBe('renderer-process-terminated',
+    );
     // Genuine launch failures must stay in the Play family.
-    expect(normalizePlayFailureCode({ code: 'play-carrier-ready-timeout' })).toBe('play-bootstrap-failed');
+    expect(normalizePlayFailureCode({ code: 'play-carrier-ready-timeout' })).toBe('play-bootstrap-failed',
+    );
   });
 
   it('does not turn documented expected Play refusals into passive incidents', () => {
@@ -43,8 +49,10 @@ describe('passive feedback health normalization', () => {
 
   it('keeps GPU loss distinct from other renderer failures', () => {
     expect(normalizeRendererFailureCode({ code: 'device-lost' })).toBe('device-lost');
-    expect(normalizeRendererFailureCode({ code: 'webgpu-runtime-error' })).toBe('webgpu-init-failed');
-    expect(normalizeRendererFailureCode({ code: 'app-system-update-failed' })).toBe('renderer-error');
+    expect(normalizeRendererFailureCode({ code: 'webgpu-runtime-error' })).toBe('webgpu-init-failed',
+    );
+    expect(normalizeRendererFailureCode({ code: 'app-system-update-failed' })).toBe('renderer-error',
+    );
   });
 
   it('preserves a real stack for automatic feedback evidence', () => {
@@ -97,51 +105,96 @@ describe('carrier failure codes never escape the classifier', () => {
 
   for (const code of CARRIER_CODES) {
     it(`maps ${code} into a documented family`, () => {
-      expect(KNOWN.has(normalizeCarrierFailureCode({ code, stage: 'runtime', hint: code }))).toBe(true);
+      expect(KNOWN.has(normalizeCarrierFailureCode({ code, stage: 'runtime', hint: code }))).toBe(
+        true,
+      );
     });
   }
 
   it('routes heartbeat-stage failures to runtime disconnect', () => {
-    expect(normalizeCarrierFailureCode({ code: 'whatever-unknown', stage: 'heartbeat', hint: '' }))
-      .toBe('viewport-runtime-disconnected');
+    expect(
+      normalizeCarrierFailureCode({ code: 'whatever-unknown', stage: 'heartbeat', hint: '' }),
+    ).toBe('viewport-runtime-disconnected');
   });
 
   it('is total — an unknown future code still yields a reportable family', () => {
-    expect(normalizeCarrierFailureCode({ code: 'brand-new-carrier-fault', stage: 'runtime', hint: '' }))
-      .toBe('renderer-error');
+    expect(
+      normalizeCarrierFailureCode({ code: 'brand-new-carrier-fault', stage: 'runtime', hint: '' }),
+    ).toBe('renderer-error');
     expect(normalizeCarrierFailureCode(null)).toBe('renderer-error');
   });
 });
 
-
 it('forwards validated producer identity and original failure time through health and subscriptions', () => {
-  const raw = { type: 'VAG_CARRIER_FAILURE', payload: {
-    version: 1, runtimeId: 'runtime-a', runtimeGeneration: 4, carrierId: 'play-2', carrierKind: 'iframe',
-    challengeResponse: null, scope: { projectId: 'project-a', gameId: 'game-a' }, pageNonce: 'page-a',
-    pageIdentity: '/preview/', canvasIdentity: 'canvas-a', rendererGeneration: 1, rendererIdentity: 'renderer-a',
-    sentinel: 1, liveness: 'terminated', renderReadiness: 'unavailable',
-    failure: { code: 'system-failed', hint: 'original message', stage: 'renderer', retryable: false, at: '2026-09-14T14:00:00Z' },
-  } };
+  const raw = {
+    type: 'VAG_CARRIER_FAILURE',
+    payload: {
+      version: 1,
+      runtimeId: 'runtime-a',
+      runtimeGeneration: 4,
+      carrierId: 'play-2',
+      carrierKind: 'iframe',
+      challengeResponse: null,
+      scope: { projectId: 'project-a', gameId: 'game-a' },
+      pageNonce: 'page-a',
+      pageIdentity: '/preview/',
+      canvasIdentity: 'canvas-a',
+      rendererGeneration: 1,
+      rendererIdentity: 'renderer-a',
+      sentinel: 1,
+      liveness: 'terminated',
+      renderReadiness: 'unavailable',
+      failure: {
+        code: 'system-failed',
+        hint: 'original message',
+        stage: 'renderer',
+        retryable: false,
+        at: '2026-09-14T14:00:00Z',
+      },
+    },
+  };
   const failure = carrierFailureFromError({ carrierFailure: raw });
   expect(failure).toBeDefined();
-  expect(carrierFailureFromError({ carrierFailure: { type: raw.type, payload: {} } })).toBeUndefined();
+  expect(
+    carrierFailureFromError({ carrierFailure: { type: raw.type, payload: {} } }),
+  ).toBeUndefined();
   const received: unknown[] = [];
   const unsubscribe = subscribePlayCarrierEvents((event) => received.push(event));
-  const broken = subscribePlayCarrierEvents(() => { throw new Error('host observer failed'); });
+  const broken = subscribePlayCarrierEvents(() => {
+    throw new Error('host observer failed');
+  });
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   const posted: unknown[] = [];
-  Object.defineProperty(globalThis, 'window', { configurable: true, value: { parent: { postMessage: (message: unknown) => posted.push(message) } } });
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { parent: { postMessage: (message: unknown) => posted.push(message) } },
+  });
   try {
     if (!failure) throw new Error('valid fixture rejected');
     publishPlayCarrierEvent({ requestId: 'original-request', event: failure });
-    forwardFeedbackHealth({ source: 'play', code: 'renderer-error', message: 'display message', carrierFailure: failure });
+    forwardFeedbackHealth({
+      source: 'play',
+      code: 'renderer-error',
+      message: 'display message',
+      carrierFailure: failure,
+    });
     expect(received).toEqual([{ requestId: 'original-request', event: raw }]);
-    expect(posted).toEqual([{ type: 'forgeax:health', level: 'error', source: 'play', code: 'renderer-error', message: 'display message', carrierFailure: raw }]);
+    expect(posted).toEqual([
+      {
+        type: 'forgeax:health',
+        level: 'error',
+        source: 'play',
+        code: 'renderer-error',
+        message: 'display message',
+        carrierFailure: raw,
+      },
+    ]);
     unsubscribe();
     publishPlayCarrierEvent({ event: failure });
     expect(received).toHaveLength(1);
   } finally {
-    unsubscribe(); broken();
+    unsubscribe();
+    broken();
     if (previous) Object.defineProperty(globalThis, 'window', previous);
     else Reflect.deleteProperty(globalThis, 'window');
   }

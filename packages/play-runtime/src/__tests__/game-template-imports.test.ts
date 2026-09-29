@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { resolveGameEngineEntry, resolvePlayEngineEntry } from '../../vite.config';
 
 const PLAY_RUNTIME = resolve(import.meta.dir, '..', '..');
-const GAME_TEMPLATE = resolve(PLAY_RUNTIME, '..', 'engine', 'templates', 'game-default');
+const GAME_TEMPLATE = resolve(PLAY_RUNTIME, '..', 'engine', 'templates', 'game-3d');
 
 function gameTemplateEngineImports(dir: string): string[] {
   const imports = new Set<string>();
@@ -19,7 +19,8 @@ function gameTemplateEngineImports(dir: string): string[] {
     }
     if (!entry.isFile() || !/\.[cm]?[jt]sx?$/.test(entry.name) || /\.(test|spec)\./.test(entry.name)) continue;
     const source = readFileSync(path, 'utf8');
-    for (const match of source.matchAll(/\bfrom\s*['\"](@forgeax\/[^'\"]+)['\"]|\bimport\s*\(\s*['\"](@forgeax\/[^'\"]+)['\"]\s*\)/g)) {
+    for (const match of source.matchAll(/\bfrom\s*['\"](@forgeax\/[^'\"]+)['\"]|\bimport\s*\(\s*['\"](@forgeax\/[^'\"]+)['\"]\s*\)/g,
+    )) {
       imports.add(match[1] ?? match[2]!);
     }
   }
@@ -44,9 +45,14 @@ describe('new-game template Play imports', () => {
     expect(play.dependencies?.['@forgeax/engine']).toBe('workspace:*');
   });
 
+  test('does not route a build-only Engine package into the browser', () => {
+    expect(resolvePlayEngineEntry('@forgeax/engine-vite-plugin-pack')).toBeNull();
+  });
+
   test('resolve from the standalone Play Runtime dependency graph', () => {
     const unresolved = gameTemplateEngineImports(GAME_TEMPLATE)
-      .filter((specifier) => resolveGameEngineEntry(specifier) === null);
+      .filter((specifier) => resolveGameEngineEntry(specifier) === null,
+    );
     expect(unresolved).toEqual([]);
   });
 
@@ -58,19 +64,27 @@ describe('new-game template Play imports', () => {
       expect(engineNpc).not.toBeNull();
       writeFileSync(join(dir, 'npc-smoke.ts'), [
         `import { NpcBrain, createNpcClientAdapter, npcPlugin } from ${JSON.stringify(engineNpc)};`,
-        'const client = {',
-        '  declareAffordances() {},',
-        '  setLod() {},',
-        '  tick() {},',
-        '};',
-        'const adapter = createNpcClientAdapter(client, {',
-        '  affordances: () => [],',
-        '  sample: () => undefined,',
-        '});',
-        'void NpcBrain; void npcPlugin({ adapter });',
-      ].join('\n'));
+          'const client = {',
+          '  declareAffordances() {},',
+          '  setLod() {},',
+          '  tick() {},',
+          '};',
+          'const adapter = createNpcClientAdapter(client, {',
+          '  affordances: () => [],',
+          '  sample: () => undefined,',
+          '});',
+          'void NpcBrain; void npcPlugin({ adapter });',
+        ].join('\n'),
+      );
       const built = Bun.spawnSync({
-        cmd: ['bun', 'build', join(dir, 'npc-smoke.ts'), '--target=browser', '--outfile', join(dir, 'npc-smoke.js')],
+        cmd: [
+          'bun',
+          'build',
+          join(dir, 'npc-smoke.ts'),
+          '--target=browser',
+          '--outfile',
+          join(dir, 'npc-smoke.js'),
+        ],
         stdout: 'pipe',
         stderr: 'pipe',
       });

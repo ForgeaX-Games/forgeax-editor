@@ -18,10 +18,14 @@ const fixture = JSON.parse(readFileSync(resolve('scripts/ci/fixtures/engine-prio
 const admitted = {
   editorSha: 'a'.repeat(40),
   engineSha: 'b'.repeat(40),
-  interfaceSha: 'c'.repeat(40),
   platformIoSha: 'd'.repeat(40),
   assetsSha: 'e'.repeat(40),
 };
+
+test('current admission does not probe the published Interface package as a gitlink', () => {
+  const source = readFileSync(resolve('scripts/ci/engine-prior-art-transfer.mjs'), 'utf8');
+  assert.equal(/interfaceSha|packages\/interface/.test(source), false);
+});
 
 function hashJson(value) {
   return createHash('sha256').update(`${JSON.stringify(value)}\n`).digest('hex');

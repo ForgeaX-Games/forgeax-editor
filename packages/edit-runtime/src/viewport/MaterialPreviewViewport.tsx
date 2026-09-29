@@ -8,7 +8,8 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import { createApp, type App } from '@forgeax/engine-app';
-import { createMaterialPreviewPrimitive, materialBindingFromPayload, previewSnapshot } from '@forgeax/engine-preview';
+import { createMaterialPreviewPrimitive, materialBindingFromPayload, previewSnapshot,
+} from '@forgeax/engine-preview';
 import {
   clearMaterialPreviewParams,
   createEngineFacade,
@@ -54,7 +55,8 @@ export function MaterialPreviewViewport(): ReactElement {
   const [fovDegrees, setFovDegrees] = useState(60);
   const [status, setStatus] = useState<'booting' | 'ready' | 'error'>('booting');
   const [errorHint, setErrorHint] = useState<string | null>(null);
-  const [previewIdentity, setPreviewIdentity] = useState<{ operationId: string; source: string; subjectGuid: string }>();
+  const [previewIdentity, setPreviewIdentity] = useState<{ operationId: string; source: string; subjectGuid: string;
+  }>();
 
   useEffect(() => {
     const host = hostRef.current;
@@ -187,7 +189,8 @@ export function MaterialPreviewViewport(): ReactElement {
       if (!assembly || !asset || asset.kind !== 'material-instance') return;
       const staging = getMiStaging(asset.guid)?.staging;
       if (!staging) return;
-      assembly.applyResolvedValues(resolveOverrides(staging, materialCatalogLookup(gateway.doc.registry)));
+      assembly.applyResolvedValues(resolveOverrides(staging, materialCatalogLookup(gateway.doc.registry)),
+      );
     };
 
     const applyMaterial = () => {
@@ -196,6 +199,11 @@ export function MaterialPreviewViewport(): ReactElement {
       const lookup = materialCatalogLookup(gateway.doc.registry);
       const values = resolveMaterialPreviewDisplayValues(asset.guid, lookup);
       assembly.applyResolvedValues(values);
+    };
+
+    /** Drop transient drag overlay once staging matches saved (commit/discard/assets reload). */
+    const syncCleanPreviewOverlay = () => {
+      if (!asset || asset.kind !== 'material') return;
       if (!isMaterialStagingDirty(asset.guid)) {
         clearMaterialPreviewParams(asset.guid);
       }
@@ -230,17 +238,23 @@ export function MaterialPreviewViewport(): ReactElement {
                 binding,
               });
               assemblyRef.current?.setEnginePrimitive?.(primitive);
-              setPreviewIdentity({ operationId: primitive.operationId, source: primitive.source, subjectGuid: primitive.subject.guid });
+              setPreviewIdentity({ operationId: primitive.operationId, source: primitive.source, subjectGuid: primitive.subject.guid,
+              });
             }
           });
         });
       };
+      syncCleanPreviewOverlay();
       warmAndApply();
-      const offAssets = panelBridge.on('assetsChanged', warmAndApply);
+      const offAssets = panelBridge.on('assetsChanged', () => {
+        syncCleanPreviewOverlay();
+        warmAndApply();
+      });
       const offStaged = subscribeMaterialPreviewParams((guid) => {
         if (guid === asset.guid.toLowerCase()) applyMaterial();
       });
       const offStaging = subscribeMaterialStaging(() => {
+        syncCleanPreviewOverlay();
         applyMaterial();
       });
       return () => { cancelled = true; offAssets(); offStaged(); offStaging(); };
@@ -302,7 +316,8 @@ export function MaterialPreviewViewport(): ReactElement {
     : null;
 
   useEffect(() => {
-    setMaterialPreviewToolbarState({ meshKind, cameraView, fovDegrees, customMeshName });
+    setMaterialPreviewToolbarState({ meshKind, cameraView, fovDegrees, customMeshName,
+    });
   }, [meshKind, cameraView, fovDegrees, customMeshName]);
 
   useEffect(() => {

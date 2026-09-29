@@ -46,9 +46,43 @@ import {
  *  mirror host-boot's `as never` discipline with a narrow structural shape. */
 type RendererLike = {
   assets: {
-    loadByGuid(guid: unknown): Promise<{ ok: boolean; value?: unknown; error?: { code?: string } }>;
+    loadByGuid(guid: unknown): Promise<{ ok: boolean; value?: unknown; error?: { code?: string; expected?: string; hint?: string };
+    }>;
+    refreshCatalog?(): Promise<boolean>;
   };
 };
+
+const MESH_LOAD_READINESS_RETRY_LIMIT = 3;
+
+function isTransientAssetReadinessError(error: unknown): boolean {
+  if (error === null || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; expected?: unknown; hint?: unknown;
+  };
+  return (
+    candidate.code === 'asset-parse-failed'
+    && typeof candidate.expected === 'string'
+    && candidate.expected.includes('all referenced assets to be public-ready')
+    && typeof candidate.hint === 'string'
+    && candidate.hint.includes('retry after every referenced GUID has loaded successfully')
+  );
+}
+
+async function loadMeshByGuidWithReadinessRetry(
+  assets: RendererLike['assets'],
+  guid: unknown,
+): Promise<{ ok: boolean; value?: unknown; error?: { code?: string; expected?: string; hint?: string };
+}> {
+  let result = await assets.loadByGuid(guid);
+  for (let attempt = 1; attempt < MESH_LOAD_READINESS_RETRY_LIMIT; attempt++) {
+    if (result.ok || !isTransientAssetReadinessError(result.error)) return result;
+    if (typeof assets.refreshCatalog === 'function') {
+      await assets.refreshCatalog();
+    }
+    await new Promise<void>((resolve) => { setTimeout(resolve, attempt * 25); });
+    result = await assets.loadByGuid(guid);
+  }
+  return result;
+}
 
 /** Pull the pending-mesh marker guid from a spawnEntity command, or null. */
 function pendingMeshGuid(cmd: EditorOp | null): string | null {
@@ -81,7 +115,8 @@ function pendingMaterialGuids(cmd: EditorOp | null): string[] | null {
 function pendingTextureMarker(cmd: EditorOp | null): { guid: string; name: string | null } | null {
   if (cmd === null || cmd.kind !== 'spawnEntity') return null;
   const components = (cmd as { components?: Record<string, unknown> }).components;
-  const marker = components?.EditorPendingTextureAsset as { guid?: unknown; name?: unknown } | undefined;
+  const marker = components?.EditorPendingTextureAsset as
+    | { guid?: unknown; name?: unknown } | undefined;
   const guid = marker?.guid;
   if (typeof guid !== 'string' || guid.length === 0) return null;
   const name = typeof marker?.name === 'string' && marker.name.length > 0 ? marker.name : null;
@@ -91,7 +126,8 @@ function pendingTextureMarker(cmd: EditorOp | null): { guid: string; name: strin
 /** Pull the spawn-time Transform (array-TRS POD) from a spawnEntity command,
  *  or null when missing/malformed. The texture branch uses it as the baseline
  *  for the aspect-correct scale patch (and to preserve the authored x/z). */
-function spawnTransform(cmd: EditorOp | null): { pos: [number, number, number]; scale: [number, number, number] } | null {
+function spawnTransform(cmd: EditorOp | null,
+): { pos: [number, number, number]; scale: [number, number, number] } | null {
   if (cmd === null || cmd.kind !== 'spawnEntity') return null;
   const components = (cmd as { components?: Record<string, unknown> }).components;
   const t = components?.Transform as { pos?: unknown; scale?: unknown } | undefined;
@@ -99,7 +135,8 @@ function spawnTransform(cmd: EditorOp | null): { pos: [number, number, number]; 
   const scale = t?.scale;
   if (!Array.isArray(pos) || pos.length !== 3 || !pos.every((n) => typeof n === 'number')) return null;
   if (!Array.isArray(scale) || scale.length !== 3 || !scale.every((n) => typeof n === 'number')) return null;
-  return { pos: pos as [number, number, number], scale: scale as [number, number, number] };
+  return { pos: pos as [number, number, number], scale: scale as [number, number, number],
+  };
 }
 
 /**
@@ -110,7 +147,8 @@ function spawnTransform(cmd: EditorOp | null): { pos: [number, number, number]; 
  * Both are idempotent per GUID: failed GUIDs are never retried, resolved GUIDs are
  * re-patched from cache (redo replay / a second entity sharing the asset).
  */
-export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFacade, renderer: RendererLike): void {
+export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFacade, renderer: RendererLike,
+): void {
   // M3 migration bridge (t16→t20): the injected proxy is `engine` (EngineFacade).
   // t16 swaps the signature; t20 rewrites the body to call engine.allocSharedRef
   // t20 (S4 / AC-05): the mesh handle is minted through the injected EngineFacade
@@ -125,10 +163,20 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
   const resolvedMat = new Map<string, number>();
   const meshResolveStartedAt = new Map<string, number>();
 
-  const patchMesh = (entity: number, assetHandle: number, guid: string, phase: 'cache-hit' | 'loaded'): void => {
+  const patchMesh = (entity: number, assetHandle: number, guid: string, phase: 'cache-hit' | 'loaded',
+  ): void => {
     const startedAt = meshResolveStartedAt.get(`${entity}:${guid}`);
-    const result = bus.dispatch({ kind: 'setComponent', entity, component: 'MeshFilter', patch: { assetHandle } }, 'ai');
-    console.info(`[placement-diag] resolver.mesh.patch ${JSON.stringify({
+    const result = bus.dispatch(
+      {
+        kind: 'setComponent',
+        entity,
+        component: 'MeshFilter',
+        patch: { assetHandle },
+      },
+      'ai',
+    );
+    console.info(
+      `[placement-diag] resolver.mesh.patch ${JSON.stringify({
       entity,
       guid,
       assetHandle,
@@ -136,7 +184,8 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
       elapsedMs: startedAt === undefined ? undefined : Date.now() - startedAt,
       ok: result.ok,
       error: result.ok ? undefined : result.error,
-    })}`);
+    })}`,
+    );
   };
 
   // ── MESH branch (feat-20260705 M3, behaviour unchanged) ──────────────────────
@@ -145,35 +194,52 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
     console.info(`[placement-diag] resolver.mesh.begin ${JSON.stringify({ entity, guid })}`);
     // Retry-storm guard: a GUID that already failed is never re-attempted.
     if (failed.has(guid)) {
-      console.info(`[placement-diag] resolver.mesh.skipped ${JSON.stringify({ entity, guid, reason: 'previous-failure' })}`);
+      console.info(
+        `[placement-diag] resolver.mesh.skipped ${JSON.stringify({ entity, guid, reason: 'previous-failure' })}`,
+      );
       return;
     }
     // Cache hit (redo replay / second entity sharing the mesh): re-patch, no reload.
     const cached = resolved.get(guid);
-    if (cached !== undefined) { patchMesh(entity, cached, guid, 'cache-hit'); return; }
+    if (cached !== undefined) {
+      patchMesh(entity, cached, guid, 'cache-hit');
+      return;
+    }
 
     const parsed = AssetGuid.parse(guid);
     if (!parsed.ok) {
       failed.add(guid);
-      console.error('[drag-spawn-resolve]', { guid, code: 'bad-guid', hint: 'AssetGuid.parse failed' });
+      console.error('[drag-spawn-resolve]', {
+        guid,
+        code: 'bad-guid',
+        hint: 'AssetGuid.parse failed',
+      });
       return;
     }
 
     void (async () => {
-      const res = await renderer.assets.loadByGuid(parsed.value);
-      console.info(`[placement-diag] resolver.mesh.load ${JSON.stringify({
+      const res = await loadMeshByGuidWithReadinessRetry(renderer.assets, parsed.value);
+      console.info(
+        `[placement-diag] resolver.mesh.load ${JSON.stringify({
         entity,
         guid,
         ok: res.ok,
         errorCode: res.error?.code,
-      })}`);
+      })}`,
+      );
       if (!res.ok || res.value === undefined) {
         failed.add(guid);
-        console.error('[drag-spawn-resolve]', { guid, code: 'load-miss', hint: res.error?.code ?? 'loadByGuid returned no value' });
+        console.error('[drag-spawn-resolve]', {
+          guid,
+          code: 'load-miss',
+          hint: res.error?.code ?? 'loadByGuid returned no value',
+        });
         return;
       }
       const handle = engine.allocSharedRef('MeshAsset', res.value) as number;
-      console.info(`[placement-diag] resolver.mesh.allocated ${JSON.stringify({ entity, guid, handle })}`);
+      console.info(
+        `[placement-diag] resolver.mesh.allocated ${JSON.stringify({ entity, guid, handle })}`,
+      );
       resolved.set(guid, handle);
       patchMesh(entity, handle, guid, 'loaded');
     })();
@@ -185,24 +251,36 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
     console.info(`[placement-diag] resolver.material.begin ${JSON.stringify({ guid })}`);
     const cached = resolvedMat.get(guid);
     if (cached !== undefined) {
-      console.info(`[placement-diag] resolver.material.cached ${JSON.stringify({ guid, handle: cached })}`);
+      console.info(
+        `[placement-diag] resolver.material.cached ${JSON.stringify({ guid, handle: cached })}`,
+      );
       return cached;
     }
     if (failedMat.has(guid)) {
-      console.info(`[placement-diag] resolver.material.skipped ${JSON.stringify({ guid, reason: 'previous-failure' })}`);
+      console.info(
+        `[placement-diag] resolver.material.skipped ${JSON.stringify({ guid, reason: 'previous-failure' })}`,
+      );
       return undefined; // already failed: no retry, no dup error
     }
     const parsed = AssetGuid.parse(guid);
     if (!parsed.ok) {
       failedMat.add(guid);
-      console.error('[drag-spawn-resolve:material]', { guid, code: 'bad-guid', hint: 'AssetGuid.parse failed' });
+      console.error('[drag-spawn-resolve:material]', {
+        guid,
+        code: 'bad-guid',
+        hint: 'AssetGuid.parse failed',
+      });
       return undefined;
     }
     const loadByGuid = renderer.assets?.loadByGuid;
     if (typeof loadByGuid !== 'function') {
       failedMat.add(guid);
       const hint = 'renderer.assets.loadByGuid is not available';
-      console.error('[drag-spawn-resolve:material]', { guid, code: 'no-assets', hint });
+      console.error('[drag-spawn-resolve:material]', {
+        guid,
+        code: 'no-assets',
+        hint,
+      });
       broadcastAssetsError({ op: 'placeAsset', hint });
       return undefined;
     }
@@ -220,19 +298,27 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
       });
       return undefined;
     }
-    const res = await loadByGuid.call(renderer.assets, parsed.value);
-    console.info(`[placement-diag] resolver.material.load ${JSON.stringify({
+    const res = await loadMeshByGuidWithReadinessRetry(renderer.assets, parsed.value);
+    console.info(
+      `[placement-diag] resolver.material.load ${JSON.stringify({
       guid,
       ok: res.ok,
       errorCode: res.error?.code,
-    })}`);
+    })}`,
+    );
     if (!res.ok || res.value === undefined) {
       failedMat.add(guid);
-      console.error('[drag-spawn-resolve:material]', { guid, code: 'load-miss', hint: res.error?.code ?? 'loadByGuid returned no value' });
+      console.error('[drag-spawn-resolve:material]', {
+        guid,
+        code: 'load-miss',
+        hint: res.error?.code ?? 'loadByGuid returned no value',
+      });
       return undefined;
     }
     const handle = engine.allocSharedRef('MaterialAsset', res.value) as number;
-    console.info(`[placement-diag] resolver.material.allocated ${JSON.stringify({ guid, handle })}`);
+    console.info(
+      `[placement-diag] resolver.material.allocated ${JSON.stringify({ guid, handle })}`,
+    );
     resolvedMat.set(guid, handle);
     return handle;
   };
@@ -258,11 +344,15 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
     // MeshRenderer (graceful degradation, R-3) — a length-0 patch would be a no-op
     // and a partial one cannot satisfy count alignment.
     if (firstMatHandle === undefined) {
-      console.warn(`[placement-diag] resolver.materials.no-handle ${JSON.stringify({ entity, guids })}`);
+      console.warn(
+        `[placement-diag] resolver.materials.no-handle ${JSON.stringify({ entity, guids })}`,
+      );
       return;
     }
 
-    const materials = guids.map((g) => (g !== '' ? (handleByGuid.get(g) ?? firstMatHandle) : firstMatHandle));
+    const materials = guids.map((g) =>
+      g !== '' ? (handleByGuid.get(g) ?? firstMatHandle) : firstMatHandle,
+    );
     const bindGuids = guids.filter((g) => g !== '');
     const bindHandles = bindGuids.map((g) => handleByGuid.get(g) ?? firstMatHandle);
     const compatibilityError = validateMeshRendererMaterialBinding(entity, bindGuids, bindHandles);
@@ -279,14 +369,24 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
       });
       return;
     }
-    const result = bus.dispatch({ kind: 'setComponent', entity, component: 'MeshRenderer', patch: { materials } }, 'ai');
-    console.info(`[placement-diag] resolver.materials.patch ${JSON.stringify({
+    const result = bus.dispatch(
+      {
+        kind: 'setComponent',
+        entity,
+        component: 'MeshRenderer',
+        patch: { materials },
+      },
+      'ai',
+    );
+    console.info(
+      `[placement-diag] resolver.materials.patch ${JSON.stringify({
       entity,
       guids,
       handles: materials,
       ok: result.ok,
       error: result.ok ? undefined : result.error,
-    })}`);
+    })}`,
+    );
   };
 
   bus.subscribe((_doc, lastCommand) => {
@@ -301,12 +401,14 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
     const matGuids = pendingMaterialGuids(lastCommand);
     const texMarker = pendingTextureMarker(lastCommand);
     if (meshGuid !== null || matGuids !== null || texMarker !== null) {
-      console.info(`[placement-diag] resolver.command ${JSON.stringify({
+      console.info(
+        `[placement-diag] resolver.command ${JSON.stringify({
         entity,
         meshGuid,
         materialGuids: matGuids,
         textureGuid: texMarker?.guid ?? null,
-      })}`);
+      })}`,
+      );
     }
     if (meshGuid !== null) resolveMesh(entity, meshGuid);
     if (matGuids !== null) {
@@ -325,7 +427,15 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
     }
 
     // ── TEXTURE branch: createMaterial + bindAssetRef (reuses engine refs chain) ──
-    if (texMarker !== null) void resolveTexture(bus, renderer, entity, texMarker.guid, texMarker.name, spawnTransform(lastCommand));
+    if (texMarker !== null)
+      void resolveTexture(
+        bus,
+        renderer,
+        entity,
+        texMarker.guid,
+        texMarker.name,
+        spawnTransform(lastCommand),
+      );
   });
 }
 
@@ -362,7 +472,17 @@ export function installDragSpawnMeshResolver(bus: EditGateway, engine: EngineFac
  * surfaced through broadcastAssetsError (panel toast) — never a silent
  * gray-card degradation.
  */
-async function resolveTexture(bus: EditGateway, renderer: RendererLike, entity: number, textureGuid: string, textureName: string | null, transform: { pos: [number, number, number]; scale: [number, number, number] } | null): Promise<void> {
+async function resolveTexture(
+  bus: EditGateway,
+  renderer: RendererLike,
+  entity: number,
+  textureGuid: string,
+  textureName: string | null,
+  transform: {
+    pos: [number, number, number];
+    scale: [number, number, number];
+  } | null,
+): Promise<void> {
   // ASPECT PATCH: dev-mode catalog rows deliberately omit width/height
   // (build-catalog reads JSON only), so the spawn fell back to a square
   // [2,2,1] card. The real pixel dims are only known after loadByGuid decodes
@@ -379,7 +499,11 @@ async function resolveTexture(bus: EditGateway, renderer: RendererLike, entity: 
     // the default gray material forever with zero feedback (the exact failure
     // this resolver used to produce silently).
     const label = textureName ?? textureGuid;
-    console.error('[drag-spawn-resolve:texture]', { textureGuid, code: 'texture-load-miss', hint: 'loadByGuid returned no decodable texture' });
+    console.error('[drag-spawn-resolve:texture]', {
+      textureGuid,
+      code: 'texture-load-miss',
+      hint: 'loadByGuid returned no decodable texture',
+    });
     broadcastAssetsError({
       op: 'placeAsset',
       hint: `texture '${label}' could not be loaded — it may have been deleted, failed to import, or is still indexing; re-import it or retry once indexing completes`,
@@ -393,9 +517,22 @@ async function resolveTexture(bus: EditGateway, renderer: RendererLike, entity: 
       Math.abs(scale[1] - transform.scale[1]) +
       Math.abs(scale[2] - transform.scale[2]);
     if (drift > 1e-6) {
-      const pos: [number, number, number] = [transform.pos[0], scale[1] / 2 + 0.01, transform.pos[2]];
-      const r = bus.dispatch({ kind: 'setComponent', entity, component: 'Transform', patch: { pos, scale } }, 'ai');
-      console.info(`[placement-diag] resolver.texture.aspect ${JSON.stringify({
+      const pos: [number, number, number] = [
+        transform.pos[0],
+        scale[1] / 2 + 0.01,
+        transform.pos[2],
+      ];
+      const r = bus.dispatch(
+        {
+          kind: 'setComponent',
+          entity,
+          component: 'Transform',
+          patch: { pos, scale },
+        },
+        'ai',
+      );
+      console.info(
+        `[placement-diag] resolver.texture.aspect ${JSON.stringify({
         entity,
         textureGuid,
         width: facts.width,
@@ -403,16 +540,23 @@ async function resolveTexture(bus: EditGateway, renderer: RendererLike, entity: 
         scale,
         ok: r.ok,
         error: r.ok ? undefined : r.error,
-      })}`);
+      })}`,
+      );
     }
   }
 
   const guidKey = textureGuid.toLowerCase();
-  const existing = bus.assetCatalog().find((row) =>
-    row.kind === 'material'
-    && (row.refs ?? []).some((g) => typeof g === 'string' && g.toLowerCase() === guidKey));
+  const existing = bus
+    .assetCatalog()
+    .find(
+      (row) =>
+        row.kind === 'material' &&
+        (row.refs ?? []).some((g) => typeof g === 'string' && g.toLowerCase() === guidKey),
+    );
   if (existing !== undefined) {
-    console.info(`[placement-diag] resolver.texture.dedup ${JSON.stringify({ entity, textureGuid, materialGuid: existing.guid })}`);
+    console.info(
+      `[placement-diag] resolver.texture.dedup ${JSON.stringify({ entity, textureGuid, materialGuid: existing.guid })}`,
+    );
     dispatchMaterialBind(bus, entity, existing.guid, textureName ?? textureGuid);
     return;
   }
@@ -420,14 +564,17 @@ async function resolveTexture(bus: EditGateway, renderer: RendererLike, entity: 
   const alphaCutoff = facts.alphaCutoff;
   const materialGuid = crypto.randomUUID();
   const materialName = `M_${textureName ?? textureGuid.slice(0, 8)}`;
-  const r1 = bus.dispatch({
-    kind: 'createMaterial',
-    guid: materialGuid,
-    name: materialName,
-    baseColor: [1, 1, 1, 1],
-    baseColorTexture: textureGuid,
-    ...(alphaCutoff !== undefined ? { alphaCutoff } : {}),
-  }, 'ai');
+  const r1 = bus.dispatch(
+    {
+      kind: 'createMaterial',
+      guid: materialGuid,
+      name: materialName,
+      baseColor: [1, 1, 1, 1],
+      baseColorTexture: textureGuid,
+      ...(alphaCutoff !== undefined ? { alphaCutoff } : {}),
+    },
+    'ai',
+  );
   if (!r1.ok) {
     // createMaterial rejects synchronously (INVALID_ARGS — e.g. the texture GUID
     // left the catalog between the load above and this dispatch). The spawn
@@ -447,7 +594,10 @@ async function resolveTexture(bus: EditGateway, renderer: RendererLike, entity: 
     // against a material that never reached the pack would loadByGuid → miss →
     // `/__import/{materialGuid}` 404 (that route serves external import sources
     // only) and leave the permanent gray card this contract exists to prevent.
-    console.error('[drag-spawn-resolve:texture] authored material never became ready; bind aborted', { materialGuid, materialName, stage: ready.stage, hint: ready.hint });
+    console.error(
+      '[drag-spawn-resolve:texture] authored material never became ready; bind aborted',
+      { materialGuid, materialName, stage: ready.stage, hint: ready.hint },
+    );
     return;
   }
   dispatchMaterialBind(bus, entity, materialGuid, materialName);
@@ -458,17 +608,25 @@ async function resolveTexture(bus: EditGateway, renderer: RendererLike, entity: 
  *  bindAssetRef is a request-correlated session op: dispatch only ACCEPTS the
  *  run — the actual loadByGuid → allocSharedRef → setComponent effect resolves
  *  asynchronously, so a miss used to die invisibly inside the OperationRun. */
-function dispatchMaterialBind(bus: EditGateway, entity: number, materialGuid: string, label: string): void {
+function dispatchMaterialBind(
+  bus: EditGateway,
+  entity: number,
+  materialGuid: string,
+  label: string,
+): void {
   const requestId = crypto.randomUUID();
-  const r = bus.dispatch({
-    kind: 'bindAssetRef',
-    entity,
-    component: 'MeshRenderer',
-    field: 'materials',
-    assetType: 'MaterialAsset',
-    guids: [materialGuid],
-    requestId,
-  }, 'ai');
+  const r = bus.dispatch(
+    {
+      kind: 'bindAssetRef',
+      entity,
+      component: 'MeshRenderer',
+      field: 'materials',
+      assetType: 'MaterialAsset',
+      guids: [materialGuid],
+      requestId,
+    },
+    'ai',
+  );
   if (!r.ok) {
     console.error('[drag-spawn-resolve:texture] bindAssetRef dispatch rejected', r);
     broadcastAssetsError({
@@ -482,7 +640,11 @@ function dispatchMaterialBind(bus: EditGateway, entity: number, materialGuid: st
     const hint = run.ok
       ? (run.value.error?.hint ?? `bind run ended with status '${run.value.status}'`)
       : run.error.hint;
-    console.error('[drag-spawn-resolve:texture] bindAssetRef run failed', { requestId, materialGuid, hint });
+    console.error('[drag-spawn-resolve:texture] bindAssetRef run failed', {
+      requestId,
+      materialGuid,
+      hint,
+    });
     broadcastAssetsError({
       op: 'bindAssetRef',
       hint: `could not bind material '${label}' onto the dropped texture card: ${hint}`,
@@ -511,25 +673,46 @@ function aspectCardScale(width: number, height: number): [number, number, number
  * UNDECIDABLE alpha payloads (GPU-compressed KTX2/Basis bytes carry
  * no scannable RGBA) yield the dims with no cutoff, the safe default.
  */
-async function loadTextureSpawnFacts(renderer: RendererLike, textureGuid: string): Promise<{ width: number; height: number; alphaCutoff?: number } | null> {
+async function loadTextureSpawnFacts(
+  renderer: RendererLike,
+  textureGuid: string,
+): Promise<{ width: number; height: number; alphaCutoff?: number } | null> {
   try {
     const parsed = AssetGuid.parse(textureGuid);
     if (!parsed.ok) return null;
     const res = await renderer.assets.loadByGuid(parsed.value);
     if (!res.ok || res.value === undefined) return null;
-    const tex = res.value as { width?: unknown; height?: unknown; format?: unknown; data?: unknown };
-    if (typeof tex.width !== 'number' || typeof tex.height !== 'number' || tex.width <= 0 || tex.height <= 0) return null;
+    const tex = res.value as {
+      width?: unknown;
+      height?: unknown;
+      format?: unknown;
+      data?: unknown;
+    };
+    if (
+      typeof tex.width !== 'number' ||
+      typeof tex.height !== 'number' ||
+      tex.width <= 0 ||
+      tex.height <= 0
+    )
+      return null;
     let alphaCutoff: number | undefined;
     if (
-      (tex.format === 'rgba8unorm' || tex.format === 'rgba8unorm-srgb')
-      && tex.data instanceof Uint8Array
-      && tex.data.length >= tex.width * tex.height * 4
+      (tex.format === 'rgba8unorm' || tex.format === 'rgba8unorm-srgb') &&
+      tex.data instanceof Uint8Array &&
+      tex.data.length >= tex.width * tex.height * 4
     ) {
       for (let a = 3; a < tex.data.length; a += 4) {
-        if ((tex.data[a] ?? 255) < 255) { alphaCutoff = 0.5; break; }
+        if ((tex.data[a] ?? 255) < 255) {
+          alphaCutoff = 0.5;
+          break;
+        }
       }
     }
-    return { width: tex.width, height: tex.height, ...(alphaCutoff !== undefined ? { alphaCutoff } : {}) };
+    return {
+      width: tex.width,
+      height: tex.height,
+      ...(alphaCutoff !== undefined ? { alphaCutoff } : {}),
+    };
   } catch {
     return null;
   }

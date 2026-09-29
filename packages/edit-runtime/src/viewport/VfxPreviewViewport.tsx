@@ -53,8 +53,7 @@ import {
 import { createVfxPreviewPrimitive, previewSnapshot } from '@forgeax/engine-preview';
 import {
   VFX_PREVIEW_LEASE_KIND,
-  VFX_PREVIEW_OPERATION_IDS,
-} from './vfx-preview-operations';
+  VFX_PREVIEW_OPERATION_IDS } from './vfx-preview-operations';
 import { createPreviewBundlerOptions } from './preview-bundler-options';
 import { createInteractivePreviewSession } from '../preview-world/interactive-session-isolation';
 import {
@@ -171,11 +170,16 @@ export function VfxPreviewViewport(): ReactElement {
     void (async () => {
       const previewBundlerOptions = await createPreviewBundlerOptions();
 
-      const create = (rhi?: unknown) => createApp(canvas, {
-        features: [vfxHost.feature],
-        pointerLockAllowed: () => false,
-        ...(rhi === undefined ? {} : { rhi: rhi as never }),
-      }, previewBundlerOptions);
+      const create = (rhi?: unknown) =>
+        createApp(
+          canvas,
+          {
+            features: [vfxHost.feature],
+            pointerLockAllowed: () => false,
+            ...(rhi === undefined ? {} : { rhi: rhi as never }),
+          },
+          previewBundlerOptions,
+        );
 
       const loadedEffect = await loadDocumentAssetPayload(asset.guid);
       if (!isVfxGpuEffectAsset(loadedEffect)) {
@@ -203,7 +207,10 @@ export function VfxPreviewViewport(): ReactElement {
         created = await create(rhiNull.rhi);
       }
       if (!created.ok) throw created.error;
-      if (cancelled) { created.value.stop(); return; }
+      if (cancelled) {
+        created.value.stop();
+        return;
+      }
       app = created.value;
       previewWorld = app.world;
       const assets = app.assets;
@@ -215,35 +222,58 @@ export function VfxPreviewViewport(): ReactElement {
       if (!control.ok) throw control.error;
 
       const facade = createEngineFacade(app.world as never, assets);
-      const camera = facade.spawn(
-        { component: Transform, data: { pos: [0, 1.5, 4] } },
-        { component: Camera, data: {
-          ...perspective({ fov: Math.PI / 3, aspect: 1 }),
-          tonemap: TONEMAP_REINHARD_EXTENDED,
-          clearColor: [0.025, 0.035, 0.06, 1],
-        } },
-      ).unwrap();
+      const camera = facade
+        .spawn(
+          { component: Transform, data: { pos: [0, 1.5, 4] } },
+          {
+            component: Camera,
+            data: {
+              ...perspective({ fov: Math.PI / 3, aspect: 1 }),
+              tonemap: TONEMAP_REINHARD_EXTENDED,
+              clearColor: [0.025, 0.035, 0.06, 1],
+            },
+          },
+        )
+        .unwrap();
       cameraEntity = camera;
-      const floorMaterial = Materials.standard({ baseColor: [0.055, 0.07, 0.1, 1], metallic: 0.15, roughness: 0.78 });
+      const floorMaterial = Materials.standard({
+        baseColor: [0.055, 0.07, 0.1, 1],
+        metallic: 0.15,
+        roughness: 0.78,
+      });
       const floorMaterialHandle = facade.allocSharedRef('MaterialAsset', floorMaterial);
-      facade.spawn(
-        { component: Transform, data: { pos: [0, -0.08, 0], scale: [10, 0.08, 10] } },
-        { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-        { component: MeshRenderer, data: { materials: [floorMaterialHandle] } },
-      ).unwrap();
-      facade.spawn(
-        { component: Transform, data: {} },
-        { component: DirectionalLight, data: { direction: [0.4, -1, 0.3], color: [0.8, 0.9, 1], intensity: 1.8 } },
-      ).unwrap();
-      facade.spawn(
-        { component: Transform, data: {} },
-        { component: Skylight, data: { color: [0.25, 0.32, 0.5], intensity: 0.35 } },
-      ).unwrap();
+      facade
+        .spawn(
+          { component: Transform, data: { pos: [0, -0.08, 0], scale: [10, 0.08, 10] } },
+          { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+          { component: MeshRenderer, data: { materials: [floorMaterialHandle] } },
+        )
+        .unwrap();
+      facade
+        .spawn(
+          { component: Transform, data: {} },
+          {
+            component: DirectionalLight,
+            data: { direction: [0.4, -1, 0.3], color: [0.8, 0.9, 1], intensity: 1.8 },
+          },
+        )
+        .unwrap();
+      facade
+        .spawn(
+          { component: Transform, data: {} },
+          { component: Skylight, data: { color: [0.25, 0.32, 0.5], intensity: 0.35 } },
+        )
+        .unwrap();
       const effectHandle = facade.allocSharedRef('ParticleEffectAsset', effect);
-      const player = facade.spawn(
-        { component: Transform, data: { pos: [0, 0, 0] } },
-        { component: ParticleEffectPlayer, data: { effect: effectHandle, playing: true, seed: 1337, timeScale: 1 } },
-      ).unwrap();
+      const player = facade
+        .spawn(
+          { component: Transform, data: { pos: [0, 0, 0] } },
+          {
+            component: ParticleEffectPlayer,
+            data: { effect: effectHandle, playing: true, seed: 1337, timeScale: 1 },
+          },
+        )
+        .unwrap();
       const emitterIds = Object.freeze(effect.program.emitters.map((emitter) => emitter.id));
       const previewBounds = deriveVfxPreviewBounds(effect.program.emitters);
       const previewViewport = createViewport({
@@ -251,14 +281,15 @@ export function VfxPreviewViewport(): ReactElement {
         engine: facade,
         editorEngine: facade,
         camera,
-        initialOrbit: previewBounds === undefined
-          ? { target: [0, 0.8, 0], dist: 6, yaw: 0.55, pitch: -0.24 }
-          : {
-              target: [...previewBounds.center],
-              dist: Math.max(0.1, previewBounds.radius * 3.2),
-              yaw: 0.55,
-              pitch: -0.24,
-            },
+        initialOrbit:
+          previewBounds === undefined
+            ? { target: [0, 0.8, 0], dist: 6, yaw: 0.55, pitch: -0.24 }
+            : {
+                target: [...previewBounds.center],
+                dist: Math.max(0.1, previewBounds.radius * 3.2),
+                yaw: 0.55,
+                pitch: -0.24,
+              },
         interaction: 'preview',
       });
       viewport = previewViewport;
@@ -326,9 +357,11 @@ export function VfxPreviewViewport(): ReactElement {
           if (appPaused) currentApp.stepFrame(0).unwrap();
         },
         frameBounds() {
-          const enabledBounds = deriveVfxPreviewBounds(effect.program.emitters.filter(
-            (emitter) => previewRuntime.enabledEmitterIdSet.has(emitter.id),
-          ));
+          const enabledBounds = deriveVfxPreviewBounds(
+            effect.program.emitters.filter((emitter) =>
+              previewRuntime.enabledEmitterIdSet.has(emitter.id),
+            ),
+          );
           const frame = enabledBounds ?? previewBounds;
           if (frame === undefined) throw new Error('the VFX effect has no authored preview bounds');
           previewViewport.frameBounds(frame);
@@ -376,19 +409,21 @@ export function VfxPreviewViewport(): ReactElement {
           }
         },
       };
-      currentApp.world.addSystem(Update, {
-        name: 'vfx-preview-authored-bounds',
-        queries: [],
-        fn: () => {
-          if (!previewRuntime.boundsVisible) return;
-          drawVfxPreviewBounds(
-            currentApp.debugDraw,
-            effect.program.emitters,
-            previewRuntime.enabledEmitterIdSet,
-            previewBounds,
-          );
-        },
-      }).unwrap();
+      currentApp.world
+        .addSystem(Update, {
+          name: 'vfx-preview-authored-bounds',
+          queries: [],
+          fn: () => {
+            if (!previewRuntime.boundsVisible) return;
+            drawVfxPreviewBounds(
+              currentApp.debugDraw,
+              effect.program.emitters,
+              previewRuntime.enabledEmitterIdSet,
+              previewBounds,
+            );
+          },
+        })
+        .unwrap();
       runtimeRef.current = previewRuntime;
       unregisterPreviewExecutor = registerShellPreviewExecutorLease({
         identity: lease,
@@ -425,9 +460,11 @@ export function VfxPreviewViewport(): ReactElement {
             readonly emitterIds?: unknown;
             readonly visible?: unknown;
           };
-          if (input.kind === 'setBoundsVisible'
-            && input.visible === true
-            && currentApp.debugDraw === undefined) {
+          if (
+            input.kind === 'setBoundsVisible' &&
+            input.visible === true &&
+            currentApp.debugDraw === undefined
+          ) {
             return {
               ok: false,
               error: {
@@ -443,17 +480,21 @@ export function VfxPreviewViewport(): ReactElement {
           if (input.kind === 'play') previewRuntime.setPlaying(true);
           else if (input.kind === 'pause') previewRuntime.setPlaying(false);
           else if (input.kind === 'reset') previewRuntime.replay();
-          else if (input.kind === 'seek'
-            && typeof input.phaseTick === 'number'
-            && Number.isInteger(input.phaseTick)
-            && input.phaseTick >= 0
-            && input.phaseTick <= 3_600) {
+          else if (
+            input.kind === 'seek' &&
+            typeof input.phaseTick === 'number' &&
+            Number.isInteger(input.phaseTick) &&
+            input.phaseTick >= 0 &&
+            input.phaseTick <= 3_600
+          ) {
             await previewRuntime.seekPhaseTick(input.phaseTick);
-          } else if (input.kind === 'setEmitterMask'
-            && Array.isArray(input.emitterIds)
-            && input.emitterIds.every((emitterId) => (
-              typeof emitterId === 'string' && emitterIds.includes(emitterId)
-          ))) {
+          } else if (
+            input.kind === 'setEmitterMask' &&
+            Array.isArray(input.emitterIds) &&
+            input.emitterIds.every(
+              (emitterId) => typeof emitterId === 'string' && emitterIds.includes(emitterId),
+            )
+          ) {
             previewRuntime.setEnabledEmitterIds([...new Set(input.emitterIds)]);
           } else if (input.kind === 'frameBounds') {
             previewRuntime.frameBounds();
@@ -536,13 +577,25 @@ export function VfxPreviewViewport(): ReactElement {
       unregisterPreviewExecutor();
       if (inspectTimer !== null) clearInterval(inspectTimer);
       resizeObserver?.disconnect();
-      try { viewport?.dispose(); } catch { /* disposed */ }
+      try {
+        viewport?.dispose();
+      } catch {
+        /* disposed */
+      }
       if (app) void vfxHost.detachWorld({ world: app.world });
       if (app && appPaused) {
-        try { app.resume(); } catch { /* stopping */ }
+        try {
+          app.resume();
+        } catch {
+          /* stopping */
+        }
         appPaused = false;
       }
-      try { app?.stop(); } catch { /* stopped */ }
+      try {
+        app?.stop();
+      } catch {
+        /* stopped */
+      }
       runtimeRef.current = null;
       setInspect(undefined);
       setBoundsVisible(false);
@@ -553,12 +606,16 @@ export function VfxPreviewViewport(): ReactElement {
   const dispatchPreview = async (operationId: string, input: Record<string, unknown> = {}) => {
     const runtime = runtimeRef.current;
     if (runtime === null) throw new Error('VFX preview runtime is unavailable');
-    const response = await dispatchViewportRuntimeOperation(operationId, {
-      assetGuid: runtime.lease.assetGuid,
-      previewGeneration: runtime.lease.generation,
-      requestId: `vfx-preview-${crypto.randomUUID()}`,
-      ...input,
-    }, { id: 'vfx-preview-toolbar', kind: 'human' });
+    const response = await dispatchViewportRuntimeOperation(
+      operationId,
+      {
+        assetGuid: runtime.lease.assetGuid,
+        previewGeneration: runtime.lease.generation,
+        requestId: `vfx-preview-${crypto.randomUUID()}`,
+        ...input,
+      },
+      { id: 'vfx-preview-toolbar', kind: 'human' },
+    );
     if (response.error !== undefined) throw new Error(response.error.hint ?? response.error.code);
   };
   const runPreview = (operationId: string, input: Record<string, unknown> = {}) => {
@@ -567,26 +624,22 @@ export function VfxPreviewViewport(): ReactElement {
       (error) => setErrorHint(previewErrorHint(error)),
     );
   };
-  const setPlayState = (next: boolean) => runPreview(
-    next ? VFX_PREVIEW_OPERATION_IDS.play : VFX_PREVIEW_OPERATION_IDS.pause,
-  );
+  const setPlayState = (next: boolean) =>
+    runPreview(next ? VFX_PREVIEW_OPERATION_IDS.play : VFX_PREVIEW_OPERATION_IDS.pause);
   const reset = () => runPreview(VFX_PREVIEW_OPERATION_IDS.reset);
   const frameBounds = () => runPreview(VFX_PREVIEW_OPERATION_IDS.frameBounds);
-  const changeBoundsVisibility = (visible: boolean) => runPreview(
-    VFX_PREVIEW_OPERATION_IDS.setBoundsVisible,
-    { visible },
-  );
-  const setEmitterMask = (next: readonly string[]) => runPreview(
-    VFX_PREVIEW_OPERATION_IDS.setEmitterMask,
-    { emitterIds: [...next] },
-  );
+  const changeBoundsVisibility = (visible: boolean) =>
+    runPreview(VFX_PREVIEW_OPERATION_IDS.setBoundsVisible, { visible });
+  const setEmitterMask = (next: readonly string[]) =>
+    runPreview(VFX_PREVIEW_OPERATION_IDS.setEmitterMask, { emitterIds: [...next] });
   const seek = (phaseTick: number) => {
     runPreview(VFX_PREVIEW_OPERATION_IDS.seek, { phaseTick });
   };
 
-  const leaseConnected = runtimeRef.current !== null
-    && leaseSnapshot.connected
-    && leaseSnapshot.lease?.identity.leaseId === runtimeRef.current.lease.leaseId;
+  const leaseConnected =
+    runtimeRef.current !== null &&
+    leaseSnapshot.connected &&
+    leaseSnapshot.lease?.identity.leaseId === runtimeRef.current.lease.leaseId;
 
   // Emitter visibility now lives as per-emitter eye toggles in the System Outline
   // tree (panels/vfx-emitter-mask). Reset the shared intent whenever a fresh
@@ -632,12 +685,20 @@ export function VfxPreviewViewport(): ReactElement {
     return () => setVfxPreviewToolbarHandlers(null);
   }, [playing, boundsVisible]);
 
-  return <div className="vfx-preview" data-testid="vfx-preview-viewport">
-    <div className="vfx-preview-host" ref={hostRef}>
-      {status === 'booting' && <div className="vfx-preview-status">Booting isolated VFX runtime…</div>}
-      {status === 'error' && <div className="vfx-preview-status" data-testid="vfx-preview-error">Preview unavailable{errorHint ? `: ${errorHint}` : ''}</div>}
+  return (
+    <div className="vfx-preview" data-testid="vfx-preview-viewport">
+      <div className="vfx-preview-host" ref={hostRef}>
+        {status === 'booting' && (
+          <div className="vfx-preview-status">Booting isolated VFX runtime…</div>
+        )}
+        {status === 'error' && (
+          <div className="vfx-preview-status" data-testid="vfx-preview-error">
+            Preview unavailable{errorHint ? `: ${errorHint}` : ''}
+          </div>
+        )}
+      </div>
     </div>
-  </div>;
+  );
 }
 
 export default VfxPreviewViewport;

@@ -7,6 +7,33 @@ import {
 import type { PlayCarrierEvent } from '../../feedback-health';
 import { createRunLifecycle } from '../run-lifecycle';
 
+let carrierHeartbeatSentinel = 0;
+
+function carrierHeartbeatPayload(
+  overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  carrierHeartbeatSentinel += 1;
+  return {
+    version: 1,
+    runtimeId: 'runtime-a',
+    runtimeGeneration: 4,
+    carrierId: 'carrier-a:play',
+    carrierKind: 'iframe',
+    challengeResponse: null,
+    scope: { projectId: 'project-a', gameId: 'game-a' },
+    pageNonce: 'page-nonce-a',
+    pageIdentity: 'http://localhost/preview',
+    canvasIdentity: 'canvas-a',
+    rendererGeneration: 1,
+    rendererIdentity: 'renderer-play-1',
+    sentinel: carrierHeartbeatSentinel,
+    liveness: 'alive',
+    renderReadiness: 'ready',
+    execution: null,
+    failure: null,
+    ...overrides,
+  };
+}
+
 function harness(
   onFps?: (fps: number, generation: number) => void,
   options: {
@@ -24,29 +51,51 @@ function harness(
   const events: string[] = [];
   const carrierEvents: PlayCarrierEvent[] = [];
   const payload = {
-    version: 1, runtimeId: 'runtime-a', runtimeGeneration: 4, carrierId: 'carrier-a:play', carrierKind: 'iframe',
-    challengeResponse: null, scope: { projectId: 'project-a', gameId: 'game-a' },
-    pageNonce: 'page-a', pageIdentity: '/preview/', canvasIdentity: 'canvas-a',
-    rendererGeneration: 1, rendererIdentity: 'renderer-a', sentinel: 1,
-    liveness: 'alive', renderReadiness: 'ready', failure: null,
+    version: 1,
+    runtimeId: 'runtime-a',
+    runtimeGeneration: 4,
+    carrierId: 'carrier-a:play',
+    carrierKind: 'iframe',
+    challengeResponse: null,
+    scope: { projectId: 'project-a', gameId: 'game-a' },
+    pageNonce: 'page-a',
+    pageIdentity: '/preview/',
+    canvasIdentity: 'canvas-a',
+    rendererGeneration: 1,
+    rendererIdentity: 'renderer-a',
+    sentinel: 1,
+    liveness: 'alive',
+    renderReadiness: 'ready',
+    failure: null,
   };
   const listeners = new Set<(event: MessageEvent) => void>();
   const captureFrames: number[] = [];
   const failures: Array<{ code: string; hint: string }> = [];
   const source = {
-    postMessage: (message: { type?: string; payload?: { requestId?: string; operation?: string } }) => {
+    postMessage: (message: { type?: string; payload?: { requestId?: string; operation?: string };
+    }) => {
       events.push(`post:${message.type ?? 'unknown'}`);
       if (message.type === 'VAG_GAMEPLAY_REQUEST' && message.payload?.requestId) {
         queueMicrotask(() => {
-          const data = message.payload?.operation === 'describe'
-            ? {
-              type: 'VAG_GAMEPLAY_RESPONSE',
-              payload: { version: 1, requestId: message.payload!.requestId, ok: true, data: { actions: [], reads: [] } },
-            }
-            : {
-              type: 'VAG_GAMEPLAY_RESPONSE',
-              payload: { version: 1, requestId: message.payload!.requestId, ok: true },
-            };
+          const data =
+            message.payload?.operation === 'describe'
+              ? {
+                  type: 'VAG_GAMEPLAY_RESPONSE',
+                  payload: {
+                    version: 1,
+                    requestId: message.payload!.requestId,
+                    ok: true,
+                    data: { actions: [], reads: [] },
+                  },
+                }
+              : {
+                  type: 'VAG_GAMEPLAY_RESPONSE',
+                  payload: {
+                    version: 1,
+                    requestId: message.payload!.requestId,
+                    ok: true,
+                  },
+                };
           for (const next of [...listeners]) next({ source, data } as MessageEvent);
         });
       }
@@ -61,10 +110,21 @@ function harness(
         };
       },
     },
-    __forgeaxPlayRendererProvenance: () => ({ identity: 'renderer-play-1', generation: 1, backend: 'webgpu' }),
-    location: { search: '?runtimeId=runtime-a&runtimeGeneration=4&carrierId=carrier-a:play&carrierKind=iframe' },
+    __forgeaxPlayRendererProvenance: () => ({
+      identity: 'renderer-play-1',
+      generation: 1,
+      backend: 'webgpu',
+    }),
+    location: {
+      search:
+        '?runtimeId=runtime-a&runtimeGeneration=4&carrierId=carrier-a:play&carrierKind=iframe',
+    },
   } as unknown as WindowProxy;
-  const frame = { generation: 1, source, element: {} as HTMLIFrameElement } satisfies DisposablePlayFrame;
+  const frame = {
+    generation: 1,
+    source,
+    element: {} as HTMLIFrameElement,
+  } satisfies DisposablePlayFrame;
   const host: DisposablePlayFrameHost = {
     create(generation, url) {
       payload.carrierId = `carrier-a:play:${generation}`;
@@ -72,22 +132,40 @@ function harness(
       events.push(`create:${generation}:${url}`);
       return { ...frame, generation };
     },
-    mount() { events.push('mount'); },
-    remove() { events.push('remove'); },
+    mount() {
+      events.push('mount');
+    },
+    remove() {
+      events.push('remove');
+    },
     subscribe(next) {
       listeners.add(next);
-      return () => { listeners.delete(next); events.push('unsubscribe'); };
+      return () => {
+        listeners.delete(next);
+        events.push('unsubscribe');
+      };
     },
   };
   const carrier = createDisposablePlayCarrier({
     container: {} as HTMLElement,
-    url: (generation) => `/preview/?playGeneration=${generation}&runtimeId=runtime-a&runtimeGeneration=4&carrierId=carrier-a:play:${generation}&carrierKind=iframe`,
-    releaseEditSurface: async () => { events.push('release'); return options.release ? options.release() : { ok: true }; },
-    restoreEditSurface: async () => { events.push('restore'); return options.restore ? options.restore() : { ok: true }; },
+    url: (generation) =>
+      `/preview/?playGeneration=${generation}&runtimeId=runtime-a&runtimeGeneration=4&carrierId=carrier-a:play:${generation}&carrierKind=iframe`,
+    releaseEditSurface: async () => {
+      events.push('release');
+      return options.release ? options.release() : { ok: true };
+    },
+    restoreEditSurface: async () => {
+      events.push('restore');
+      return options.restore ? options.restore() : { ok: true };
+    },
     host,
     readyTimeoutMs: options.startupProbeTimeoutMs === undefined ? 50 : 5_000,
-    ...(options.startupProbeTimeoutMs === undefined ? {} : { startupProbeTimeoutMs: options.startupProbeTimeoutMs }),
-    ...(options.livenessTimeoutMs === undefined ? {} : { livenessTimeoutMs: options.livenessTimeoutMs }),
+    ...(options.startupProbeTimeoutMs === undefined
+      ? {}
+      : { startupProbeTimeoutMs: options.startupProbeTimeoutMs }),
+    ...(options.livenessTimeoutMs === undefined
+      ? {}
+      : { livenessTimeoutMs: options.livenessTimeoutMs }),
     ...(options.unreachableConfirmations === undefined
       ? {}
       : { unreachableConfirmations: options.unreachableConfirmations }),
@@ -107,14 +185,23 @@ function harness(
       return new Promise((_resolve, reject) => {
         const signal = init?.signal;
         if (!signal) return; // no timeout wired → hangs forever (the old bug)
-        if (signal.aborted) { reject(new Error('aborted')); return; }
-        signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        if (signal.aborted) {
+          reject(new Error('aborted'));
+          return;
+        }
+        signal.addEventListener('abort', () => reject(new Error('aborted')), {
+          once: true,
+        });
       });
     }) as unknown as typeof fetch;
   } else if (options.reachable) {
     globalThis.fetch = (async () => {
       probes += 1;
-      return { ok: options.reachable!(), status: options.reachable!() ? 200 : 500, body: null } as unknown as Response;
+      return {
+        ok: options.reachable!(),
+        status: options.reachable!() ? 200 : 500,
+        body: null,
+      } as unknown as Response;
     }) as unknown as typeof fetch;
   }
   return {
@@ -125,20 +212,39 @@ function harness(
     captureFrames,
     failures,
     probeCount: () => probes,
-    restoreFetch() { globalThis.fetch = realFetch; },
+    restoreFetch() {
+      globalThis.fetch = realFetch;
+    },
     send(data: unknown, eventSource: MessageEventSource | null = source) {
       for (const next of [...listeners]) next({ source: eventSource, data } as MessageEvent);
     },
     ready(identity: { runtimeGeneration?: number; carrierId?: string } = {}) {
-      this.send({ type: 'VAG_CARRIER_HEARTBEAT', payload: { ...payload,
-          runtimeId: 'runtime-a', runtimeGeneration: identity.runtimeGeneration ?? 4,
-          carrierId: identity.carrierId ?? payload.carrierId, carrierKind: 'iframe', renderReadiness: 'ready',
-      } });
+      this.send({
+        type: 'VAG_CARRIER_HEARTBEAT',
+        payload: carrierHeartbeatPayload({
+          runtimeGeneration: identity.runtimeGeneration ?? 4,
+          carrierId: identity.carrierId ?? payload.carrierId,
+          pageNonce: payload.pageNonce,
+        }),
+      });
     },
     fail(failure: { code: string; hint: string; message?: string }) {
-      this.send({ type: 'VAG_CARRIER_FAILURE', payload: { ...payload,
-          runtimeId: 'runtime-a', runtimeGeneration: 4, carrierId: payload.carrierId, carrierKind: 'iframe', failure: { stage: 'renderer', retryable: false, at: '2026-09-14T14:00:00Z', ...failure },
-      } });
+      this.send({
+        type: 'VAG_CARRIER_FAILURE',
+        payload: carrierHeartbeatPayload({
+          carrierId: payload.carrierId,
+          pageNonce: payload.pageNonce,
+          renderReadiness: 'unavailable',
+          failure: {
+            code: failure.code,
+            stage: 'renderer',
+            retryable: false,
+            hint: failure.hint,
+            at: '2026-09-14T14:00:00Z',
+            ...(failure.message === undefined ? {} : { message: failure.message }),
+          },
+        }),
+      });
     },
   };
 }
@@ -146,11 +252,19 @@ function harness(
 describe('disposable Play carrier', () => {
   it('recovers from release cancellation so the next Play can start', async () => {
     let rejectRelease = true;
-    const h = harness(undefined, { release: async () => {
-      if (rejectRelease) throw Object.assign(new Error('play was cancelled before its next write boundary'), { code: 'run-cancelled' });
-      return { ok: true };
-    } });
-    expect(await h.carrier.start()).toMatchObject({ ok: false, error: { code: 'run-cancelled' } });
+    const h = harness(undefined, {
+      release: async () => {
+        if (rejectRelease)
+          throw Object.assign(new Error('play was cancelled before its next write boundary'), {
+            code: 'run-cancelled',
+          });
+        return { ok: true };
+      },
+    });
+    expect(await h.carrier.start()).toMatchObject({
+      ok: false,
+      error: { code: 'run-cancelled' },
+    });
     expect(h.carrier.state()).toBe('edit');
     rejectRelease = false;
     const next = h.carrier.start();
@@ -162,7 +276,12 @@ describe('disposable Play carrier', () => {
 
   it('does not mount a cancelled pending release after Stop', async () => {
     let release!: () => void;
-    const h = harness(undefined, { release: () => new Promise((resolve) => { release = () => resolve({ ok: true }); }) });
+    const h = harness(undefined, {
+      release: () =>
+        new Promise((resolve) => {
+          release = () => resolve({ ok: true });
+        }),
+    });
     const started = h.carrier.start();
     const stopped = h.carrier.stop();
     expect(h.carrier.stop()).toBe(stopped);
@@ -175,7 +294,11 @@ describe('disposable Play carrier', () => {
   });
 
   it('leaves the transition state even if Edit restoration throws', async () => {
-    const h = harness(undefined, { restore: async () => { throw new Error('restore failed'); } });
+    const h = harness(undefined, {
+      restore: async () => {
+        throw new Error('restore failed');
+      },
+    });
     const started = h.carrier.start();
     await Promise.resolve();
     h.ready();
@@ -185,28 +308,50 @@ describe('disposable Play carrier', () => {
   });
 
   it('reports unavailable preview HTTP before the first-frame deadline and restores Edit', async () => {
-    const h = harness(undefined, { startupProbeTimeoutMs: 20, unreachableConfirmations: 1, reachable: () => false });
+    const h = harness(undefined, {
+      startupProbeTimeoutMs: 20,
+      unreachableConfirmations: 1,
+      reachable: () => false,
+    });
     try {
-      expect(await h.carrier.start()).toEqual({ ok: false, error: {
-        code: 'play-runtime-unavailable',
-        hint: 'The Play preview document returned HTTP 500. Check the preview service and its build diagnostics, then try Play again.',
-      } });
+      expect(await h.carrier.start()).toEqual({
+        ok: false,
+        error: {
+          code: 'play-runtime-unavailable',
+          hint: 'The Play preview document returned HTTP 500. Check the preview service and its build diagnostics, then try Play again.',
+        },
+      });
       expect(h.carrier.state()).toBe('edit');
       expect(h.events.filter((event) => event === 'restore')).toHaveLength(1);
-    } finally { h.restoreFetch(); }
+    } finally {
+      h.restoreFetch();
+    }
   });
 
   it('bounds a hung startup probe instead of waiting for the readiness deadline', async () => {
-    const h = harness(undefined, { startupProbeTimeoutMs: 20, unreachableConfirmations: 1, hang: true });
+    const h = harness(undefined, {
+      startupProbeTimeoutMs: 20,
+      unreachableConfirmations: 1,
+      hang: true,
+    });
     try {
       const startedAt = Date.now();
-      expect(await h.carrier.start()).toMatchObject({ ok: false, error: { code: 'play-runtime-unavailable' } });
+      expect(await h.carrier.start()).toMatchObject({
+        ok: false,
+        error: { code: 'play-runtime-unavailable' },
+      });
       expect(Date.now() - startedAt).toBeLessThan(1_000);
-    } finally { h.restoreFetch(); }
+    } finally {
+      h.restoreFetch();
+    }
   });
 
   it('cancels the pending startup probe on readiness and never reports a later false failure', async () => {
-    const h = harness(undefined, { startupProbeTimeoutMs: 20, unreachableConfirmations: 1, hang: true });
+    const h = harness(undefined, {
+      startupProbeTimeoutMs: 20,
+      unreachableConfirmations: 1,
+      hang: true,
+    });
     try {
       const started = h.carrier.start();
       await Promise.resolve();
@@ -216,7 +361,9 @@ describe('disposable Play carrier', () => {
       expect(h.carrier.state()).toBe('play');
       expect(h.failures).toEqual([]);
       await h.carrier.stop();
-    } finally { h.restoreFetch(); }
+    } finally {
+      h.restoreFetch();
+    }
   });
 
   it('settles startup immediately when stopped without a second restore or removing the next frame', async () => {
@@ -225,14 +372,19 @@ describe('disposable Play carrier', () => {
       const started = h.carrier.start();
       await Promise.resolve();
       await h.carrier.stop();
-      expect(await started).toMatchObject({ ok: false, error: { code: 'play-carrier-stopped' } });
+      expect(await started).toMatchObject({
+        ok: false,
+        error: { code: 'play-carrier-stopped' },
+      });
       expect(h.events.filter((event) => event === 'restore')).toHaveLength(1);
       const next = h.carrier.start();
       await Promise.resolve();
       h.ready();
       expect(await next).toEqual({ ok: true });
       await h.carrier.stop();
-    } finally { h.restoreFetch(); }
+    } finally {
+      h.restoreFetch();
+    }
   });
 
   it('releases Edit before mounting Play and hard-removes Play before restore', async () => {
@@ -250,9 +402,14 @@ describe('disposable Play carrier', () => {
     await expect(h.carrier.captureFrame(2)).resolves.toMatchObject({
       runId: 'child-capture-2',
       provenance: {
-        backend: 'webgpu', rendererIdentity: 'renderer-play-1', rendererGeneration: 1,
-        carrierGeneration: 1, carrierId: 'carrier-a:play', carrierKind: 'iframe',
-        runtimeId: 'runtime-a', runtimeGeneration: 4,
+        backend: 'webgpu',
+        rendererIdentity: 'renderer-play-1',
+        rendererGeneration: 1,
+        carrierGeneration: 1,
+        carrierId: 'carrier-a:play',
+        carrierKind: 'iframe',
+        runtimeId: 'runtime-a',
+        runtimeGeneration: 4,
       },
     });
     expect(h.captureFrames).toEqual([2]);
@@ -265,11 +422,16 @@ describe('disposable Play carrier', () => {
   it('destroys a child that never reaches first-frame readiness and restores Edit', async () => {
     const h = harness();
     const result = await h.carrier.start();
-    expect(result).toMatchObject({ ok: false, error: { code: 'play-carrier-ready-timeout' } });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'play-carrier-ready-timeout' },
+    });
     expect(h.events).toContain('remove');
     expect(h.events.at(-1)).toBe('restore');
     expect(h.carrier.state()).toBe('edit');
-    await expect(h.carrier.captureFrame(1)).rejects.toMatchObject({ code: 'play-carrier-capture-unavailable' });
+    await expect(h.carrier.captureFrame(1)).rejects.toMatchObject({
+      code: 'play-carrier-capture-unavailable',
+    });
   });
 
   it('surfaces a correlated child failure before the readiness deadline', async () => {
@@ -277,8 +439,15 @@ describe('disposable Play carrier', () => {
     const started = h.carrier.start();
     await Promise.resolve();
     const message = '[engine] requested runtime generation does not match the active binding';
-    h.fail({ code: 'play-carrier-boot-failed', hint: 'inspect the child boot log', message });
-    await expect(started).resolves.toMatchObject({ ok: false, error: { code: 'play-carrier-boot-failed', hint: message } });
+    h.fail({
+      code: 'play-carrier-boot-failed',
+      hint: 'inspect the child boot log',
+      message,
+    });
+    await expect(started).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'play-carrier-boot-failed', hint: message },
+    });
     expect(h.events).toContain('remove');
     expect(h.failures).toEqual([]);
   });
@@ -290,9 +459,18 @@ describe('disposable Play carrier', () => {
     h.ready();
     await expect(started).resolves.toEqual({ ok: true });
 
-    h.fail({ code: 'device-lost', hint: 'GPU queue stopped', message: 'WebGPU device lost' });
+    h.fail({
+      code: 'device-lost',
+      hint: 'GPU queue stopped',
+      message: 'WebGPU device lost',
+    });
     await Bun.sleep(25);
-    expect(h.failures).toMatchObject([{ code: 'device-lost', hint: 'WebGPU device lost' }]);
+    expect(h.failures).toEqual([
+      expect.objectContaining({
+        code: 'device-lost',
+        hint: 'WebGPU device lost',
+      }),
+    ]);
     await h.carrier.stop();
   });
 
@@ -302,7 +480,11 @@ describe('disposable Play carrier', () => {
     // already-loaded modules" was undetectable — verified against a real
     // SIGSTOPped Vite (frames kept flowing, no card ever appeared).
     let reachable = true;
-    const h = harness(undefined, { livenessTimeoutMs: 60, unreachableConfirmations: 2, reachable: () => reachable });
+    const h = harness(undefined, {
+      livenessTimeoutMs: 60,
+      unreachableConfirmations: 2,
+      reachable: () => reachable,
+    });
     try {
       const started = h.carrier.start();
       await Promise.resolve();
@@ -319,10 +501,12 @@ describe('disposable Play carrier', () => {
       }
 
       expect(h.probeCount()).toBeGreaterThan(0);
-      expect(h.failures).toEqual([{
-        code: 'viewport-runtime-disconnected',
-        hint: 'The Play runtime URL became unreachable while the carrier was still rendering already-loaded modules.',
-      }]);
+      expect(h.failures).toEqual([
+        {
+          code: 'viewport-runtime-disconnected',
+          hint: 'The Play runtime URL became unreachable while the carrier was still rendering already-loaded modules.',
+        },
+      ]);
       await h.carrier.stop();
     } finally {
       h.restoreFetch();
@@ -330,7 +514,11 @@ describe('disposable Play carrier', () => {
   });
 
   it('keeps a reachable runtime with live frames silent (no false outage)', async () => {
-    const h = harness(undefined, { livenessTimeoutMs: 60, unreachableConfirmations: 2, reachable: () => true });
+    const h = harness(undefined, {
+      livenessTimeoutMs: 60,
+      unreachableConfirmations: 2,
+      reachable: () => true,
+    });
     try {
       const started = h.carrier.start();
       await Promise.resolve();
@@ -354,7 +542,10 @@ describe('disposable Play carrier', () => {
       livenessTimeoutMs: 60,
       unreachableConfirmations: 3,
       // One isolated blip, then reachable again — must not report.
-      reachable: () => { calls += 1; return calls === 2 ? false : reachable; },
+      reachable: () => {
+        calls += 1;
+        return calls === 2 ? false : reachable;
+      },
     });
     try {
       const started = h.carrier.start();
@@ -377,7 +568,11 @@ describe('disposable Play carrier', () => {
     // Without a per-probe timeout the unreachable counter never advanced AND
     // livenessProbeActive stayed true, so every later tick returned early —
     // reproduced live: 45s, 52 probes, 432 frames, zero reports.
-    const h = harness(undefined, { livenessTimeoutMs: 60, unreachableConfirmations: 2, hang: true });
+    const h = harness(undefined, {
+      livenessTimeoutMs: 60,
+      unreachableConfirmations: 2,
+      hang: true,
+    });
     try {
       const started = h.carrier.start();
       await Promise.resolve();
@@ -385,15 +580,17 @@ describe('disposable Play carrier', () => {
       await expect(started).resolves.toEqual({ ok: true });
 
       for (let i = 0; i < 24; i++) {
-        h.ready();               // frames keep flowing the whole time
+        h.ready(); // frames keep flowing the whole time
         await Bun.sleep(50);
       }
 
       expect(h.probeCount()).toBeGreaterThan(1); // probes must not be pinned by the first hang
-      expect(h.failures).toEqual([{
-        code: 'viewport-runtime-disconnected',
-        hint: 'The Play runtime URL became unreachable while the carrier was still rendering already-loaded modules.',
-      }]);
+      expect(h.failures).toEqual([
+        {
+          code: 'viewport-runtime-disconnected',
+          hint: 'The Play runtime URL became unreachable while the carrier was still rendering already-loaded modules.',
+        },
+      ]);
       await h.carrier.stop();
     } finally {
       h.restoreFetch();
@@ -418,26 +615,51 @@ describe('disposable Play carrier', () => {
     const source = {
       postMessage: (message: { payload?: { requestId?: string } }) => {
         if (message.payload?.requestId) {
-          const event = { source, data: {
-            type: 'VAG_GAMEPLAY_RESPONSE',
-            payload: { version: 1, requestId: message.payload.requestId, ok: true, data: { actions: [], reads: [] } },
-          } } as MessageEvent;
+          const event = {
+            source,
+            data: {
+              type: 'VAG_GAMEPLAY_RESPONSE',
+              payload: {
+                version: 1,
+                requestId: message.payload.requestId,
+                ok: true,
+                data: { actions: [], reads: [] },
+              },
+            },
+          } as MessageEvent;
           for (const next of [...listeners]) next(event);
         }
       },
-      __forgeax: { captureFrame: () => new Promise((resolve) => { resolveCapture = resolve; }) },
-      __forgeaxPlayRendererProvenance: () => ({ identity: 'renderer-play-2', generation: 2, backend: 'webgpu' }),
-      location: { search: '?runtimeId=runtime-a&runtimeGeneration=4&carrierId=carrier-a&carrierKind=iframe' },
+      __forgeax: {
+        captureFrame: () =>
+          new Promise((resolve) => {
+            resolveCapture = resolve;
+          }),
+      },
+      __forgeaxPlayRendererProvenance: () => ({
+        identity: 'renderer-play-2',
+        generation: 2,
+        backend: 'webgpu',
+      }),
+      location: {
+        search: '?runtimeId=runtime-a&runtimeGeneration=4&carrierId=carrier-a&carrierKind=iframe',
+      },
     } as unknown as WindowProxy;
-    const frame = { generation: 1, source, element: {} as HTMLIFrameElement } satisfies DisposablePlayFrame;
+    const frame = {
+      generation: 1,
+      source,
+      element: {} as HTMLIFrameElement,
+    } satisfies DisposablePlayFrame;
     const carrier = createDisposablePlayCarrier({
       container: {} as HTMLElement,
-      url: () => '/preview/?runtimeId=runtime-a&runtimeGeneration=4&carrierId=carrier-a&carrierKind=iframe',
+      url: () =>
+        '/preview/?runtimeId=runtime-a&runtimeGeneration=4&carrierId=carrier-a&carrierKind=iframe',
       releaseEditSurface: async () => ({ ok: true as const }),
       restoreEditSurface: async () => ({ ok: true as const }),
       host: {
         create: () => frame,
-        mount: () => {}, remove: () => {},
+        mount: () => {},
+        remove: () => {},
         subscribe: (next) => {
           listeners.add(next);
           listener = next;
@@ -451,36 +673,62 @@ describe('disposable Play carrier', () => {
     });
     const started = carrier.start();
     await Promise.resolve();
-    listener?.({ source, data: { type: 'VAG_CARRIER_HEARTBEAT', payload: { ...harness().payload,
-      runtimeId: 'runtime-a', runtimeGeneration: 4, carrierId: 'carrier-a', carrierKind: 'iframe', renderReadiness: 'ready',
-    } } } as MessageEvent);
+    listener?.({
+      source,
+      data: {
+        type: 'VAG_CARRIER_HEARTBEAT',
+        payload: carrierHeartbeatPayload({ carrierId: 'carrier-a' }),
+      },
+    } as MessageEvent);
     await expect(started).resolves.toEqual({ ok: true });
     const capture = carrier.captureFrame(1);
     await carrier.stop();
-    resolveCapture?.({ runId: 'stale', tapePath: 'stale.tape.bin', reportPath: 'stale.report.json' });
-    await expect(capture).rejects.toMatchObject({ code: 'play-carrier-capture-stale' });
+    resolveCapture?.({
+      runId: 'stale',
+      tapePath: 'stale.tape.bin',
+      reportPath: 'stale.report.json',
+    });
+    await expect(capture).rejects.toMatchObject({
+      code: 'play-carrier-capture-stale',
+    });
 
     const missingSource = {
       postMessage: (message: { payload?: { requestId?: string } }) => {
         if (message.payload?.requestId) {
-          const event = { source: missingSource, data: {
-            type: 'VAG_GAMEPLAY_RESPONSE',
-            payload: { version: 1, requestId: message.payload.requestId, ok: true, data: { actions: [], reads: [] } },
-          } } as MessageEvent;
+          const event = {
+            source: missingSource,
+            data: {
+              type: 'VAG_GAMEPLAY_RESPONSE',
+              payload: {
+                version: 1,
+                requestId: message.payload.requestId,
+                ok: true,
+                data: { actions: [], reads: [] },
+              },
+            },
+          } as MessageEvent;
           for (const next of [...listeners]) next(event);
         }
       },
-      __forgeax: { captureFrame: async () => ({ runId: 'x', tapePath: 'x.tape.bin', reportPath: 'x.report.json' }) },
+      __forgeax: {
+        captureFrame: async () => ({
+          runId: 'x',
+          tapePath: 'x.tape.bin',
+          reportPath: 'x.report.json',
+        }),
+      },
       location: { search: '' },
     } as unknown as WindowProxy;
     const missingProvenance = createDisposablePlayCarrier({
       container: {} as HTMLElement,
-      url: () => '/preview/?runtimeId=runtime-a&runtimeGeneration=4&carrierId=carrier-a&carrierKind=iframe',
+      url: () =>
+        '/preview/?runtimeId=runtime-a&runtimeGeneration=4&carrierId=carrier-a&carrierKind=iframe',
       releaseEditSurface: async () => ({ ok: true as const }),
       restoreEditSurface: async () => ({ ok: true as const }),
       host: {
         create: () => ({ ...frame, source: missingSource }),
-        mount: () => {}, remove: () => {},
+        mount: () => {},
+        remove: () => {},
         subscribe: (next) => {
           listeners.add(next);
           listener = next;
@@ -494,11 +742,17 @@ describe('disposable Play carrier', () => {
     });
     const missingStart = missingProvenance.start();
     await Promise.resolve();
-    listener?.({ source: missingSource, data: { type: 'VAG_CARRIER_HEARTBEAT', payload: { ...harness().payload,
-      runtimeId: 'runtime-a', runtimeGeneration: 4, carrierId: 'carrier-a', carrierKind: 'iframe', renderReadiness: 'ready',
-    } } } as MessageEvent);
+    listener?.({
+      source: missingSource,
+      data: {
+        type: 'VAG_CARRIER_HEARTBEAT',
+        payload: carrierHeartbeatPayload({ carrierId: 'carrier-a' }),
+      },
+    } as MessageEvent);
     await expect(missingStart).resolves.toEqual({ ok: true });
-    await expect(missingProvenance.captureFrame(1)).rejects.toMatchObject({ code: 'play-carrier-provenance-unavailable' });
+    await expect(missingProvenance.captureFrame(1)).rejects.toMatchObject({
+      code: 'play-carrier-provenance-unavailable',
+    });
   });
 
   it('routes viewport visibility pause/resume to the child while it owns Play', async () => {
@@ -526,10 +780,7 @@ describe('disposable Play carrier', () => {
     expect(await started).toEqual({ ok: true });
 
     h.send({ type: 'VAG_FPS_STATS', payload: { fps: 117 } });
-    h.send(
-      { type: 'VAG_FPS_STATS', payload: { fps: 5 } },
-      {} as MessageEventSource,
-    );
+    h.send({ type: 'VAG_FPS_STATS', payload: { fps: 5 } }, {} as MessageEventSource);
     h.send({ type: 'VAG_FPS_STATS', payload: { fps: 'bad' } });
 
     expect(samples).toEqual([[117, 1]]);
@@ -542,44 +793,88 @@ describe('disposable Play carrier', () => {
     h.ready();
     expect(await started).toEqual({ ok: true });
     expect(h.carrier.gameplayDescriptors()).toEqual({ actions: [], reads: [] });
-    expect(await h.carrier.gameplay({ operation: 'read', id: 'gta-route.presentation-state' })).toEqual({ ok: true });
+    expect(
+      await h.carrier.gameplay({
+        operation: 'read',
+        id: 'gta-route.presentation-state',
+      }),
+    ).toEqual({ ok: true });
   });
 
   it('keeps 50 remote Play/Stop cycles off the retained Edit World', async () => {
-    const calls = { start: 0, stop: 0, enter: 0, exit: 0, assemble: 0, pause: 0, resume: 0 };
+    const calls = {
+      start: 0,
+      stop: 0,
+      enter: 0,
+      exit: 0,
+      assemble: 0,
+      pause: 0,
+      resume: 0,
+    };
     const lifecycle = createRunLifecycle({
       editorApp: {
-        pause: () => { calls.pause++; return { ok: true }; },
-        resume: () => { calls.resume++; return { ok: true }; },
+        pause: () => {
+          calls.pause++;
+          return { ok: true };
+        },
+        resume: () => {
+          calls.resume++;
+          return { ok: true };
+        },
       },
       gateway: {
-        enterPlay: () => { throw new Error('in-process Play must not be entered'); },
-        enterRemotePlay: () => { calls.enter++; },
-        exitPlay: () => { calls.exit++; },
+        enterPlay: () => {
+          throw new Error('in-process Play must not be entered');
+        },
+        enterRemotePlay: () => {
+          calls.enter++;
+        },
+        exitPlay: () => {
+          calls.exit++;
+        },
         beginPlayAttempt: () => {},
         failPlayAttempt: () => {},
       },
       remoteCarrier: {
-        start: async () => { calls.start++; return { ok: true }; },
-        stop: async () => { calls.stop++; return { ok: true }; },
+        start: async () => {
+          calls.start++;
+          return { ok: true };
+        },
+        stop: async () => {
+          calls.stop++;
+          return { ok: true };
+        },
         state: () => 'edit',
         pause: () => {},
         resume: () => {},
         gameplayDescriptors: () => ({ actions: [], reads: [] }),
-        gameplay: async () => ({ ok: false, error: { code: 'unused', hint: 'unused' } }),
+        gameplay: async () => ({
+          ok: false,
+          error: { code: 'unused', hint: 'unused' },
+        }),
       },
-      assemble: async () => { calls.assemble++; return { ok: false, error: new Error('unreachable') }; },
+      assemble: async () => {
+        calls.assemble++;
+        return { ok: false, error: new Error('unreachable') };
+      },
     });
 
     for (let i = 0; i < 50; i++) {
       await lifecycle.playSimulation();
       await lifecycle.stopSimulation();
     }
-    expect(calls).toEqual({ start: 50, stop: 50, enter: 50, exit: 50, assemble: 0, pause: 0, resume: 0 });
+    expect(calls).toEqual({
+      start: 50,
+      stop: 50,
+      enter: 50,
+      exit: 50,
+      assemble: 0,
+      pause: 0,
+      resume: 0,
+    });
     expect(lifecycle.currentPlayWorld()).toBeNull();
   });
 });
-
 
 describe('Play carrier failure provenance', () => {
   it('preserves startup failure identity and original time with its initiating request', async () => {
@@ -595,7 +890,8 @@ describe('Play carrier failure provenance', () => {
     expect(h.carrierEvents[0]?.event.payload.scope).toEqual(h.payload.scope);
     expect(h.carrierEvents[0]?.event.payload.pageNonce).toBe('page-1');
     const event = h.carrierEvents[0]?.event;
-    if (!result.ok && event?.type === 'VAG_CARRIER_FAILURE') expect(result.error.carrierFailure).toEqual(event);
+    if (!result.ok && event?.type === 'VAG_CARRIER_FAILURE')
+      expect(result.error.carrierFailure).toEqual(event);
   });
 
   it('drops wrong-source, malformed and stale-page events while retaining the original request', async () => {
@@ -604,10 +900,22 @@ describe('Play carrier failure provenance', () => {
     await Promise.resolve();
     h.ready();
     await started;
-    const failure = { code: 'app-system-update-failed', hint: 'system failed', stage: 'renderer' as const, retryable: false, at: '2026-09-14T14:01:00Z' };
+    const failure = {
+      code: 'app-system-update-failed',
+      hint: 'system failed',
+      stage: 'renderer' as const,
+      retryable: false,
+      at: '2026-09-14T14:01:00Z',
+    };
     h.send({ type: 'VAG_CARRIER_FAILURE', payload: { ...h.payload, failure } }, {} as WindowProxy);
-    h.send({ type: 'VAG_CARRIER_FAILURE', payload: { ...h.payload, pageNonce: 'old-page', failure } });
-    h.send({ type: 'VAG_CARRIER_FAILURE', payload: { ...h.payload, failure: { code: 'missing-time' } } });
+    h.send({
+      type: 'VAG_CARRIER_FAILURE',
+      payload: { ...h.payload, pageNonce: 'old-page', failure },
+    });
+    h.send({
+      type: 'VAG_CARRIER_FAILURE',
+      payload: { ...h.payload, failure: { code: 'missing-time' } },
+    });
     expect(h.carrierEvents).toHaveLength(1);
     h.send({ type: 'VAG_CARRIER_FAILURE', payload: { ...h.payload, failure } });
     expect(h.carrierEvents).toHaveLength(2);
@@ -619,7 +927,6 @@ describe('Play carrier failure provenance', () => {
   });
 });
 
-
 it('fences an old Play attempt even when runtime generation and WindowProxy are reused', async () => {
   const h = harness();
   const first = h.carrier.start('first');
@@ -630,7 +937,13 @@ it('fences an old Play attempt even when runtime generation and WindowProxy are 
   await h.carrier.stop();
   const second = h.carrier.start('second');
   await Promise.resolve();
-  const failure = { code: 'renderer-error', hint: 'old renderer', stage: 'renderer', retryable: false, at: '2026-09-14T14:00:00Z' };
+  const failure = {
+    code: 'renderer-error',
+    hint: 'old renderer',
+    stage: 'renderer',
+    retryable: false,
+    at: '2026-09-14T14:00:00Z',
+  };
   h.send({ type: 'VAG_CARRIER_FAILURE', payload: { ...old, failure } });
   expect(h.carrierEvents).toHaveLength(1);
   h.ready();
@@ -641,17 +954,21 @@ it('fences an old Play attempt even when runtime generation and WindowProxy are 
   await h.carrier.stop();
 });
 
-
 it('keeps startup provenance through the lifecycle failure callback used by health', async () => {
   const h = harness();
   const failures: unknown[] = [];
   const lifecycle = createRunLifecycle({
     gateway: {
-      playPhase: 'edit', beginPlayAttempt() {}, failPlayAttempt() {},
-      enterPlay() {}, exitPlay() {},
+      playPhase: 'edit',
+      beginPlayAttempt() {},
+      failPlayAttempt() {},
+      enterPlay() {},
+      exitPlay() {},
     } as never,
     editorApp: { pause: () => ({ ok: true }), resume: () => ({ ok: true }) },
-    assemble: async () => { throw new Error('remote carrier owns assembly'); },
+    assemble: async () => {
+      throw new Error('remote carrier owns assembly');
+    },
     remoteCarrier: h.carrier,
     onPlayFailed: (error) => failures.push(error),
   });
@@ -659,6 +976,8 @@ it('keeps startup provenance through the lifecycle failure callback used by heal
   await Promise.resolve();
   h.fail({ code: 'boot-failed', hint: 'original boot error' });
   await started;
-  expect(failures).toMatchObject([{ code: 'boot-failed', carrierFailure: h.carrierEvents[0]?.event }]);
+  expect(failures).toMatchObject([
+    { code: 'boot-failed', carrierFailure: h.carrierEvents[0]?.event },
+  ]);
   expect(h.carrierEvents[0]?.requestId).toBe('lifecycle-request');
 });

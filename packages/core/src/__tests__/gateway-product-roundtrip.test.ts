@@ -239,7 +239,8 @@ test('real EditGateway and product adapter preserve one AI-usable round trip', a
     const sceneEntry = savedPack.assets?.find((asset) => asset.kind === 'scene');
     expect(sceneEntry?.guid).toEqual(expect.any(String));
     const persistedPayload = sceneEntry?.payload === undefined ? undefined : structuredClone(sceneEntry.payload);
-    expect((persistedPayload as { entities?: unknown[] } | undefined)?.entities).toBeInstanceOf(Array);
+    expect((persistedPayload as { entities?: unknown } | undefined)?.entities).toBeInstanceOf(Object);
+    expect(Array.isArray((persistedPayload as { entities?: unknown })?.entities)).toBe(false);
     if (sceneEntry?.guid === undefined || sceneEntry.payload === undefined) return;
 
     // Reopen with a fresh World and registry, but through the same canonical

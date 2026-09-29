@@ -1,4 +1,4 @@
-// create-input-map — Content Browser path that mints an Input Map and opens its editor.
+// create-input-map — Content Browser path that mints an Input Map.
 
 import {
   createDefaultInputMapPayload,
@@ -7,11 +7,10 @@ import {
 } from '@forgeax/editor-core';
 import { toast } from '@forgeax/editor-ui';
 
-/** Dispatch create + open the Input Map tab. `packDir` stays game-relative. */
-export async function createInputMapAndOpen(name: string, packDir: string): Promise<void> {
+/** Dispatch create only — no editor tab. `packDir` stays game-relative. */
+export async function createInputMap(name: string, packDir: string): Promise<string | null> {
   const guid = generateAssetGuid();
   const packPath = `${packDir}/${name}.pack.json`;
-  const payload = createDefaultInputMapPayload();
   const created = await dispatchActiveEditorOperation({
     kind: 'createInputMap',
     guid,
@@ -20,9 +19,17 @@ export async function createInputMapAndOpen(name: string, packDir: string): Prom
   }, 'human');
   if (!created.ok) {
     toast.error('createInputMap', { description: created.error.hint });
-    return;
+    return null;
   }
+  return guid;
+}
 
+/** Dispatch create + open the Input Map tab. */
+export async function createInputMapAndOpen(name: string, packDir: string): Promise<void> {
+  const guid = await createInputMap(name, packDir);
+  if (!guid) return;
+  const packPath = `${packDir}/${name}.pack.json`;
+  const payload = createDefaultInputMapPayload();
   const opened = await dispatchActiveEditorOperation({
     kind: 'openAssetEditor',
     asset: {

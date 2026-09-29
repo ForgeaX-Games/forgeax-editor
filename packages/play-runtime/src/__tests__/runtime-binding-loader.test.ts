@@ -1,8 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   loadRuntimeBinding,
-  type RuntimeBindingLoaderOptions,
-} from '../runtime-binding-loader';
+  type RuntimeBindingLoaderOptions } from '../runtime-binding-loader';
 
 const binding = {
   schemaVersion: 'runtime-asset-binding-v1' as const,
@@ -16,7 +15,8 @@ const binding = {
   catalogRoots: [{ root: 'assets', catalogPrefix: 'host-games/sample/assets' }],
 };
 
-function options(overrides: Partial<RuntimeBindingLoaderOptions> = {}): RuntimeBindingLoaderOptions {
+function options(overrides: Partial<RuntimeBindingLoaderOptions> = {},
+): RuntimeBindingLoaderOptions {
   return {
     maxWaitMs: 100,
     retryDelayMs: 0,
@@ -73,36 +73,82 @@ describe('runtime binding loader', () => {
 
 for (const status of [200, 503]) {
   test(`known blocking failure for this binding fails immediately for HTTP ${status}`, async () => {
-    const diagnostic = { code: 'scan-failed', severity: 'blocking', cause: [{ code: 'pack-source-external-closure-mismatch', detail: { sourcePath: './assets/scene.pack.ts', unusedDeclaredGuids: ['guid'] } }] };
+    const diagnostic = {
+      code: 'scan-failed',
+      severity: 'blocking',
+      cause: [
+        {
+          code: 'pack-source-external-closure-mismatch',
+          detail: { sourcePath: './assets/scene.pack.ts', unusedDeclaredGuids: ['guid'] },
+        },
+      ],
+    };
     let calls = 0;
-    const failure = await loadRuntimeBinding('binding', async () => {
-      calls++;
-      return Response.json({ ...binding, status: status === 200 ? 'degraded' : 'unavailable', diagnostic, diagnostics: [diagnostic] }, { status });
-    }, options({ expected: binding })).catch(error => error);
+    const failure = await loadRuntimeBinding(
+      'binding',
+      async () => {
+        calls++;
+        return Response.json(
+          {
+            ...binding,
+            status: status === 200 ? 'degraded' : 'unavailable',
+            diagnostic,
+            diagnostics: [diagnostic],
+          },
+          { status },
+        );
+      },
+      options({ expected: binding }),
+    ).catch((error) => error);
     expect(calls).toBe(1);
     expect(failure.code).toBe('pack-source-external-closure-mismatch');
     expect(failure.retryable).toBe(false);
-    expect(failure.diagnostics.at(-1)).toEqual({ code: 'pack-source-external-closure-mismatch', sourcePath: './assets/scene.pack.ts', unusedDeclaredGuids: ['guid'] });
+    expect(failure.diagnostics.at(-1)).toEqual({
+      code: 'pack-source-external-closure-mismatch',
+      sourcePath: './assets/scene.pack.ts',
+      unusedDeclaredGuids: ['guid'],
+    });
   });
 }
 
 test('old-generation unavailable diagnostics cannot describe this Play attempt', async () => {
   let calls = 0;
-  const result = await loadRuntimeBinding('binding', async () => {
-    calls++;
-    return calls === 1 ? Response.json({ ...binding, generation: 2, status: 'unavailable', diagnostic: { code: 'old-error' } }, { status: 503 }) : Response.json(binding);
-  }, options({ expected: binding }));
+  const result = await loadRuntimeBinding(
+    'binding',
+    async () => {
+      calls++;
+      return calls === 1
+        ? Response.json(
+            { ...binding, generation: 2, status: 'unavailable', diagnostic: { code: 'old-error' } },
+            { status: 503 },
+          )
+        : Response.json(binding);
+    },
+    options({ expected: binding }),
+  );
   expect(calls).toBe(2);
   expect(result).toEqual(binding);
 });
 test('a different game ready response cannot be accepted', async () => {
-  await expect(loadRuntimeBinding('binding', async () => Response.json({ ...binding, gameId: 'other' }), options({ expected: binding }))).rejects.toMatchObject({ code: 'play-runtime-scope-stale' });
+  await expect(
+    loadRuntimeBinding(
+      'binding',
+      async () => Response.json({ ...binding, gameId: 'other' }),
+      options({ expected: binding }),
+    ),
+  ).rejects.toMatchObject({ code: 'play-runtime-scope-stale' });
 });
 test('temporary transport failure is retried without inventing a pack error', async () => {
   let calls = 0;
-  expect(await loadRuntimeBinding('binding', async () => {
-    if (++calls === 1) throw new Error('temporary network loss');
-    return Response.json(binding);
-  }, options({ expected: binding }))).toEqual(binding);
+  expect(
+    await loadRuntimeBinding(
+      'binding',
+      async () => {
+        if (++calls === 1) throw new Error('temporary network loss');
+        return Response.json(binding);
+      },
+      options({ expected: binding }),
+    ),
+  ).toEqual(binding);
   expect(calls).toBe(2);
 });

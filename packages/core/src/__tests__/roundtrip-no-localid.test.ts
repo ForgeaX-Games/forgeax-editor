@@ -54,13 +54,12 @@ function localId(n: number): LocalEntityId {
 function buildSceneAsset(entities: Array<{ name: string; pos: { x: number; y: number; z: number } }>) {
   return {
     kind: 'scene' as const,
-    entities: entities.map((e, i): SceneEntity => ({
-      localId: localId(i),
+    entities: Object.fromEntries(entities.map((e, i) => [`entity-${i}`, {
       components: {
         Transform: { pos: [e.pos.x, e.pos.y, e.pos.z], scale: [1, 1, 1] },
         Name: { value: e.name },
       },
-    })),
+    } satisfies SceneEntity])),
   };
 }
 function spawn(world: World, name: string, parent?: EntityHandle): EntityHandle {

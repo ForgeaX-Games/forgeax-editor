@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { ContentBrowserRevealTarget } from '@forgeax/interface/core/app-shell/types';
+import type { ContentBrowserRevealTarget } from '@forgeax/app-shell/application';
 import type { CBAsset, CBFile } from '../types';
 import {
   findOwningDiskFile,

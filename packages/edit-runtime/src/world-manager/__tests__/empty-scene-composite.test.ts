@@ -65,29 +65,43 @@ interface DrawCall {
 }
 
 function makeFakeRenderer(record: DrawCall[], attachedWorlds: Set<World>) {
+  const leases = new Map<object, World>();
   return {
-    ready: Promise.resolve({ ok: true }),
     assets: { instantiate: () => ({ ok: true as const, value: 1 }) },
-    attachWorld(world: World) {
+    attach(world: World) {
       attachedWorlds.add(world);
-      return { ok: true as const, value: undefined };
+      const lease = {
+        dispose() {
+          attachedWorlds.delete(world);
+          leases.delete(lease);
+        },
+      };
+      leases.set(lease, world);
+      return { ok: true as const, value: lease };
     },
-    detachWorld(world: World) {
-      attachedWorlds.delete(world);
-    },
-    draw(worlds: World[] | World, opts?: { cameraOwner?: number; resourceOwner?: number }) {
+    draw(input: unknown) {
       // Record only the multi-world (composite) form emitted by drawSource.
-      if (Array.isArray(worlds)) {
+      if (typeof input === 'object' && input !== null && 'leases' in input) {
+        const frame = input as {
+          leases?: readonly object[];
+          camera?: { lease?: object };
+          environment?: { lease?: object };
+        };
+        const worlds = (frame.leases ?? [])
+          .map((lease) => leases.get(lease))
+          .filter((world): world is World => world !== undefined);
+        const cameraWorld = frame.camera?.lease === undefined ? undefined : leases.get(frame.camera.lease);
+        const resourceWorld = frame.environment?.lease === undefined ? undefined : leases.get(frame.environment.lease);
         record.push({
           worlds,
-          cameraOwner: opts?.cameraOwner ?? 0,
-          resourceOwner: opts?.resourceOwner ?? 0,
+          cameraOwner: cameraWorld === undefined ? -1 : worlds.indexOf(cameraWorld),
+          resourceOwner: resourceWorld === undefined ? -1 : worlds.indexOf(resourceWorld),
         });
       }
       return { ok: true } as const;
     },
     dispose() {},
-    onError(_cb: (e: unknown) => void) {
+    subscribe(_cb: (event: unknown) => void) {
       return () => {};
     },
   };

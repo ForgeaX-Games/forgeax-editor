@@ -14,8 +14,8 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import type { AppExtension, AppHost } from '@forgeax/interface/core/app-shell/types';
-import { useHost } from '@forgeax/interface/core/app-shell';
+import type { AppExtension, AppHost } from '@forgeax/app-shell/application';
+import { useHost } from '@forgeax/app-shell/application';
 import { Input } from '@forgeax/editor-ui/input';
 import { Button } from '@forgeax/editor-ui/button';
 import { Checkbox } from '@forgeax/editor-ui/checkbox';

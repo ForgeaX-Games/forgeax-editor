@@ -1,4 +1,3 @@
-import { handleProjectValidation } from '../../scripts/host/project-validation';
 // game-backend.ts — the standalone editor's REUSED platform-io backend (R3).
 //
 // WHY A SEPARATE BUN PROCESS — BY DESIGN (not a workaround)
@@ -27,13 +26,17 @@ import { handleProjectValidation } from '../../scripts/host/project-validation';
 //   env FORGEAX_GAME_API_PORT overrides the port (default 15281).
 
 import { createFilesRouter, createPrefsRouter, createVersionControlRouter, singleGameFileBackend } from '@forgeax/platform-io';
-import { createToolClient, type ToolClient } from '@forgeax/engine-devkit';
+import type { ToolClient } from '@forgeax/engine-devkit';
 import type { ToolDescriptor } from '@forgeax/engine-tool-runtime';
-import { createSourceAuthoringHandler } from '../../scripts/host/source-authoring';
+import { createFileSystemPackAuthoringGateway, type PackAuthoringMaterializedAsset } from '@forgeax/engine-pack/build';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
-import { GAME_TEMPLATE_SLUG_RE, listGameTemplates } from './template-catalog';
+import {
+  GAME_TEMPLATE_SLUG_RE,
+  listGameTemplates,
+  resolveLaunchableGameTemplate,
+} from './template-catalog';
 
 const gameDir = process.env.FORGEAX_GAME_DIR;
 if (!gameDir) {
@@ -46,14 +49,57 @@ const instanceRootAbs = resolve(gameDir);
 const gameSlug = basename(instanceRootAbs);
 const engineTemplatesRoot = resolve(import.meta.dir, '../../packages/engine/templates');
 
-const sourceAuthoringHandler = createSourceAuthoringHandler(gameDir);
+const sourceCatalogUrl = process.env.FORGEAX_SOURCE_CATALOG_URL;
+
+// Engine owns source discovery, reference validation, and mutation semantics.
+const sourceAuthoring = createFileSystemPackAuthoringGateway({
+  gameRoot: gameDir,
+  ...(sourceCatalogUrl === undefined ? {} : {
+    materialized: async (): Promise<readonly PackAuthoringMaterializedAsset[]> => {
+      const response = await fetch(sourceCatalogUrl);
+      if (!response.ok) throw new Error(`Source catalog returned HTTP ${response.status}`);
+      const catalog = await response.json() as {
+        entries?: readonly {
+          packageId?: string;
+          sourceKey?: string;
+          guid: string;
+          kind: string;
+          sourcePath?: string;
+          refs?: readonly string[];
+          lifecycle?: string;
+          publication?: { current?: { packageUrl?: string } };
+        }[];
+      };
+      const rows = catalog.entries;
+      if (!Array.isArray(rows)) throw new Error('Source catalog must contain asset rows');
+      return rows.flatMap((row) => {
+        if (typeof row.packageId !== 'string' || typeof row.sourceKey !== 'string') return [];
+        return [{
+          packageId: row.packageId,
+          sourceKey: row.sourceKey,
+          guid: row.guid,
+          kind: row.kind,
+          sourcePath: row.sourcePath,
+          refs: row.refs,
+          ready: row.lifecycle === 'current' && typeof row.publication?.current?.packageUrl === 'string',
+        }];
+      });
+    },
+  }),
+  rebuild: async (sourcePath) => {
+    const now = new Date();
+    await utimes(resolve(gameDir, sourcePath), now, now);
+    return { ok: true, value: undefined };
+  },
+});
 
 // The standalone host is only the physical transport for the Engine ToolClient.
 // Project Entries provide the producer contributions; this process never creates
 // an authoring registry or a fallback executor of its own.
 let toolClientPromise: Promise<ToolClient> | undefined;
 async function getToolClient(): Promise<ToolClient> {
-  toolClientPromise ??= createToolClient({ projectRoot: gameDir });
+  toolClientPromise ??= import('@forgeax/engine-devkit')
+    .then(({ createToolClient }) => createToolClient({ projectRoot: gameDir }));
   try {
     return await toolClientPromise;
   } catch (error) {
@@ -150,17 +196,15 @@ async function createStandaloneGame(input: { slug?: unknown; name?: unknown; bri
       headers: { 'Content-Type': 'application/json' },
     });
   }
-  const templateDir = join(engineTemplatesRoot, template);
-  let templateManifest: GameManifest;
-  try {
-    templateManifest = JSON.parse(await readFile(join(templateDir, 'forge.json'), 'utf8')) as GameManifest;
-    await stat(join(templateDir, 'main.ts'));
-  } catch {
+  const resolvedTemplate = resolveLaunchableGameTemplate(engineTemplatesRoot, template);
+  if (resolvedTemplate === null) {
     return new Response(JSON.stringify({ ok: false, error: `template not found: ${template}` }), {
       status: 404,
       headers: { 'Content-Type': 'application/json' },
     });
   }
+  const templateDir = resolvedTemplate.directory;
+  const templateManifest = resolvedTemplate.manifest as GameManifest;
 
   const existingEntries = await readdir(gameDir, { withFileTypes: true }).catch(() => []);
   // Smoke and standalone hosts may mount the workspace dependency graph as a
@@ -336,7 +380,7 @@ const server = Bun.serve({
         headers: { 'Content-Type': 'application/json' },
       });
     }
-    if (url.pathname === '/api/game-templates' && req.method === 'GET') {
+    if (url.pathname === '/api/projects/templates' && req.method === 'GET') {
       try {
         return new Response(JSON.stringify({ templates: await listGameTemplates(engineTemplatesRoot) }), {
           status: 200,
@@ -502,10 +546,60 @@ const server = Bun.serve({
       return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
     }
     if (url.pathname === '/api/assets/source/execute' && req.method === 'POST') {
-      return sourceAuthoringHandler(req);
+      let operation: Parameters<typeof sourceAuthoring.execute>[0];
+      try {
+        operation = await req.json() as typeof operation;
+      } catch {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: {
+            code: 'pack-source-operation-invalid',
+            hint: 'Source authoring operation body must be valid JSON.',
+            retryable: false,
+            recoveryActions: ['inspect-operation-schema'],
+          },
+        }), { status: 400, headers: { 'content-type': 'application/json' } });
+      }
+      const result = await sourceAuthoring.execute(operation);
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     }
     if (url.pathname === '/api/validation/project' && req.method === 'POST') {
-      return handleProjectValidation(gameDir, req);
+      let options: { maxBytes?: number; maxEntities?: number } = {};
+      try {
+        const body = await req.clone().json() as Record<string, unknown>;
+        options = {
+          ...(typeof body.maxBytes === 'number' ? { maxBytes: body.maxBytes } : {}),
+          ...(typeof body.maxEntities === 'number' ? { maxEntities: body.maxEntities } : {}),
+        };
+      } catch {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: { code: 'INVALID_ARGS', hint: 'project validation options must be a JSON object' },
+        }), { status: 400, headers: { 'content-type': 'application/json' } });
+      }
+      try {
+        // The existing validator is the producer-owned J5 fact source. Keep it
+        // in the Bun host because it reads the confined game filesystem.
+        const { validateGameProject } = await import('../scripts/game-validation.mjs');
+        const result = await validateGameProject(gameDir, options);
+        return new Response(JSON.stringify(result), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: {
+            code: 'project-validation-unavailable',
+            hint: error instanceof Error ? error.message : String(error),
+            retryable: true,
+            recoveryActions: ['run.retry', 'editor.discover'],
+          },
+        }), { status: 503, headers: { 'content-type': 'application/json' } });
+      }
     }
 
     for (const { prefix, router, isFiles } of PREFIXES) {
@@ -564,7 +658,7 @@ const server = Bun.serve({
     return new Response(JSON.stringify({
       unavailable: true,
       reason: 'standalone',
-      hint: 'standalone mounts /api/files /api/prefs /api/version /api/health /api/game-templates /api/games /api/events/stream',
+      hint: 'standalone mounts /api/files /api/prefs /api/version /api/health /api/projects/templates /api/games /api/events/stream',
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },

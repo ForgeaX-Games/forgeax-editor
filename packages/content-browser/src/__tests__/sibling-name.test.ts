@@ -119,4 +119,3 @@ describe('validateSiblingNameForItem', () => {
     expect(validateSiblingNameForItem('Brick', item, data, t)).toBeNull();
   });
 });
-

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   deriveContentView, deriveFileView, collectProjectDirs,
-  isMetaSidecarFile, resolveFileActivateAction,
+  isMetaSidecarFile, metaSidecarSourcePath, resolveFileActivateAction,
   type ScopedAsset, type ProjectTreeNode,
 } from '../folder-view';
 import type { CBAsset } from '../types';
@@ -301,6 +301,19 @@ describe('isMetaSidecarFile', () => {
     expect(isMetaSidecarFile('Fox.glb')).toBe(false);
     expect(isMetaSidecarFile('scene.pack.json')).toBe(false);
     expect(isMetaSidecarFile('forge.json')).toBe(false);
+  });
+});
+
+describe('metaSidecarSourcePath — sidecar rel → owning source file', () => {
+  it('strips the .meta.json suffix case-insensitively', () => {
+    expect(metaSidecarSourcePath('assets/hud.ui.html.meta.json')).toBe('assets/hud.ui.html');
+    expect(metaSidecarSourcePath('assets/Fox.GLB.META.JSON')).toBe('assets/Fox.GLB');
+  });
+
+  it('returns null for source files and packs', () => {
+    expect(metaSidecarSourcePath('assets/hud.ui.html')).toBeNull();
+    expect(metaSidecarSourcePath('assets/scene.pack.json')).toBeNull();
+    expect(metaSidecarSourcePath('assets/forge.json')).toBeNull();
   });
 });
 

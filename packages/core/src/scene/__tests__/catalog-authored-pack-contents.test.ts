@@ -29,7 +29,7 @@ describe('catalogAuthoredPackContents', () => {
         {
           guid: sceneGuid,
           kind: 'scene',
-          payload: { kind: 'scene', entities: [] },
+          payload: { kind: 'scene', entities: {} },
         },
       ],
     });
@@ -43,7 +43,7 @@ describe('catalogAuthoredPackContents', () => {
     expect(loaded.ok).toBe(true);
   });
 
-  it('resolves mounts[].source refs indices before catalog (game-default shape)', async () => {
+  it('resolves keyed instance source refs before catalog', async () => {
     const parentGuid = '1036f6f0-d3c2-5f31-9593-3432942d4c93';
     const childGuid = '0f20e111-5b2f-5a77-9a02-2f5d1e9c7a11';
     const registry = makeRegistry();
@@ -54,7 +54,7 @@ describe('catalogAuthoredPackContents', () => {
           kind: 'scene',
           payload: {
             kind: 'scene',
-            entities: [{ localId: 0, components: { Name: { value: 'Nested' } } }],
+            entities: { nested: { components: { Name: { value: 'Nested' } } } },
           },
         },
         {
@@ -63,8 +63,7 @@ describe('catalogAuthoredPackContents', () => {
           refs: Array.from({ length: 18 }, (_, i) => (i === 17 ? childGuid : `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`)),
           payload: {
             kind: 'scene',
-            entities: [{ localId: 0, components: { Name: { value: 'Root' } } }],
-            mounts: [{ localId: 23, source: 17, memberFirst: 24, memberCount: 2 }],
+            entities: { root: { components: { Name: { value: 'Root' } } }, nested: { components: {}, instance: { source: 17 } } },
           },
         },
       ],
@@ -72,7 +71,7 @@ describe('catalogAuthoredPackContents', () => {
     const parentEntry = registry.assetCatalog.get(parentGuid.toLowerCase());
     expect(parentEntry?.payload).toMatchObject({
       kind: 'scene',
-      mounts: [{ source: childGuid }],
+      entities: { nested: { instance: { source: childGuid } } },
     });
   });
 
@@ -87,7 +86,7 @@ describe('catalogAuthoredPackContents', () => {
           {
             guid: sceneGuid,
             kind: 'scene',
-            payload: { kind: 'scene', entities: [] },
+            payload: { kind: 'scene', entities: {} },
           },
           {
             guid: meshGuid,
@@ -116,10 +115,12 @@ describe('catalogAuthoredPackContents', () => {
           guid: sceneGuid,
           kind: 'scene',
           refs: [externalMesh],
-          payload: { kind: 'scene', entities: [] },
+          payload: { kind: 'scene', entities: {} },
         },
       ],
     };
-    expect(scenePackRefsAreAllInline(pack, pack.assets[0]!)).toBe(false);
+    const sceneAsset = pack.assets[0];
+    expect(sceneAsset).toBeDefined();
+    expect(scenePackRefsAreAllInline(pack, sceneAsset!)).toBe(false);
   });
 });

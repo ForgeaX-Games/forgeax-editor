@@ -28,7 +28,6 @@
 
 import type { Component, World } from '@forgeax/engine-ecs';
 import { componentDefinition } from '@forgeax/engine-ecs';
-import { isManagedField, isManagedArrayField, isEntityField } from '@forgeax/engine-ecs/internal';
 import type { EntityId } from '../types';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -71,16 +70,17 @@ export type QuerySnapshotFn = (descriptor: QuerySnapshotDescriptor) => QuerySnap
  * - plain number[] snap-copy for array fields
  */
 function snapFieldValue(
-  fieldType: string,
+  reflection: ReturnType<typeof componentDefinition>['fields'][string],
   rawValue: unknown,
 ): unknown {
+  const fieldType = reflection.type;
   // Null/undefined → pass through (not a value)
   if (rawValue === null || rawValue === undefined) return rawValue;
 
   // (1) Managed handle fields (unique<T>/shared<T>/ref/buffer) → opaque marker.
   //     The raw value from ManagedColumnReader.get(i) is a slot/handle ID. Wrap it
   //     so callers cannot treat it as a live reference.
-  if (isManagedField(fieldType)) {
+  if (fieldType === 'string' || fieldType.startsWith('unique<') || fieldType.startsWith('shared<')) {
     return {
       kind: 'opaque-handle',
       type: fieldType,
@@ -91,7 +91,7 @@ function snapFieldValue(
   // (2) array<T,N> / array<T> fields → snap-copy TypedArray to plain number[]
   //     The raw value is a TypedArray (e.g. Float32Array) aliasing the column
   //     buffer. Snap-copy ensures caller mutation doesn't affect world memory.
-  if (isManagedArrayField(fieldType)) {
+  if (reflection.arrayMeta !== undefined) {
     if (ArrayBuffer.isView(rawValue)) {
       // TypedArray → snap-copy via Array.from()
       return Array.from(rawValue as unknown as ArrayLike<number>);
@@ -111,7 +111,7 @@ function snapFieldValue(
   }
 
   // (3) Entity reference fields → return raw number (entity handle ID)
-  if (isEntityField(fieldType)) {
+  if (fieldType === 'entity') {
     return rawValue;
   }
 
@@ -200,7 +200,7 @@ export function querySnapshot(_world: World, descriptor: QuerySnapshotDescriptor
         // callers never retain a live typed view.
         fields[fieldName] = fieldType === 'string'
           ? (typeof rawValue === 'string' ? rawValue : '')
-          : snapFieldValue(fieldType, rawValue);
+          : snapFieldValue(reflection, rawValue);
       }
       row[token.name] = fields;
     }

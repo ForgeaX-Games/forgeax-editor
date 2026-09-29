@@ -7,7 +7,7 @@
 // records the BFS traversal + draw calls.
 
 import { describe, expect, it, mock } from 'bun:test';
-import { Children, Transform } from '@forgeax/engine-scene';
+import { Children, GlobalTransform } from '@forgeax/engine-scene';
 import { MeshFilter } from '@forgeax/engine-render';
 import { installSkeletonOverlay } from '../skeleton-overlay';
 
@@ -59,7 +59,7 @@ function makeWorld(root: MockEntity | null): {
       (find as unknown as { target: number }).target = entity;
       const node = find(root);
       if (node === null) return { ok: false, error: 'not-found' };
-      if (component === Transform) {
+      if (component === GlobalTransform) {
         return { ok: true, value: { world: new Float32Array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, node.translation.x, node.translation.y, node.translation.z, 1]) } };
       }
       if (component === MeshFilter) {

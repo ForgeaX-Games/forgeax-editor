@@ -18,6 +18,7 @@ import { defineConfig } from '@playwright/test';
 import { cpSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
+import { shellWaitThenExec } from './scripts/lib/wait-host-catalog.ts';
 
 // The fixed defaults preserve the normal developer entry points. CI/fix-up
 // evidence may supply private ports so a fresh current-HEAD server never
@@ -26,6 +27,8 @@ const e2eHostPort = process.env.FORGEAX_E2E_PORT ?? '15290';
 const e2eEditPort = process.env.FORGEAX_E2E_EDIT_PORT ?? '15280';
 const e2eApiPort = process.env.FORGEAX_E2E_API_PORT ?? '15281';
 const e2eEnginePort = process.env.FORGEAX_E2E_ENGINE_PORT ?? '15273';
+process.env.FORGEAX_E2E_ENGINE_PORT = process.env.FORGEAX_E2E_ENGINE_PORT ?? e2eEnginePort;
+process.env.FORGEAX_ENGINE_PORT = process.env.FORGEAX_ENGINE_PORT ?? e2eEnginePort;
 const e2eTemplateHostPort = process.env.FORGEAX_E2E_TEMPLATE_PORT ?? '15490';
 const e2eTemplateEditPort = process.env.FORGEAX_E2E_TEMPLATE_EDIT_PORT ?? '15480';
 const e2eTemplateApiPort = process.env.FORGEAX_E2E_TEMPLATE_API_PORT ?? '15481';
@@ -38,7 +41,11 @@ const e2eBridgePort = process.env.FORGEAX_E2E_BRIDGE_PORT
   ?? deriveBridgePort(e2eHostPort, '15296');
 const e2eTemplateBridgePort = process.env.FORGEAX_E2E_TEMPLATE_BRIDGE_PORT
   ?? deriveBridgePort(e2eTemplateHostPort, '15496');
-const e2eBrowserChannel = process.env.FORGEAX_E2E_BROWSER_CHANNEL;
+// On local macOS, full Chromium avoids the headless-shell/SwiftShader path
+// that reproducibly stalls worker Play frames. Keep headless mode, explicit
+// channel overrides (including empty), and CI/other-platform defaults intact.
+const e2eBrowserChannel = process.env.FORGEAX_E2E_BROWSER_CHANNEL
+  ?? (!process.env.CI && process.platform === 'darwin' ? 'chromium' : undefined);
 const e2eSpoolDir = join(process.cwd(), '.e2e-tmp');
 const e2eJsonOutput = join(e2eSpoolDir, 'editor-results.json');
 const e2eArtifactDir = join(e2eSpoolDir, 'playwright-artifacts');
@@ -49,6 +56,34 @@ const e2eTemplateRuntimeScopeId = process.env.FORGEAX_E2E_TEMPLATE_RUNTIME_SCOPE
 const e2eTemplateRuntimeGeneration = process.env.FORGEAX_E2E_TEMPLATE_RUNTIME_GENERATION ?? '1';
 const e2eSkipSampleStack = process.env.FORGEAX_E2E_SKIP_SAMPLE_STACK === '1';
 const e2eSkipTemplateStack = process.env.FORGEAX_E2E_SKIP_TEMPLATE_STACK === '1';
+// Broad-core boots play-runtime as webServer #2 and waits on /preview/ before
+// specs run. smoke-boot-play must not re-probe (and possibly fuser-kill) that
+// producer inside the 120s test budget.
+if (!e2eSkipSampleStack) {
+  process.env.FORGEAX_SMOKE_INCLUDE_PLAY_RUNTIME = '1';
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Defer a secondary Vite until the host pack producer publishes catalog entries. */
+function afterHostCatalogReady(innerCommand: string): string {
+  return `bash -lc ${shellQuote(shellWaitThenExec(innerCommand, catalogGateOptions()))}`;
+}
+
+const e2eEditReadyUrl = `http://127.0.0.1:${e2eEditPort}/editor/`;
+// ScriptablePack boot gate lives in playwright.smoke.config.ts (scriptable CI shard).
+// Broad-core boot matches `bun fx start`: non-empty scoped catalog only; specs assert
+// their own material rows (smoke-boot-play → arc-nova-flow; scriptable → in-test waits).
+
+function catalogGateOptions(): { hostPort: number; scopeId: string; generation: string } {
+  return {
+    hostPort: Number(e2eHostPort),
+    scopeId: e2eRuntimeScopeId,
+    generation: e2eRuntimeGeneration,
+  };
+}
 // Save E2E must exercise real file IO without rewriting the tracked sample.
 // The copy is exact, isolated to this Playwright process, and removed only at
 // process exit; the browser still addresses it as the game slug "sample".
@@ -56,12 +91,11 @@ const e2eTempRoot = mkdtempSync(join(tmpdir(), 'forgeax-save-e2e-'));
 // ScriptablePack sources execute in an isolated Node worker, outside Vite's
 // workspace aliases. Keep the copied game's real package imports resolvable
 // without copying or reinstalling the entire workspace dependency tree. The
-// isolated ScriptablePack worker cannot consume Vite aliases, and the root
-// node_modules intentionally contains only a hoisted subset of engine
-// packages, so point at the complete graph owned by Play Runtime. The link sits
+// isolated ScriptablePack worker cannot consume Vite aliases. The repository's
+// explicit hoisted install owns the complete workspace graph. The link sits
 // at the copied workspace boundary while all authored game writes remain
 // confined to the copy.
-symlinkSync(resolve('packages/play-runtime/node_modules'), join(e2eTempRoot, 'node_modules'), 'dir');
+symlinkSync(resolve('node_modules'), join(e2eTempRoot, 'node_modules'), 'dir');
 // Each webServer below is a real, concurrent Vite process. Vite's default
 // cache directories live beside the shared package sources, so the sample and
 // template stacks can otherwise race while writing the same optimized React /
@@ -99,7 +133,7 @@ cpSync(resolve('games/sample'), e2eGameDir, {
 // @forgeax/engine-* import to this workspace (vite.config.ts
 // engineWorktreeResolve), so the copied tree needs no bundled deps.
 const e2eTemplateGameDir = join(e2eTempRoot, 'new-game-template');
-cpSync(resolve('packages/engine/templates/game-default'), e2eTemplateGameDir, {
+cpSync(resolve('packages/engine/templates/game-3d'), e2eTemplateGameDir, {
   recursive: true,
   // Same two exclusions as the sample copy above: no stale per-game install,
   // and no transient DDC staging that can vanish mid-walk.
@@ -113,7 +147,11 @@ cpSync(resolve('packages/engine/templates/game-default'), e2eTemplateGameDir, {
 // contract.
 cpSync(resolve('forgeax-editor-assets/characters/Fox.glb'), join(e2eGameDir, 'assets/Fox.glb'));
 process.env.FORGEAX_E2E_GAME_DIR = e2eGameDir;
-process.once('exit', () => rmSync(e2eTempRoot, { recursive: true, force: true }));
+// A terminating catalog worker can finish a cache write during teardown.
+// Retry only this owned fixture; surface the error if it remains busy.
+process.once('exit', () => rmSync(e2eTempRoot, {
+  recursive: true, force: true, maxRetries: 3, retryDelay: 100,
+}));
 
 export default defineConfig({
   testDir: './apps/standalone/e2e',
@@ -160,6 +198,7 @@ export default defineConfig({
       env: {
         ...process.env as Record<string, string>,
         FORGEAX_GAME_DIR: e2eGameDir,
+        FORGEAX_GAME_ID: 'sample',
         FORGEAX_ENGINE_PORT: e2eEnginePort,
         FORGEAX_PLAY_RUNTIME_PORT: e2eEnginePort,
         FORGEAX_STANDALONE_PORT: e2eHostPort,
@@ -170,10 +209,13 @@ export default defineConfig({
         FORGEAX_RUNTIME_SCOPE_ID: e2eRuntimeScopeId,
         FORGEAX_RUNTIME_GENERATION: e2eRuntimeGeneration,
         FORGEAX_HMR_CLIENT_PORT: e2eHostPort,
+        FORGEAX_GAMES_URL_PREFIX: 'host-games',
       },
-      url: `http://127.0.0.1:${e2eHostPort}`,
-      reuseExistingServer: !process.env.CI,
-      timeout: 90_000,
+      // Wait until dev-standalone finishes host catalog + edit-runtime boot (same
+      // sequence as `bun fx start`, without scriptable-pack publication gate).
+      url: e2eEditReadyUrl,
+      reuseExistingServer: false,
+      timeout: 180_000,
       // Let dev-standalone run its own process-group cleanup before Playwright
       // falls back to SIGKILL. Its child Vite/bridge processes are detached.
       gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
@@ -182,7 +224,9 @@ export default defineConfig({
     },
     {
       // Play Runtime uses the same package command as standalone `fx start`.
-      command: 'bun -F @forgeax/editor-play-runtime dev',
+      // Wait for host catalog so three concurrent Vite producers do not contend
+      // on cold start and leave the pack scanner timing out.
+      command: afterHostCatalogReady('bun -F @forgeax/editor-play-runtime dev'),
       cwd: '.',
       env: {
         ...process.env,
@@ -200,22 +244,8 @@ export default defineConfig({
       },
       url: `http://127.0.0.1:${e2eEnginePort}/preview/`,
       reuseExistingServer: !process.env.CI,
-      timeout: 90_000,
-    },
-    {
-      // M5 (plan-strategy D-2): standalone game-backend bun process on :15281.
-      // Mounts the real @forgeax/platform-io createFilesRouter + createPrefsRouter
-      // confined to games/sample, plus /api/version + /api/health endpoints (M3).
-      // webServer #1 proxies /api -> here when FORGEAX_GAME_DIR is set.
-      // Readiness probe = /api/health (AC-09 endpoint, doubles as playwright
-      // health check — this is why M3 precedes M5 in the milestone graph).
-      command: 'bun apps/standalone/game-backend.ts',
-      cwd: '.',
-      env: { ...process.env, FORGEAX_GAME_DIR: e2eGameDir, FORGEAX_GAME_API_PORT: e2eApiPort },
-      url: `http://127.0.0.1:${e2eApiPort}/api/health`,
-      reuseExistingServer: !process.env.CI,
-      timeout: 90_000,
-    },]),
+      timeout: 180_000,
+    }]),
     ...(e2eSkipTemplateStack ? [] : [{
       // New-game template journey (.forgeax-harness/docs/2026-08-06-new-game-template-journey-e2e-plan
       // D-2): a SECOND standalone host on :15490 booted against the fresh
@@ -237,10 +267,12 @@ export default defineConfig({
         FORGEAX_RUNTIME_SCOPE_ID: e2eTemplateRuntimeScopeId,
         FORGEAX_RUNTIME_GENERATION: e2eTemplateRuntimeGeneration,
         FORGEAX_HMR_CLIENT_PORT: e2eTemplateHostPort,
+        FORGEAX_GAME_ID: 'new-game-template',
+        FORGEAX_GAMES_URL_PREFIX: 'host-games',
       },
-      url: `http://127.0.0.1:${e2eTemplateHostPort}`,
-      reuseExistingServer: !process.env.CI,
-      timeout: 90_000,
+      url: `http://127.0.0.1:${e2eTemplateEditPort}/editor/`,
+      reuseExistingServer: false,
+      timeout: 180_000,
       gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
       stdout: 'pipe',
       stderr: 'pipe',
@@ -269,18 +301,7 @@ export default defineConfig({
       reuseExistingServer: !process.env.CI,
       timeout: 90_000,
     },
-    {
-      // The template host's /api backend pair (same game-backend.ts shape as
-      // webServer #3, confined to the template copy) — without it the host's
-      // /api proxy fails at boot and the spec's L1 clean-console assertion
-      // would red on proxy noise instead of product errors.
-      command: 'bun apps/standalone/game-backend.ts',
-      cwd: '.',
-      env: { ...process.env, FORGEAX_GAME_DIR: e2eTemplateGameDir, FORGEAX_GAME_API_PORT: e2eTemplateApiPort },
-      url: `http://127.0.0.1:${e2eTemplateApiPort}/api/health`,
-      reuseExistingServer: !process.env.CI,
-      timeout: 90_000,
-    },]),
+    ]),
   ],
   projects: [
     {

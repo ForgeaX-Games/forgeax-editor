@@ -15,7 +15,7 @@
 import { Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
 import { vec3, type ColorLike, type Vec3 } from '@forgeax/engine-math';
-import { Children, Transform } from '@forgeax/engine-scene';
+import { Children, GlobalTransform } from '@forgeax/engine-scene';
 import { MeshFilter } from '@forgeax/engine-render';
 
 const JOINT_COLOR: ColorLike = [0.95, 0.78, 0.25, 1];
@@ -50,7 +50,7 @@ export function installSkeletonOverlay({
       const root = getRoot();
       if (root === null) return;
 
-      // BFS the spawned subtree. Each entity carries Transform (world mat4,
+      // BFS the spawned subtree. Each entity carries GlobalTransform (world mat4,
       // translation at column-major [12,13,14]); joints are the entities
       // without a bound MeshFilter. A joint's parent translation is passed
       // down the queue so the parent→child bone line is drawn without a
@@ -68,7 +68,7 @@ export function installSkeletonOverlay({
         if (visited.has(id)) continue;
         visited.add(id);
 
-        const transform = world.get(entity, Transform);
+        const transform = world.get(entity, GlobalTransform);
         if (!transform.ok) continue;
         const worldMat = transform.value.world;
         const translation = vec3.create(worldMat[12] ?? 0, worldMat[13] ?? 0, worldMat[14] ?? 0);

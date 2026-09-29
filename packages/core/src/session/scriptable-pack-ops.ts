@@ -1,4 +1,4 @@
-import { SOURCE_AUTHORING_OPERATION_DESCRIPTORS } from "@forgeax/engine-pack/source";
+import { PACK_AUTHORING_OPERATION_DESCRIPTORS } from "@forgeax/engine-pack/source";
 import { listOps } from "../io/catalog";
 import type { CommandError, EditorOp } from "../types";
 
@@ -151,7 +151,12 @@ export function sourceAuthoringOperationManifest(): readonly SourceAuthoringOper
 				readModelFields: ["sourcePath", "sourceRevision", "impact", "recoveryActions"],
 			}];
 	return Object.freeze(
-		[...preflightEntry, ...SOURCE_AUTHORING_OPERATION_DESCRIPTORS].map((descriptor) =>
+		[...preflightEntry, ...PACK_AUTHORING_OPERATION_DESCRIPTORS.map((descriptor) => ({
+      ...descriptor,
+      domain: descriptor.readOnly ? "transient" as const : "session" as const,
+      title: descriptor.id,
+      argsSchema: { type: "object", required: descriptor.requiresRevision ? ["requestId", "expectedRevision"] : ["requestId"] },
+    }))].map((descriptor) =>
 			Object.freeze({
 				id: descriptor.id,
 				domain: descriptor.domain,

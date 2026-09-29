@@ -271,7 +271,10 @@ export function createGameplayOperations(gateway: GameplayGateway, capture?: Gam
     async input(action) {
       if (gateway.playPhase !== 'play') return unavailable('input requires an active live Play projection');
       const dispatch = gateway.sendGameplayInput ?? sendInput;
-      return dispatch ? dispatch(action) : unavailable('the Play host has no input surface');
+      if (dispatch) return dispatch(action);
+      const projected = await gateway.invokeGameAction('input', action);
+      if (projected.ok) return { ok: true, data: projected.value };
+      return projected;
     },
     async query(query) {
       if (gateway.playPhase !== 'play') return unavailable('query requires an active live Play projection');

@@ -3,26 +3,34 @@ import type { CommandOrigin, DispatchResult, PlayDirtyPolicy } from '@forgeax/ed
 import type { HostGateway } from './host-session';
 import type { RunLifecycle } from './run-lifecycle';
 
-export type PlayDispatchResult = DispatchResult & { readonly completion?: Promise<DispatchResult>; readonly cancel?: () => void };
+export type PlayDispatchResult = DispatchResult & { readonly completion?: Promise<DispatchResult>; readonly cancel?: () => void;
+};
 
 /** The Gateway owns run records; this host adapter owns the pending Play effect. */
 export function createPlayOperation(deps: {
-  gateway: Pick<HostGateway, 'playPhase' | 'lastPlayError' | 'dispatch' | 'waitOperationRun' | 'beginPlayAttempt' | 'failPlayAttempt'>;
+  gateway: Pick<HostGateway,
+    | 'playPhase' | 'lastPlayError' | 'dispatch' | 'waitOperationRun' | 'beginPlayAttempt' | 'failPlayAttempt'>;
   lifecycle: () => RunLifecycle | null;
   hasPendingDiskSave: () => boolean;
   invalidateScene: (value: boolean) => void;
   onFailure: (error: unknown) => void;
 }) {
-  let pending: { completion: Promise<DispatchResult>; cancel: () => void; stop: () => void } | undefined;
-  const cancelled: DispatchResult = { ok: false, error: { code: 'play-cancelled', hint: 'Play was stopped before startup completed.' } };
+  let pending:
+    | { completion: Promise<DispatchResult>; cancel: () => void; stop: () => void } | undefined;
+  const cancelled: DispatchResult = { ok: false, error: { code: 'play-cancelled', hint: 'Play was stopped before startup completed.' },
+  };
 
-  function play(policy: PlayDirtyPolicy = 'last-saved', origin: CommandOrigin = 'human', requestId?: string): PlayDispatchResult {
+  function play(policy: PlayDirtyPolicy = 'last-saved', origin: CommandOrigin = 'human', requestId?: string,
+  ): PlayDispatchResult {
     if (pending) return { ok: true, completion: pending.completion, cancel: pending.stop };
     const lifecycle = deps.lifecycle();
-    if (!lifecycle) return { ok: false, error: { code: 'play-unavailable', hint: 'The viewport lifecycle is not ready.' } };
+    if (!lifecycle) return { ok: false, error: { code: 'play-unavailable', hint: 'The viewport lifecycle is not ready.' },
+      };
     if (deps.gateway.playPhase === 'play') return { ok: true };
     const dirty = deps.hasPendingDiskSave();
-    if (dirty && policy === 'cancel') return { ok: false, error: { code: 'play-cancelled-dirty', hint: 'Play cancelled because the authored scene has unsaved edits.' } };
+    if (dirty && policy === 'cancel') return { ok: false, error: { code: 'play-cancelled-dirty', hint: 'Play cancelled because the authored scene has unsaved edits.',
+        },
+      };
     let stopped = false;
     let cancel!: () => void;
     const cancellation = new Promise<DispatchResult>((resolve) => {
@@ -38,7 +46,9 @@ export function createPlayOperation(deps: {
           const saved = accepted.ok ? await deps.gateway.waitOperationRun?.(requestId) : undefined;
           if (stopped) return cancelled;
           if (!accepted.ok || !saved?.ok || saved.value?.status !== 'succeeded') {
-            const error = { code: 'play-save-failed' as const, hint: !accepted.ok ? 'Save Then Play could not start the canonical save operation.' : saved?.ok ? saved.value?.error?.hint ?? 'Save did not succeed.' : 'Save completion is unavailable.' };
+            const error = { code: 'play-save-failed' as const, hint: !accepted.ok ? 'Save Then Play could not start the canonical save operation.' : saved?.ok ? (saved.value?.error?.hint ?? 'Save did not succeed.')
+                  : 'Save completion is unavailable.',
+            };
             deps.invalidateScene(false);
             deps.gateway.failPlayAttempt(error);
             deps.onFailure(error);
@@ -51,7 +61,9 @@ export function createPlayOperation(deps: {
         // The lifecycle handles assembly errors internally: Promise resolution
         // alone is not success. Read its authoritative Gateway outcome.
         if (deps.gateway.playPhase === 'play') return { ok: true };
-        return { ok: false, error: deps.gateway.lastPlayError ?? { code: 'play-cancelled', hint: 'Play ended without activating a live world.' } };
+        return { ok: false, error: deps.gateway.lastPlayError ?? { code: 'play-cancelled', hint: 'Play ended without activating a live world.',
+          },
+        };
       } catch (cause) {
         if (stopped) return cancelled;
         const error = { ...normalizePlayFailure(cause), code: 'play-assemble-failed' as const };
@@ -65,9 +77,11 @@ export function createPlayOperation(deps: {
       result.ok ? result : { ok: false, error: {
         ...result.error, retryable: result.error.retryable ?? false,
         recoveryActions: result.error.recoveryActions ?? [],
-      } },
+      },
+            },
     );
-    const effect = { completion, cancel, stop: () => { if (pending === effect) stop(); } };
+    const effect = { completion, cancel, stop: () => { if (pending === effect) stop(); },
+    };
     pending = effect;
     void completion.then(() => { if (pending === effect) pending = undefined; });
     return { ok: true, completion, cancel: effect.stop };

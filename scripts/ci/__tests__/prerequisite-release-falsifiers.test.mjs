@@ -12,7 +12,7 @@ const fixturePath = resolve('scripts/ci/fixtures/prerequisite-release-evidence-c
 const environment = {
   os: 'linux',
   architecture: 'x64',
-  bunVersion: '1.3.14',
+  bunVersion: '1.4.0',
   nodeVersion: '22.13.0',
   pnpmVersion: '11.7.0',
   rustVersion: '1.93',

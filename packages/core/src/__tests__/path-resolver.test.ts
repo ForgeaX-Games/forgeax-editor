@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import {
   setPathResolver,
   resolveGamePath,
+  joinGameRelativePath,
   hasPathResolver,
   EditorPathResolverError,
 } from '../util/path-resolver';
@@ -68,5 +69,19 @@ describe('path-resolver — installed resolver', () => {
     expect(resolveGamePath('x')).toBe('x');
     setPathResolver(null);
     expect(() => resolveGamePath('x')).toThrow(EditorPathResolverError);
+  });
+});
+
+describe('joinGameRelativePath', () => {
+  it('joins under a parent directory', () => {
+    expect(joinGameRelativePath('assets', 'NewFolder')).toBe('assets/NewFolder');
+  });
+
+  it('treats empty parent as game root', () => {
+    expect(joinGameRelativePath('', 'NewFolder')).toBe('NewFolder');
+  });
+
+  it('strips leading and trailing slashes from parent', () => {
+    expect(joinGameRelativePath('/assets/', 'Foo')).toBe('assets/Foo');
   });
 });

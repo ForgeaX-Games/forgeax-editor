@@ -6,7 +6,7 @@
 //   fallback → material `parameters` overlay → values-only inferred rows.
 // The old panel hard-coded baseColor/metallic/roughness + 3 texture slots;
 // these tests pin the full standard PBR surface (emissive / clearcoat /
-// specularTint / specularTintTexture …) coming out of the schema instead.
+// specularColor / specularColorTexture …) coming out of the schema instead.
 
 import { describe, expect, it } from 'bun:test';
 import { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from '@forgeax/engine-shader';
@@ -86,7 +86,7 @@ describe('resolveMaterialParamSchema', () => {
     });
     const { descriptors } = resolveMaterialParamSchema(STANDARD_PAYLOAD, index);
     const names = descriptors.map((d) => d.name);
-    for (const expected of ['baseColor', 'metallic', 'roughness', 'emissive', 'emissiveIntensity', 'clearcoat', 'specularTint', 'specularTintTexture']) {
+    for (const expected of ['baseColor', 'metallic', 'roughness', 'emissive', 'emissiveIntensity', 'clearcoat', 'specularColor', 'specularColorTexture']) {
       expect(names).toContain(expected);
     }
   });
@@ -165,12 +165,12 @@ describe('deriveMaterialParamRows', () => {
     expect(byName.get('metallic')).toMatchObject({ kind: 'scalar', slider: true });
     expect(byName.get('roughness')).toMatchObject({ kind: 'scalar', slider: true });
     expect(byName.get('baseColorTexture')?.kind).toBe('texture');
-    expect(byName.get('specularTintTexture')?.kind).toBe('texture');
+    expect(byName.get('specularColorTexture')?.kind).toBe('texture');
   });
 
-  it('treats vec3+colorSpace entries (emissive, specularTint) as color rows', () => {
+  it('treats vec3+colorSpace entries (emissive, specularColor) as color rows', () => {
     expect(byName.get('emissive')).toMatchObject({ kind: 'color', components: 3, colorSpace: 'srgb' });
-    expect(byName.get('specularTint')).toMatchObject({ kind: 'color', components: 3 });
+    expect(byName.get('specularColor')).toMatchObject({ kind: 'color', components: 3 });
   });
 
   it('suppresses the 0..1 slider for channel selectors and intensity/cutoff scalars', () => {

@@ -21,7 +21,8 @@ describe('live gameplay operations', () => {
       reads: [{ id: 'world', title: 'World' }],
       runtime: { playPhase: 'play', captureAvailable: false },
     });
-    await expect(operations.input({ type: 'key', key: 'ArrowRight', phase: 'down' })).resolves.toEqual({ ok: true, data: { acknowledged: 1 } });
+    await expect(operations.input({ type: 'key', key: 'ArrowRight', phase: 'down' }),
+    ).resolves.toEqual({ ok: true, data: { acknowledged: 1 } });
     await expect(operations.query('')).resolves.toEqual({ ok: true, data: { entities: [] } });
     expect(calls).toEqual([
       { hostInput: { type: 'key', key: 'ArrowRight', phase: 'down' } },
@@ -31,13 +32,23 @@ describe('live gameplay operations', () => {
 
   test('remote host input does not require a game-defined input action', async () => {
     const requests: unknown[] = [];
-    const gateway = createRemoteGameplayGateway({
-      descriptors: () => ({ actions: [], reads: [] }),
-      request: async (request) => { requests.push(request); return { ok: true }; },
-    }, () => 'play');
+    const gateway = createRemoteGameplayGateway(
+      {
+        descriptors: () => ({ actions: [], reads: [] }),
+        request: async (request) => {
+          requests.push(request);
+          return { ok: true };
+        },
+      },
+      () => 'play',
+    );
     const operations = createGameplayOperations(gateway);
-    await expect(operations.input({ type: 'key', key: 'w', phase: 'down' })).resolves.toEqual({ ok: true });
-    expect(requests).toEqual([{ operation: 'input', action: { type: 'key', key: 'w', phase: 'down' } }]);
+    await expect(operations.input({ type: 'key', key: 'w', phase: 'down' })).resolves.toEqual({
+      ok: true,
+    });
+    expect(requests).toEqual([
+      { operation: 'input', action: { type: 'key', key: 'w', phase: 'down' } },
+    ]);
   });
 
   test('reports unavailable without touching the gateway', async () => {
@@ -47,7 +58,8 @@ describe('live gameplay operations', () => {
       listGameReads: () => [],
     } as never;
     const operations = createGameplayOperations(gateway);
-    await expect(operations.input({ type: 'key', key: 'x', phase: 'up' })).resolves.toMatchObject({ ok: false });
+    await expect(operations.input({ type: 'key', key: 'x', phase: 'up' })).resolves.toMatchObject({ ok: false,
+    });
     await expect(operations.query('')).resolves.toMatchObject({ ok: false });
   });
 
@@ -65,14 +77,18 @@ describe('live gameplay operations', () => {
           ? { ok: true as const, data: { score: 7 } }
           : { ok: true as const, data: { acknowledged: 1 } };
       },
-    }, () => phase);
+    }, () => phase,
+    );
 
     expect(gateway.listGameActions()).toEqual([{ id: 'input', title: 'Input', argsSchema: null }]);
     expect(gateway.listGameReads()).toEqual([{ id: 'state', title: 'State' }]);
-    await expect(gateway.invokeGameAction('input', { key: 'ArrowRight' })).resolves.toEqual({ ok: true, value: { acknowledged: 1 } });
-    await expect(gateway.readGameState('state')).resolves.toEqual({ ok: true, value: { score: 7 } });
+    await expect(gateway.invokeGameAction('input', { key: 'ArrowRight' })).resolves.toEqual({ ok: true, value: { acknowledged: 1 },
+    });
+    await expect(gateway.readGameState('state')).resolves.toEqual({ ok: true, value: { score: 7 },
+    });
     phase = 'edit';
-    await expect(gateway.readGameState('state')).resolves.toMatchObject({ ok: false, error: { code: 'game-projection-unavailable' } });
+    await expect(gateway.readGameState('state')).resolves.toMatchObject({ ok: false, error: { code: 'game-projection-unavailable' },
+    });
     expect(requests).toEqual([
       { operation: 'run', id: 'input', args: { key: 'ArrowRight' } },
       { operation: 'read', id: 'state' },
@@ -98,9 +114,11 @@ describe('live gameplay operations', () => {
         }
         return { ok: true as const, data: { phase: 'play' } };
       },
-    }, () => 'play');
+    }, () => 'play',
+    );
 
-    await expect(gateway.readGameState('state')).resolves.toEqual({ ok: true, value: { phase: 'play' } });
+    await expect(gateway.readGameState('state')).resolves.toEqual({ ok: true, value: { phase: 'play' },
+    });
     expect(attempts).toBe(2);
   });
 });

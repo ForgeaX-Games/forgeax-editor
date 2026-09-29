@@ -33,6 +33,6 @@ describe('Inspector bespoke editor integration (M1)', () => {
 describe('Inspector fixed-capacity array slot pick (regression)', () => {
   it('opens the picker AT slot i for fixed-length arrays instead of appending', () => {
     expect(panel).toContain('f.arrayMeta?.length !== undefined');
-    expect(panel).toContain('setPicker({ comp, field: f.key, assetType: arrType, slot: i, currentGuid })');
+    expect(panel).toContain('setPicker({ comp, field: f.key, assetType: arrType, slot: i, currentGuid, anchor })');
   });
 });

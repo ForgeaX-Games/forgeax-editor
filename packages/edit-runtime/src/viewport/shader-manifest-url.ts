@@ -1,3 +1,4 @@
+import { readShaderManifestPublication } from '@forgeax/engine-shader';
 import type { ManifestEntry } from '@forgeax/engine-types';
 
 type MaterialShaderManifestEntry = {
@@ -10,7 +11,7 @@ type MaterialShaderManifestEntry = {
 };
 
 export type ViewportShaderManifestDocument = {
-  readonly schemaVersion?: number;
+  readonly schemaVersion?: string | number;
   readonly entries: ManifestEntry[];
   readonly materialShaders?: readonly MaterialShaderManifestEntry[];
 };
@@ -19,7 +20,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function parseManifestDocument(raw: string, url: string): ViewportShaderManifestDocument {
+async function parseManifestDocument(raw: string, url: string): Promise<ViewportShaderManifestDocument> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -28,6 +29,8 @@ function parseManifestDocument(raw: string, url: string): ViewportShaderManifest
       `shader manifest at ${url} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  // Decode and verify each producer before merging; source tables use local fragment indices.
+  parsed = await readShaderManifestPublication(parsed);
   if (!isRecord(parsed) || !Array.isArray(parsed.entries)) {
     throw new Error(`shader manifest at ${url} is missing required entries[]`);
   }

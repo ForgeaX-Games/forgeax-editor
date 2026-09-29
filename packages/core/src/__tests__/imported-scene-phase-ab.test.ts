@@ -1,3 +1,4 @@
+import type { SceneWithLegacyMounts } from '../scene/legacy-scene-mounts';
 import { describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import { AssetRegistry, createCatalogSource, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
@@ -277,11 +278,11 @@ describe('imported scene Phase A descriptor and gateway policy', () => {
     };
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
+      entities: {"entity-0": {components: { Transform: {} }}},
     };
-    const parent: SceneAsset = {
+    const parent: SceneWithLegacyMounts = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
+      entities: {"entity-0": {components: { Transform: {} }}},
       mounts: [{ localId: 1 as never, source: childGuid, memberFirst: 2 as never, memberCount: 1 }],
     };
     const registry = new AssetRegistry({} as never);
@@ -305,7 +306,7 @@ describe('imported scene Phase A descriptor and gateway policy', () => {
     if (!sourceHandle.ok) return;
     const liveParent = resolveAssetHandle(world, sourceHandle.value);
     expect(liveParent.ok).toBe(true);
-    if (!liveParent.ok || liveParent.value.kind !== 'scene' || liveParent.value.mounts?.[0] === undefined) return;
+    if (!liveParent.ok || liveParent.value.kind !== 'scene' || (liveParent.value as SceneWithLegacyMounts).mounts?.[0] === undefined) return;
     const candidateFence = {
       ...fence,
       sourceRevision: 'revision-candidate',
@@ -314,7 +315,7 @@ describe('imported scene Phase A descriptor and gateway policy', () => {
       outputSetDigest: 'sha256:outputs-candidate',
       receiptIdentity: 'sha256:receipt-candidate',
     };
-    (liveParent.value.mounts[0] as { publicationFence?: unknown }).publicationFence = candidateFence;
+    ((liveParent.value as SceneWithLegacyMounts).mounts![0] as { publicationFence?: unknown }).publicationFence = candidateFence;
     const session = createEditSession();
     session.world = world;
     session.registry = registry;

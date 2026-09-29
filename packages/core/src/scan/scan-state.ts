@@ -4,7 +4,7 @@
 //   - scan-state.json lives at <game-dir>/.forgeax/scan-state.json
 //   - It is a local cache (not committed to git) that tracks mtime/size/contentHash
 //     for every source file under assets/ so incremental scans can skip unchanged files.
-//   - Three-tier detection: L0 (dir mtime) → L1 (file mtime+size) → L2 (content hash).
+//   - Three-tier detection: dir mtime → file mtime+size → content hash.
 //
 // Anchors:
 //   todo: 2026-07-09 startup-asset-scan-auto-import G1
@@ -18,19 +18,19 @@ export type ScanEntryStatus =
   | 'error'          // previous import/validation failed
   ;
 
-/** Per-directory L0 cache entry. */
+/** Per-directory tier-0 cache entry. */
 export interface DirEntry {
-  /** `stat(dir).mtimeMs` at last scan. Used for L0 subtree skip. */
+  /** `stat(dir).mtimeMs` at last scan. Used for tier-0 subtree skip. */
   mtime: number;
 }
 
-/** Per-file L1+L2 cache entry. */
+/** Per-file tier-1+tier-2 cache entry. */
 export interface ScanEntry {
-  /** `stat(file).mtimeMs` at last scan (L1 fast check). */
+  /** `stat(file).mtimeMs` at last scan (file-stat fast check). */
   mtime: number;
-  /** `stat(file).size` at last scan (L1 fast check — size change guarantees content change). */
+  /** `stat(file).size` at last scan (file-stat fast check — size change guarantees content change). */
   size: number;
-  /** Full-file content hash (L2 false-positive guard). Server-side uses SHA-256
+  /** Full-file content hash (content-hash false-positive guard). Server-side uses SHA-256
    *  via node:crypto; browser-side uses xxHash64 via pure JS. Format: "sha256:<hex>" or "xxh64:<hex>".
    *  null when not yet computed. */
   contentHash: string | null;
@@ -52,9 +52,9 @@ export interface ScanState {
   schemaVersion: string;
   /** ISO-8601 timestamp of the last full scan completion. */
   lastFullScanTimestamp: string | null;
-  /** Per-directory L0 mtime cache. Keys are relative paths like "assets/models". */
+  /** Per-directory tier-0 mtime cache. Keys are relative paths like "assets/models". */
   dirs: Record<string, DirEntry>;
-  /** Per-file L1+L2 cache. Keys are relative paths like "assets/models/bed.glb". */
+  /** Per-file tier-1+tier-2 cache. Keys are relative paths like "assets/models/bed.glb". */
   entries: Record<string, ScanEntry>;
   /** Snapshot of each importer's formatVersion at last scan (for upgrade detection). */
   importerVersions: Record<string, number>;

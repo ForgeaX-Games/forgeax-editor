@@ -22,6 +22,7 @@ function makeHarness() {
   let selection: number | null = 7;
   let visible = true;
   let editMode = true;
+  let selectionVisible = true;
   let components: Record<string, unknown> | undefined = {
     Collider: { shape: 0, halfExtents: [2, 1, 0.5], isSensor: false },
     Transform: { world: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 4, 2, -3, 1] },
@@ -37,6 +38,7 @@ function makeHarness() {
     debugDraw,
     getSelection: () => selection as never,
     getEntityComponents: () => components,
+    isSelectionVisibleInViewport: () => selectionVisible,
     isAuxVisible: () => visible,
     isEditMode: () => editMode,
   });
@@ -45,6 +47,7 @@ function makeHarness() {
     tick: () => world.update(1 / 60).unwrap(),
     setSelection: (value: number | null) => { selection = value; },
     setVisible: (value: boolean) => { visible = value; },
+    setSelectionVisible: (value: boolean) => { selectionVisible = value; },
     setEditMode: (value: boolean) => { editMode = value; },
     setComponents: (value: Record<string, unknown> | undefined) => { components = value; },
   };
@@ -67,6 +70,13 @@ describe('installColliderDebugOverlay', () => {
     h.tick();
     expect(h.lines).toHaveLength(48);
     expect(h.lines[0]?.color).toEqual([1, 0.62, 0.18, 1]);
+  });
+
+  it('skips wireframe when the selected entity is hidden in the viewport', () => {
+    const h = makeHarness();
+    h.setSelectionVisible(false);
+    h.tick();
+    expect(h.lines).toHaveLength(0);
   });
 
   it('is a no-op with no selection, no Collider, stale/missing data, or hidden auxiliary display', () => {

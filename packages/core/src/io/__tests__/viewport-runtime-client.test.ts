@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import {
   TRANSPORT_PROTOCOL_VERSION,
   VIEWPORT_RUNTIME_CONTRACT_VERSION,
@@ -35,7 +35,16 @@ function client(handle: (request: TransportRequest) => unknown): MessagePortTran
   };
 }
 
+function disconnectLeakedViewportRuntimeClient(): void {
+  if (getViewportRuntimeClientSnapshot().status === 'disconnected') return;
+  bindViewportRuntimeClient(runtime(Number.MAX_SAFE_INTEGER), client(() => ({})))();
+}
+
 describe('viewport runtime client cache', () => {
+  afterEach(() => {
+    disconnectLeakedViewportRuntimeClient();
+  });
+
   test('a stale disposer cannot disconnect a newer Runtime generation', () => {
     const disposeOne = bindViewportRuntimeClient(runtime(1), client(() => ({})));
     const disposeTwo = bindViewportRuntimeClient(runtime(2), client(() => ({})));
@@ -255,11 +264,14 @@ describe('viewport runtime client cache', () => {
   });
 
   test('fails closed instead of promoting the shell Gateway when disconnected', async () => {
+    disconnectLeakedViewportRuntimeClient();
     await expect(dispatchActiveEditorOperation({ kind: 'setSelection', id: 18 })).resolves.toEqual({
       ok: false,
       error: {
         code: 'operation-failed',
         hint: 'Viewport Runtime is disconnected; reconnect before retrying the operation.',
+        retryable: true,
+        recoveryActions: ['transport.reconnect'],
       },
     });
   });

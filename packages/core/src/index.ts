@@ -19,6 +19,13 @@ export type {
 export type { EntityHandle, WorldType } from './scene/scene-types';
 export { normalizeAnimationPlayerSceneAsset } from './scene/animation-slot-sync';
 export {
+  createEditorRendererHost,
+  asEditorRendererHost,
+} from './renderer/editor-renderer-host';
+export { subscribeRendererFrameEnd } from './renderer/subscribe-renderer-frame-end';
+export type { EditorRendererHost, EditorRendererHostDeps,
+} from './renderer/editor-renderer-host';
+export {
   bindAllSceneAnimationTargets,
   bindSceneInstanceAnimationTargets,
   type AnimationTargetBindingError,
@@ -29,7 +36,8 @@ export {
   type AnimationTargetBindingReport,
 } from './scene/animation-target-binding';
 
-export type { EditorOp, CommandError, ApplyResult, CreatableAssetKind, PlayDirtyPolicy, SceneSwitchDirtyPolicy } from './types';
+export type { EditorOp, CommandError, ApplyResult, CreatableAssetKind, PlayDirtyPolicy, SceneSwitchDirtyPolicy,
+} from './types';
 export type { EditorOpLifecycle } from './types';
 export type {
   CommandErrorContext,
@@ -51,7 +59,8 @@ export {
   validatePackShell,
   PackShellValidationError,
 } from './scene/scene-pack';
-export type { ScenePack, PackFile, ValidatePackShellResult } from './scene/scene-pack';
+export type { ScenePack, PackFile, ValidatePackShellResult,
+} from './scene/scene-pack';
 
 // ── Product-neutral public slices ──
 export * from './public/gateway';
@@ -125,6 +134,8 @@ export type {
   SourceAuthoringOperationManifestEntry,
   SourceAuthoringRuntime,
   SourceMutationPreflightInput,
+  SourcePackageCatalogExpectation,
+  SourcePackageCatalogRow,
 } from './public/assets';
 export {
   projectScriptablePackCatalog,
@@ -167,7 +178,8 @@ export { createRemoteGameplayGateway } from './io/gameplay-operations';
 
 // SpanNode is the trace-tree node type returned by gateway.trace.recent()/.last().
 export type { SpanNode } from './io/trace';
-export type { SceneReadModel, SceneReadModelEntry, SceneReadModelReference } from './io/scene-read-model';
+export type { SceneReadModel, SceneReadModelEntry, SceneReadModelReference,
+} from './io/scene-read-model';
 export type {
   SceneInstanceMemberReadModel,
   SceneInstanceOverrideReadModel,
@@ -185,7 +197,8 @@ export type {
 
 // Diagnostics are a read-only projection of existing trace, scan, asset-bus,
 // and OperationRun facts. Console output is intentionally not an input source.
-export { createDiagnosticsReadModel, queryDiagnosticsSnapshot, DIAGNOSTICS_DEDUPE, DIAGNOSTICS_RETENTION, DIAGNOSTICS_SCHEMA_VERSION } from './io/diagnostics';
+export { createDiagnosticsReadModel, queryDiagnosticsSnapshot, DIAGNOSTICS_DEDUPE, DIAGNOSTICS_RETENTION, DIAGNOSTICS_SCHEMA_VERSION,
+} from './io/diagnostics';
 export type {
   CreateDiagnosticsReadModelDeps,
   DiagnosticsAssetSource,
@@ -223,7 +236,8 @@ export type {
   ProjectValidationResultEnvelope,
   ProjectValidationStats,
 } from './io/project-validation';
-export { createRuntimeReadiness, RUNTIME_READINESS_STATES, runtimeReadinessDiagnostic } from './public/gateway';
+export { createRuntimeReadiness, RUNTIME_READINESS_STATES, runtimeReadinessDiagnostic,
+} from './public/gateway';
 export type {
   CreateRuntimeReadinessInput,
   RuntimeReadiness,
@@ -240,17 +254,42 @@ export {
   getViewportRuntimeOperationRun,
   getViewportRuntimeClientSnapshot,
   getViewportRuntimeSelectionSnapshot,
+  getViewportRuntimeHierarchySnapshot,
+  publishViewportRuntimeHierarchySnapshot,
+  refreshViewportRuntimeHierarchySnapshot,
+  subscribeViewportRuntimeHierarchySnapshot,
   queryViewportRuntimeProjection,
   retryViewportRuntimeOperationRun,
   subscribeViewportRuntimeClient,
   waitViewportRuntimeOperationRun,
 } from './io/viewport-runtime-client';
-export { dispatchActiveEditorOperation, dispatchAndWaitActiveEditorOperation } from './store/active-operation';
+export {
+  canDispatchPanelDocumentOperations,
+  getEditorPanelAuthoritySnapshot,
+  subscribeEditorPanelAuthority,
+  usesCarrierHierarchyProjection,
+  usesHostGatewayForPanelDispatch,
+} from './io/editor-panel-authority';
+export {
+  isHierarchyVisibilityTraceEnabled,
+  isVisibilityDocumentCommand,
+  extractVisibilityCommandEntityIds,
+  extractVisibilityCommandState,
+  traceHierarchyVisibility,
+} from './io/hierarchy-visibility-trace';
+export type { VisibilityCommandState } from './io/hierarchy-visibility-trace';
+export type {
+  EditorPanelAuthorityMode,
+  EditorPanelAuthoritySnapshot,
+} from './io/editor-panel-authority';
+export { dispatchActiveEditorOperation, dispatchAndWaitActiveEditorOperation,
+} from './store/active-operation';
 export type { ActiveOperationResult } from './store/active-operation';
 export type {
   ViewportRuntimeClientSnapshot,
   ViewportRuntimeClientStatus,
   ViewportRuntimeSelectionSnapshot,
+  ViewportRuntimeHierarchySnapshot,
 } from './io/viewport-runtime-client';
 
 // Runtime UI diagnostics are the typed read-only Gateway contract. The graph
@@ -273,6 +312,7 @@ export type {
   RuntimeUiGraph,
 } from './io/runtime-ui-diagnostics';
 export { createInspectorFieldSelector } from './store/live-world-field-selectors';
+export { mountTransformEulerLiveSelector } from './store/transform-euler-live-selector';
 export type {
   InspectorFieldAvailable,
   InspectorFieldSelector,
@@ -282,9 +322,14 @@ export type {
   InspectorFieldSubscription,
   InspectorFieldUnavailable,
 } from './store/live-world-field-selectors';
+export type {
+  TransformEulerDegrees,
+  TransformEulerLiveSelectorOptions,
+} from './store/transform-euler-live-selector';
 
 // ── Edit session (authoring working state) ──
-export { createEditSession, applyCommand, childrenOf, isSelfOrDescendant } from './session/document';
+export { createEditSession, applyCommand, childrenOf, isSelfOrDescendant,
+} from './session/document';
 
 // ── Entity state (activeWorld read face, handle IS identity) ──
 // Panels/consumers read entity name/parent/components/existence through these
@@ -304,7 +349,8 @@ export {
   registerActiveReadBinding,
   getActiveReadBinding,
 } from './store/entity-state';
-export type { StaleEntityHandleError, ComponentAbsentError, StaleHandleResult, EditRejectedInPlayError, HandleCheckOpts } from './store/entity-state';
+export type { StaleEntityHandleError, ComponentAbsentError, StaleHandleResult, EditRejectedInPlayError, HandleCheckOpts,
+} from './store/entity-state';
 
 // Editor-world chrome projection (Hierarchy "Show Editor World"). Filled by
 // edit-runtime after the orbit camera spawns; panels read Camera rows only —
@@ -323,7 +369,8 @@ export type {
 // The world-manager layer holds HandlePairs (worldRef + epoch + entity) instead
 // of bare EntityHandles, and validates them through validateHandlePair before
 // any read/write — the defence against cross-world reads.
-export { validateEntityObjectRef, validateHandlePair } from './store/handle-pair';
+export { validateEntityObjectRef, validateHandlePair,
+} from './store/handle-pair';
 export type {
   EntityObjectRefResult,
   EntityObjectRefUnavailableError,
@@ -374,7 +421,8 @@ export type {
   ArrayFieldMeta,
 } from './scene/schema';
 export { planArrayEdit } from './scene/array-edit';
-export type { ArrayEditAction, ArrayEditRequest, ArrayEditPlan } from './scene/array-edit';
+export type { ArrayEditAction, ArrayEditRequest, ArrayEditPlan,
+} from './scene/array-edit';
 // socket-calibration M1 (doc §3.2): read face for a skinned character's joint
 // names — the parent-bone dropdown source. Pure read over activeWorld.
 // socket-calibration M2 (doc §3.4 / §3.6): joint-root LCA, facing-pivot read,
@@ -407,7 +455,8 @@ export {
   EDITOR_COMPONENT_META,
 } from './scene/editor-component-meta';
 export type { EditorComponentMeta } from './scene/editor-component-meta';
-export type { AnimationComponentMeta, AnimationTransportDescriptor } from './scene/editor-component-meta';
+export type { AnimationComponentMeta, AnimationTransportDescriptor,
+} from './scene/editor-component-meta';
 
 // ── Animation preview (M1) ──
 // Snapshot/restore registry (save-pollution defense) + the setAnimationPreview
@@ -599,7 +648,8 @@ export {
   discardMaterialStaging,
   closeMaterialStaging,
 } from './assets/material-staging';
-export type { MaterialStagingEntry, MaterialStagingPayload } from './assets/material-staging';
+export type { MaterialStagingEntry, MaterialStagingPayload,
+} from './assets/material-staging';
 export {
   registerActivePageSaveHandler,
   trySaveActivePage,
@@ -671,12 +721,17 @@ export {
   switchSceneFile,
   previewImportedScene,
   createSceneFile,
+  materializeGeneratedDefaultScene,
   readPlayConfig,
   writePlayConfig,
   broadcastAssetsChanged,
   instantiateSceneRefUnderWorld,
   notifyDocChanged,
   subscribeDocVersion,
+  subscribeVisibilityRevision,
+  getVisibilityRevision,
+  getLastVisibilityCommandEntityIds,
+  getLastVisibilityCommandState,
   flushPendingSaveBeacon,
   cancelPendingDiskSave,
   hasPendingDiskSave,
@@ -737,9 +792,11 @@ export type {
 // asset IO that failed AFTER the applier returned ok. Panels subscribe via
 // panelBridge.on('assetsError', …) and toast; the applier remains SSOT for
 // state mutation (north-star §9). See dev-plan §5 step 3.
-export { assetsErrorRevision, broadcastAssetsError, recentAssetsErrors } from './store/assets-error-bus';
+export { assetsErrorRevision, broadcastAssetsError, recentAssetsErrors,
+} from './store/assets-error-bus';
 export type { AssetsErrorPayload } from './store/assets-error-bus';
-export type { SceneFileEntry, PlayConfig, SelectedAsset, MeshStats, GizmoSpace, GizmoPivot, SessionDirtyAsset } from './store/store';
+export type { SceneFileEntry, PlayConfig, SelectedAsset, MeshStats, GizmoSpace, GizmoPivot, SessionDirtyAsset,
+} from './store/store';
 
 // ── Viewport preferences (session-domain chrome state; setViewportPreferences op) ──
 // Same barrel rule as above: getters/hooks/subscribes + storage helpers + the
@@ -782,7 +839,8 @@ export {
   ORTHO_HALF_HEIGHT_MAX,
   ORTHO_HALF_HEIGHT_MIN,
 } from './store/viewport-camera-limits';
-export type { CameraProjection, ViewportView } from './store/viewport-camera-limits';
+export type { CameraProjection, ViewportView,
+} from './store/viewport-camera-limits';
 
 // ── Entity operations ──
 export {
@@ -803,8 +861,10 @@ export {
 } from './session/ops';
 
 // ── Context menu service ──
-export { setContextMenuRenderer, showContextMenu } from './ui/context-menu-service';
-export type { ContextMenuRenderer, ContextMenuRequest, MenuItemDef } from './ui/context-menu-service';
+export { setContextMenuRenderer, showContextMenu,
+} from './ui/context-menu-service';
+export type { ContextMenuRenderer, ContextMenuRequest, MenuItemDef,
+} from './ui/context-menu-service';
 
 // ── Resize primitive (shared splitter: drag handle + persisted size hook) ──
 export { ResizeHandle, useLocalSize } from './ui/resize-handle';
@@ -813,6 +873,7 @@ export { ResizeHandle, useLocalSize } from './ui/resize-handle';
 export {
   setPathResolver,
   resolveGamePath,
+  joinGameRelativePath,
   resolveGamePathOnce,
   hasPathResolver,
   EditorPathResolverError,
@@ -820,7 +881,8 @@ export {
 export type { PathResolver } from './util/path-resolver';
 
 // ── Material pack-path clamping (ensure authoring under assets/) ──
-export { resolveMaterialCreateGameRelDir, clampMaterialPackPath, isUnderAssetsDir } from './util/material-pack-path';
+export { resolveMaterialCreateGameRelDir, clampMaterialPackPath, isUnderAssetsDir,
+} from './util/material-pack-path';
 export {
   CATALOG_ROOT_REQUIRED_KINDS,
   DEFAULT_LOCAL_CATALOG_ROOTS,
@@ -843,7 +905,8 @@ export {
   VisibilityStateValue,
   visibilityStateFromU32,
 } from './visibility';
-export type { VisibilityResolution, VisibilitySnapshot, VisibilityState } from './visibility';
+export type { VisibilityResolution, VisibilitySnapshot, VisibilityState,
+} from './visibility';
 
 // ── Viewport clip transport + view intents (preview animation scrubber) ──
 export {
@@ -862,7 +925,8 @@ export type { ClipControl, ViewCmd } from './io/clip-control';
 // ── CB nav read interface ──
 // Public read surface for Content Browser navigation. Dispatch mutations via
 // gateway.dispatch({ kind: 'setCBPath' | 'cbGoBack' | 'cbGoForward' }).
-export { useCBNav, getCBPath, getCBNavState, onCBNavChange } from './store/cb-nav';
+export { useCBNav, getCBPath, getCBNavState, onCBNavChange, normalizeCBPath,
+} from './store/cb-nav';
 
 // ── Asset scan helpers ──
 // Scan fs/stat/hash/IO runs Node-side (vite-plugin-pack + platform-io).

@@ -111,3 +111,6 @@ export type {
 // ── Hot reload (two-tier) ──
 export { applyScriptChange, initHotReload } from './hot-reload';
 export type { HotReloadHost, HotReloadOutcome } from './hot-reload';
+
+// ── Feedback health (save failure reporting) ──
+export { errorMessage, forwardFeedbackHealth, normalizeSaveFailureCode } from './feedback-health';

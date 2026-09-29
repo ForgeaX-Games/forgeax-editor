@@ -9,7 +9,10 @@ import type { PlayAssembly } from '../play-assemble';
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
   return { promise, resolve, reject };
 }
 function rig(dirty = false) {
@@ -19,11 +22,17 @@ function rig(dirty = false) {
   const lifecycle = createRunLifecycle({
     gateway,
     editorApp: { pause: () => ({ ok: true }), resume: () => ({ ok: true }) },
-    assemble: () => { attempts++; return assembly.promise; },
+    assemble: () => {
+      attempts++;
+      return assembly.promise;
+    },
   });
   const operation = createPlayOperation({
-    gateway, lifecycle: () => lifecycle, hasPendingDiskSave: () => dirty,
-    invalidateScene() {}, onFailure() {},
+    gateway,
+    lifecycle: () => lifecycle,
+    hasPendingDiskSave: () => dirty,
+    invalidateScene() {},
+    onFailure() {},
   });
   return { operation, gateway, assembly, attempts: () => attempts };
 }
@@ -33,7 +42,10 @@ test('real lifecycle caught assembly failure reaches the Play completion', async
   const started = r.operation.play();
   expect(started.ok).toBe(true);
   r.assembly.resolve({ ok: false, error: { code: 'bad-bootstrap', hint: 'entry failed' } });
-  expect(await started.completion).toMatchObject({ ok: false, error: { code: 'bad-bootstrap', hint: 'entry failed' } });
+  expect(await started.completion).toMatchObject({
+    ok: false,
+    error: { code: 'bad-bootstrap', hint: 'entry failed' },
+  });
   expect(r.gateway.playPhase).toBe('failed');
 });
 
@@ -41,7 +53,10 @@ test('a thrown assembly error is not mistaken for resolved success', async () =>
   const r = rig();
   const started = r.operation.play();
   r.assembly.reject(new Error('bootstrap threw'));
-  expect(await started.completion).toMatchObject({ ok: false, error: { code: 'play-assemble-failed', hint: 'bootstrap threw' } });
+  expect(await started.completion).toMatchObject({
+    ok: false,
+    error: { code: 'play-assemble-failed', hint: 'bootstrap threw' },
+  });
 });
 
 test('duplicate Play shares startup; Stop settles it without waiting for assembly', async () => {
@@ -67,51 +82,87 @@ test('already active Play succeeds without restarting the world', () => {
 
 test('save-then-play reports asynchronous save failure and never starts assembly', async () => {
   const save = deferred<unknown>();
-  const restore = registerApplier('session', 'saveDocToDisk', () => ({ ok: true, completion: save.promise }));
+  const restore = registerApplier('session', 'saveDocToDisk', () => ({
+    ok: true,
+    completion: save.promise,
+  }));
   try {
     const r = rig(true);
     const started = r.operation.play('save-then-play');
     await Promise.resolve();
-    save.resolve({ ok: false, error: { code: 'disk-full', hint: 'No space left', retryable: true, recoveryActions: [] } });
-    expect(await started.completion).toMatchObject({ ok: false, error: { code: 'play-save-failed', hint: 'No space left' } });
+    save.resolve({
+      ok: false,
+      error: { code: 'disk-full', hint: 'No space left', retryable: true, recoveryActions: [] },
+    });
+    expect(await started.completion).toMatchObject({
+      ok: false,
+      error: { code: 'play-save-failed', hint: 'No space left' },
+    });
     expect(r.attempts()).toBe(0);
-  } finally { restore(); }
+  } finally {
+    restore();
+  }
 });
 
 test('Stop while save is pending cannot start Play after the save completes', async () => {
   const save = deferred<unknown>();
-  const restore = registerApplier('session', 'saveDocToDisk', () => ({ ok: true, completion: save.promise }));
+  const restore = registerApplier('session', 'saveDocToDisk', () => ({
+    ok: true,
+    completion: save.promise,
+  }));
   try {
     const r = rig(true);
     const started = r.operation.play('save-then-play');
     await Promise.resolve();
     r.operation.stop();
-    expect(await started.completion).toMatchObject({ ok: false, error: { code: 'play-cancelled' } });
+    expect(await started.completion).toMatchObject({
+      ok: false,
+      error: { code: 'play-cancelled' },
+    });
     save.resolve({ ok: true });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(r.attempts()).toBe(0);
-  } finally { restore(); }
+  } finally {
+    restore();
+  }
 });
-
 
 test('Stop then immediate Play isolates the old cancellation handler and terminal callback', async () => {
   const r = rig();
   const restore = registerViewportSessionAppliers({
-    play: r.operation.play, stop: r.operation.stop, gateway: r.gateway,
-    setDisplay() {}, grantGameControl() {}, releaseGameControl() {},
-    replayParticleEffect: () => ({ ok: true }), world: {} as never, activeWorld: () => ({} as never),
+    play: r.operation.play,
+    stop: r.operation.stop,
+    gateway: r.gateway,
+    setDisplay() {},
+    grantGameControl() {},
+    releaseGameControl() {},
+    replayParticleEffect: () => ({ ok: true }),
+    world: {} as never,
+    activeWorld: () => ({}) as never,
   });
   try {
     r.gateway.dispatch({ kind: 'play', requestId: 'old-play' });
     await Promise.resolve();
     r.gateway.dispatch({ kind: 'stop' });
     r.gateway.dispatch({ kind: 'play', requestId: 'new-play' });
-    expect(await r.gateway.waitOperationRun('old-play')).toMatchObject({ ok: true, value: { status: 'cancelled' } });
-    expect(r.gateway.getOperationRunResult('new-play')).toMatchObject({ ok: true, value: { status: 'running' } });
+    expect(await r.gateway.waitOperationRun('old-play')).toMatchObject({
+      ok: true,
+      value: { status: 'cancelled' },
+    });
+    expect(r.gateway.getOperationRunResult('new-play')).toMatchObject({
+      ok: true,
+      value: { status: 'running' },
+    });
     r.gateway.cancelOperationRun('new-play');
-    expect(await r.gateway.waitOperationRun('new-play')).toMatchObject({ ok: true, value: { status: 'cancelled' } });
+    expect(await r.gateway.waitOperationRun('new-play')).toMatchObject({
+      ok: true,
+      value: { status: 'cancelled' },
+    });
     r.assembly.resolve({ ok: false, error: 'late' });
-  } finally { r.operation.stop(); restore(); }
+  } finally {
+    r.operation.stop();
+    restore();
+  }
 });
 
 test('dirty cancel policy during an existing startup observes the same pending attempt', async () => {
@@ -128,18 +179,37 @@ test('a delayed successful remote startup becomes successful only after activati
   let starts = 0;
   const requests: (string | undefined)[] = [];
   const lifecycle = createRunLifecycle({
-    gateway, editorApp: { pause: () => ({ ok: true }), resume: () => ({ ok: true }) },
-    assemble: async () => { throw new Error('remote carrier owns assembly'); },
+    gateway,
+    editorApp: { pause: () => ({ ok: true }), resume: () => ({ ok: true }) },
+    assemble: async () => {
+      throw new Error('remote carrier owns assembly');
+    },
     remoteCarrier: {
-      start: (requestId) => { starts++; requests.push(requestId); return ready.promise; }, stop: async () => ({ ok: true }), pause() {}, resume() {},
-      state: () => 'entering-play', gameplayDescriptors: () => ({ actions: [], reads: [] }) as never,
+      start: (requestId) => {
+        starts++;
+        requests.push(requestId);
+        return ready.promise;
+      },
+      stop: async () => ({ ok: true }),
+      pause() {},
+      resume() {},
+      state: () => 'entering-play',
+      gameplayDescriptors: () => ({ actions: [], reads: [] }) as never,
       gameplay: async () => ({ ok: false }) as never,
     },
   });
-  const operation = createPlayOperation({ gateway, lifecycle: () => lifecycle, hasPendingDiskSave: () => false, invalidateScene() {}, onFailure() {} });
+  const operation = createPlayOperation({
+    gateway,
+    lifecycle: () => lifecycle,
+    hasPendingDiskSave: () => false,
+    invalidateScene() {},
+    onFailure() {},
+  });
   const started = operation.play('last-saved', 'ai', 'original-play-request');
   let settled = false;
-  void started.completion?.then(() => { settled = true; });
+  void started.completion?.then(() => {
+    settled = true;
+  });
   await Promise.resolve();
   expect(settled).toBe(false);
   expect(gateway.playPhase).toBe('starting');
@@ -152,10 +222,12 @@ test('a delayed successful remote startup becomes successful only after activati
   operation.stop();
 });
 
-
 test('save-then-play waits for save and then for the actual assembly outcome', async () => {
   const save = deferred<unknown>();
-  const restore = registerApplier('session', 'saveDocToDisk', () => ({ ok: true, completion: save.promise }));
+  const restore = registerApplier('session', 'saveDocToDisk', () => ({
+    ok: true,
+    completion: save.promise,
+  }));
   try {
     const r = rig(true);
     const started = r.operation.play('save-then-play');
@@ -165,30 +237,48 @@ test('save-then-play waits for save and then for the actual assembly outcome', a
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(r.attempts()).toBe(1);
     expect(r.gateway.playPhase).toBe('starting');
-    r.assembly.resolve({ ok: false, error: { code: 'play-assemble-failed', hint: 'saved entry failed' } });
-    expect(await started.completion).toMatchObject({ ok: false, error: { hint: 'saved entry failed', retryable: false } });
-  } finally { restore(); }
+    r.assembly.resolve({
+      ok: false,
+      error: { code: 'play-assemble-failed', hint: 'saved entry failed' },
+    });
+    expect(await started.completion).toMatchObject({
+      ok: false,
+      error: { hint: 'saved entry failed', retryable: false },
+    });
+  } finally {
+    restore();
+  }
 });
-
 
 test('assembly asset diagnostics survive lifecycle and Gateway completion', async () => {
   const r = rig();
   const started = r.operation.play();
-  const cause = { code: 'pack-source-load-failed', hint: 'Repair the module', detail: {
-    diagnostic: 'AssetGuidParser is not defined', phase: 'module-load', sourcePath: 'assets/scene.pack.ts',
-  } };
-  r.assembly.resolve({ ok: false, error: { code: 'catalog-scan-failed', hint: 'Catalog failed', cause } });
+  const cause = {
+    code: 'pack-source-load-failed',
+    hint: 'Repair the module',
+    detail: {
+      diagnostic: 'AssetGuidParser is not defined',
+      phase: 'module-load',
+      sourcePath: 'assets/scene.pack.ts',
+    },
+  };
+  r.assembly.resolve({
+    ok: false,
+    error: { code: 'catalog-scan-failed', hint: 'Catalog failed', cause },
+  });
   const result = await started.completion;
   expect(result).toMatchObject({ ok: false, error: { code: 'catalog-scan-failed', cause } });
   if (result && !result.ok) expect(result.error.hint).toContain('AssetGuidParser is not defined');
   expect(r.gateway.lastPlayError).toMatchObject({ cause });
 });
 
-
 test('native Error cause remains structured in the Gateway result', async () => {
   const r = rig();
   const started = r.operation.play();
-  const cause = { code: 'pack-source-load-failed', detail: { diagnostic: 'AssetGuidParser is not defined', sourcePath: 'assets/scene.pack.ts' } };
+  const cause = {
+    code: 'pack-source-load-failed',
+    detail: { diagnostic: 'AssetGuidParser is not defined', sourcePath: 'assets/scene.pack.ts' },
+  };
   r.assembly.reject(new Error('Assembly failed', { cause }));
   const result = await started.completion;
   expect(result).toMatchObject({ ok: false, error: { cause, message: 'Assembly failed' } });

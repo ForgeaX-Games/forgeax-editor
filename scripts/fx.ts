@@ -14,8 +14,8 @@
 // so the two repos share one muscle-memory command vocabulary.
 //
 // Why this exists: the standalone editor is a SELF-CONTAINED repo — it must
-// behave as if studio does NOT exist next to it. It vendors `engine` and
-// `interface` as git submodules under packages/. Unlike the editor's own 5
+// behave as if studio does NOT exist next to it. Engine, platform-io, and assets
+// are git submodules; Interface is a published package. Unlike the editor's own
 // source-emit packages, the engine packages are dist-based (exports →
 // ./dist/index.mjs) AND need a Rust-built wasm binary
 // (wgpu-wasm/pkg/wgpu_wasm_bg.wasm, gitignored). Without that build step the
@@ -61,6 +61,12 @@ import {
   warn,
 } from './lib/dev-stack.ts';
 import {
+  resolveHostCatalogScope,
+  shellWaitThenExec,
+  waitForHostCatalogReady,
+  waitForHttpReady,
+} from './lib/wait-host-catalog.ts';
+import {
   DEFAULT_PNPM_NETWORK_CONCURRENCY,
   engineInstallEnv,
   isHarnessSyncFailure,
@@ -81,10 +87,7 @@ import {
 } from './regression-manifest.ts';
 import {
   EDITOR_CI_REPORT_SCHEMA_VERSION,
-  validateEditorCiReport,
-} from './ci/editor-ci-report.mjs';
-// @ts-ignore The baseline owner is intentionally source-first JavaScript.
-import { validateBaselineEvidence } from './ci/ci-baseline.mjs';
+  validateEditorCiReport } from './ci/editor-ci-report.mjs';
 import { resolveBunExecutable } from './ci/bun-runtime.mjs';
 import {
   WORKTREE_CONFIG_FILE,
@@ -99,6 +102,7 @@ import {
   hasTrustedEngineDeclarations,
 } from './lib/engine-declarations.ts';
 import { runDdcCli } from './ddc.ts';
+import { addKnownGame } from '../packages/platform-io/src/api/lib/known-games.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..'); // scripts/ -> repo root
@@ -159,7 +163,8 @@ let WORKTREE_PORTS: PortMap;
 try {
   WORKTREE_PORTS = resolveWorktreePorts(ROOT);
 } catch (error) {
-  console.error(`[fx] invalid worktree port configuration: ${error instanceof Error ? error.message : String(error)}`);
+  console.error(`[fx] invalid worktree port configuration: ${error instanceof Error ? error.message : String(error)}`,
+  );
   process.exit(1);
 }
 
@@ -208,7 +213,7 @@ export function projectSetupCommandFailure(
 ): SetupInstallFailure {
   return {
     ...context,
-    observed: {command, args, status},
+    observed: { command, args, status },
   };
 }
 
@@ -228,7 +233,7 @@ function setupFailure(
   observed: unknown,
   hint: string,
 ): SetupExecutionError {
-  return new SetupExecutionError({phase, code, expected, observed, hint});
+  return new SetupExecutionError({ phase, code, expected, observed, hint });
 }
 
 /** Run a command synchronously with inherited stdio; die on non-zero exit. */
@@ -242,17 +247,19 @@ function sh(cmd: string, args: string[], opts: ShOptions = {}): void {
   });
   if (r.status !== 0) {
     if (setupExecutionActive) {
-      throw new SetupExecutionError(projectSetupCommandFailure(
-        cmd,
-        args,
-        r.status ?? 1,
-        opts.failure ?? {
-          phase: 'setup-command',
-          code: 'setup-command-failed',
-          expected: 'setup command exits with status 0',
-          hint: opts.failureMessage ?? `command failed: ${cmd} ${args.join(' ')}`,
-        },
-      ));
+      throw new SetupExecutionError(
+        projectSetupCommandFailure(
+          cmd,
+          args,
+          r.status ?? 1,
+          opts.failure ?? {
+            phase: 'setup-command',
+            code: 'setup-command-failed',
+            expected: 'setup command exits with status 0',
+            hint: opts.failureMessage ?? `command failed: ${cmd} ${args.join(' ')}`,
+          },
+        ),
+      );
     }
     die(opts.failureMessage ?? `command failed: ${cmd} ${args.join(' ')}`);
   }
@@ -270,7 +277,7 @@ function trySh(cmd: string, args: string[], opts: ShOptions = {}): boolean {
   return r.status === 0;
 }
 
-export type CapturedCommandResult = {status: number; output: string};
+export type CapturedCommandResult = { status: number; output: string };
 
 function runCaptured(cmd: string, args: string[], opts: ShOptions = {}): CapturedCommandResult {
   const env = opts.env ?? process.env;
@@ -287,7 +294,10 @@ function runCaptured(cmd: string, args: string[], opts: ShOptions = {}): Capture
   process.stdout.write(stdout);
   process.stderr.write(stderr);
   const spawnError = result.error instanceof Error ? `\n${result.error.message}` : '';
-  return {status: result.status ?? 1, output: `${stdout}\n${stderr}${spawnError}`};
+  return {
+    status: result.status ?? 1,
+    output: `${stdout}\n${stderr}${spawnError}`,
+  };
 }
 
 export type SetupCommandRunner = (
@@ -315,28 +325,31 @@ function dependencyFailure(
     phase,
     code,
     expected: 'setup dependency command exits with status 0',
-    observed: {status: result.status, output: result.output},
+    observed: { status: result.status, output: result.output },
     hint,
   };
 }
 
 /** Run Bun and Engine dependency installs from one immutable setup snapshot. */
-export function runSetupDependencyInstalls(options: {
-  env: NodeJS.ProcessEnv;
-  run: SetupCommandRunner;
-  beforeEngineInstall?: () => void;
-} & ({skipEditorInstall?: false} | {skipEditorInstall: true})): SetupInstallTrace {
+export function runSetupDependencyInstalls(
+  options: {
+    env: NodeJS.ProcessEnv;
+    run: SetupCommandRunner;
+    beforeEngineInstall?: () => void;
+  } & ({ skipEditorInstall?: false } | { skipEditorInstall: true }),
+): SetupInstallTrace {
   const setupEnv = resolveSetupEnvironment(options.env);
   const fallbacks: string[] = [];
   let installEnv = setupEnv.env;
-  const editorInstallSkipped = options.skipEditorInstall === true || options.env.FORGEAX_SKIP_EDITOR_BUN_INSTALL === '1';
+  const editorInstallSkipped =
+    options.skipEditorInstall === true || options.env.FORGEAX_SKIP_EDITOR_BUN_INSTALL === '1';
 
   if (!editorInstallSkipped) {
-    const first = options.run('bun', ['install'], {...installEnv});
+    const first = options.run('bun', ['install'], { ...installEnv });
     if (first.status !== 0) {
       if (isSimpleGitHooksEnoent(first.output)) {
         fallbacks.push('simple-git-hooks-enoent-retry');
-        const retry = options.run('bun', ['install'], {...installEnv});
+        const retry = options.run('bun', ['install'], { ...installEnv });
         if (retry.status !== 0) {
           return {
             setupEnv,
@@ -353,8 +366,8 @@ export function runSetupDependencyInstalls(options: {
         }
       } else if (isHarnessSyncFailure(first.output)) {
         fallbacks.push('harness-divergence');
-        installEnv = {...installEnv, FORGEAX_SKIP_HARNESS_SYNC: '1'};
-        const retry = options.run('bun', ['install'], {...installEnv});
+        installEnv = { ...installEnv, FORGEAX_SKIP_HARNESS_SYNC: '1' };
+        const retry = options.run('bun', ['install'], { ...installEnv });
         if (retry.status !== 0) {
           return {
             setupEnv,
@@ -388,7 +401,7 @@ export function runSetupDependencyInstalls(options: {
 
   options.beforeEngineInstall?.();
   const engineEnv = engineInstallEnv(installEnv);
-  const engine = options.run('pnpm', ['install'], {...engineEnv});
+  const engine = options.run('pnpm', ['install'], { ...engineEnv });
   if (engine.status !== 0) {
     return {
       setupEnv,
@@ -466,10 +479,7 @@ function printSetupEnvelope(envelope: SetupEnvelope): void {
   console.log(formatSetupEnvelope(envelope));
 }
 
-function requestedHarnessMode(
-  env: NodeJS.ProcessEnv,
-  fallback: boolean,
-): SetupHarnessMode {
+function requestedHarnessMode(env: NodeJS.ProcessEnv, fallback: boolean): SetupHarnessMode {
   if (fallback) return 'fallback-skip';
   if (env.FORGEAX_SKIP_HARNESS_SYNC === '1') return 'skip';
   return env.FORGEAX_HARNESS_SPARSE_DOCS === '0' ? 'full' : 'sparse';
@@ -502,7 +512,10 @@ function actualHarnessMode(dir: string): SetupHarnessMode {
     const patterns = execFileSync('git', ['-C', dir, 'sparse-checkout', 'list'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim().split(/\r?\n/).filter(Boolean);
+    })
+      .trim()
+      .split(/\r?\n/)
+      .filter(Boolean);
     return patterns.length === 1 && patterns[0] === 'docs' ? 'sparse' : 'unknown';
   } catch {
     return 'unknown';
@@ -511,7 +524,10 @@ function actualHarnessMode(dir: string): SetupHarnessMode {
 
 function setupEnvelopeFromTrace(
   trace: SetupInstallTrace,
-  input: Pick<SetupEnvelopeInput, 'terminalStatus' | 'phase' | 'code' | 'expected' | 'observed' | 'hint' | 'artifactsVerified'>,
+  input: Pick<
+    SetupEnvelopeInput,
+    'terminalStatus' | 'phase' | 'code' | 'expected' | 'observed' | 'hint' | 'artifactsVerified'
+  >,
 ): SetupEnvelope {
   const editorEnv = trace.setupEnv.env;
   const engineEnv = trace.engineEnv ?? editorEnv;
@@ -611,7 +627,11 @@ function gitOut(args: string[]): string {
   try {
     // stderr → 'ignore' so expected failures (e.g. `rev-parse stash@{0}` with no
     // stash) don't leak a scary `fatal:` line; we signal failure via '' return.
-    return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return execFileSync('git', args, {
+      cwd: ROOT,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
   } catch {
     return '';
   }
@@ -660,7 +680,11 @@ function report(rows: ReportRow[]): string {
   };
   const line = (c: string[], result?: StepResult): string =>
     c
-      .map((cell, i) => (i === 0 && result ? color(cell.padEnd(widths[i] ?? 0), result) : cell.padEnd(widths[i] ?? 0)))
+      .map((cell, i) =>
+        i === 0 && result
+          ? color(cell.padEnd(widths[i] ?? 0), result)
+          : cell.padEnd(widths[i] ?? 0),
+      )
       .join('  ')
       .trimEnd();
   return [
@@ -671,8 +695,8 @@ function report(rows: ReportRow[]): string {
 }
 
 // ── update ───────────────────────────────────────────────────────────────────
-// Pull latest root code, then sync EVERY submodule (engine + interface +
-// platform-io + assets, recursively) to their recorded pins, then fast-forward
+// Pull latest root code, then sync EVERY submodule (engine + platform-io +
+// assets, recursively) to their recorded pins, then fast-forward
 // the .forgeax-harness floating clone. Local edits are auto-stashed and restored
 // (opt out with --no-stash). --dry-run previews without touching anything.
 function update(argv: string[]): void {
@@ -693,7 +717,11 @@ function update(argv: string[]): void {
     gitRun(['stash', 'push', '-u', '-m', msg], dryRun);
     const after = dryRun ? before : gitOut(['rev-parse', '--verify', 'stash@{0}']);
     stashed = dryRun || (after !== '' && after !== before);
-    push('stash', stashed ? 'ok' : 'skipped', stashed ? 'stashed local changes' : 'nothing stashed');
+    push(
+      'stash',
+      stashed ? 'ok' : 'skipped',
+      stashed ? 'stashed local changes' : 'nothing stashed',
+    );
   } else {
     ok('working tree clean');
   }
@@ -708,7 +736,11 @@ function update(argv: string[]): void {
     warn('no upstream — fetching origin/main and rebasing');
     const fetched = gitRun(['fetch', '--no-recurse-submodules', 'origin', 'main'], dryRun) === 0;
     rootOk = fetched && gitRun(['rebase', 'origin/main'], dryRun) === 0;
-    push('root', rootOk ? 'ok' : 'failed', rootOk ? 'rebased onto origin/main' : 'fetch/rebase failed');
+    push(
+      'root',
+      rootOk ? 'ok' : 'failed',
+      rootOk ? 'rebased onto origin/main' : 'fetch/rebase failed',
+    );
   }
 
   // submodules → recorded pins
@@ -717,8 +749,13 @@ function update(argv: string[]): void {
     if (paths.length === 0) push('submodules', 'skipped', 'none configured');
     for (const p of paths) {
       step(`update: submodule ${p} ...`);
-      const okStatus = gitRun(['submodule', 'update', '--init', '--recursive', '--', p], dryRun) === 0;
-      push(`sub:${p}`, okStatus ? 'ok' : 'failed', okStatus ? 'synced to recorded pin' : 'submodule update failed');
+      const okStatus =
+        gitRun(['submodule', 'update', '--init', '--recursive', '--', p], dryRun) === 0;
+      push(
+        `sub:${p}`,
+        okStatus ? 'ok' : 'failed',
+        okStatus ? 'synced to recorded pin' : 'submodule update failed',
+      );
     }
   } else {
     push('submodules', 'skipped', 'root update failed');
@@ -730,20 +767,32 @@ function update(argv: string[]): void {
     console.log('  [dry-run] node scripts/sync-harness.mjs');
     push('harness', 'skipped', 'dry-run');
   } else {
-    const r = spawnSync('node', [join(HERE, 'sync-harness.mjs')], { cwd: ROOT, stdio: 'inherit' });
+    const r = spawnSync('node', [join(HERE, 'sync-harness.mjs')], {
+      cwd: ROOT,
+      stdio: 'inherit',
+    });
     const okStatus = (r.status ?? 1) === 0;
-    push('harness', okStatus ? 'ok' : 'failed', okStatus ? 'fast-forwarded floating clone' : 'sync-harness exited nonzero');
+    push(
+      'harness',
+      okStatus ? 'ok' : 'failed',
+      okStatus ? 'fast-forwarded floating clone' : 'sync-harness exited nonzero',
+    );
   }
 
   // restore stash
   if (stashed && !dryRun) {
     step('update: restoring pre-update stash ...');
     const okStatus = gitRun(['stash', 'pop']) === 0;
-    push('unstash', okStatus ? 'ok' : 'failed', okStatus ? 'restored local changes' : 'stash pop conflicted — resolve manually');
+    push(
+      'unstash',
+      okStatus ? 'ok' : 'failed',
+      okStatus ? 'restored local changes' : 'stash pop conflicted — resolve manually',
+    );
   }
 
   console.log(`\n${report(rows)}`);
-  if (rows.some((r) => r.result === 'failed')) die('update: one or more steps failed — see report above.');
+  if (rows.some((r) => r.result === 'failed'))
+    die('update: one or more steps failed — see report above.');
   ok('update complete');
 }
 
@@ -798,13 +847,25 @@ function clean(argv: string[]): void {
   // 1. discard tracked edits + reset submodule pointers to recorded pins.
   run('reset', ['reset', '--hard'], 'reset tracked changes');
   // 2. sync submodule checkouts to pins (init any missing / nested).
-  run('sub-sync', ['submodule', 'update', '--init', '--recursive', '--force'], 'checkouts synced to pins');
+  run(
+    'sub-sync',
+    ['submodule', 'update', '--init', '--recursive', '--force'],
+    'checkouts synced to pins',
+  );
   // 3. scrub every submodule tree to bare pin state (tracked + untracked + ignored).
   run('sub-scrub', ['submodule', 'foreach', '--recursive', subScrub], 'submodule trees scrubbed');
   // 4. remove root untracked, always preserving the harness floating clone.
   run(
     'root-clean',
-    ['clean', rootFlags, '-e', '.forgeax-harness', '-e', WORKTREE_CONFIG_FILE, ...(dryRun ? ['-n'] : [])],
+    [
+      'clean',
+      rootFlags,
+      '-e',
+      '.forgeax-harness',
+      '-e',
+      WORKTREE_CONFIG_FILE,
+      ...(dryRun ? ['-n'] : []),
+    ],
     'root untracked removed (worktree port assignment preserved)',
   );
 
@@ -817,7 +878,8 @@ function clean(argv: string[]): void {
       console.log(remaining);
     }
   }
-  if (rows.some((r) => r.result === 'failed')) die('clean: one or more steps failed — see report above.');
+  if (rows.some((r) => r.result === 'failed'))
+    die('clean: one or more steps failed — see report above.');
 }
 
 // ── stop ────────────────────────────────────────────────────────────────────
@@ -878,7 +940,9 @@ function ensureWasm(): void {
   if (existsSync(WASM_FILE) && marker) {
     const currentKey = currentWasmContentKey();
     if (marker === currentKey) {
-      ok(`wasm present (skip build): packages/wgpu-wasm/pkg/wgpu_wasm_bg.wasm (${currentKey.slice(0, 12)})`);
+      ok(
+        `wasm present (skip build): packages/wgpu-wasm/pkg/wgpu_wasm_bg.wasm (${currentKey.slice(0, 12)})`,
+      );
       return;
     }
     step(
@@ -892,9 +956,15 @@ function ensureWasm(): void {
 
   // Do not leave a stale marker behind if the build fails. A failed build must
   // make the next setup attempt rebuild instead of trusting an old provenance.
-  rmSync(WASM_CONTENT_KEY_FILE, {force: true});
+  rmSync(WASM_CONTENT_KEY_FILE, { force: true });
   if (!has('rustc')) {
-    throw setupFailure('wgpu-wasm', 'rust-toolchain-missing', 'rustc is available', {}, 'Install Rust from https://rustup.rs.');
+    throw setupFailure(
+      'wgpu-wasm',
+      'rust-toolchain-missing',
+      'rustc is available',
+      {},
+      'Install Rust from https://rustup.rs.',
+    );
   }
   if (!has('wasm-pack')) {
     throw setupFailure(
@@ -921,7 +991,7 @@ function ensureWasm(): void {
       'wgpu-wasm',
       'wgpu-wasm-missing',
       'wgpu wasm output exists after the build',
-      {path: WASM_FILE},
+      { path: WASM_FILE },
       'Rerun bun fx setup and inspect the wgpu-wasm build output.',
     );
   }
@@ -937,7 +1007,9 @@ function ensureFbxWasm(): void {
   }
 
   step('fbx wasm missing — fetching pre-built release bundle ...');
-  const fetched = trySh('pnpm', ['-F', '@forgeax/engine-fbx', 'fetch-wasm'], { cwd: ENGINE_DIR });
+  const fetched = trySh('pnpm', ['-F', '@forgeax/engine-fbx', 'fetch-wasm'], {
+    cwd: ENGINE_DIR,
+  });
   if (fetched && existsSync(FBX_WASM_MJS) && existsSync(FBX_WASM_FILE)) {
     ok('fbx wasm fetched: packages/fbx/pkg/fbx-wasm.{mjs,wasm}');
     return;
@@ -947,10 +1019,14 @@ function ensureFbxWasm(): void {
   // at it instead of asserting a cause: a fetch that downloaded the asset and
   // then died unpacking it is not an auth failure, and claiming otherwise sends
   // people installing an Emscripten toolchain they don't need.
-  warn('pre-built fbx wasm unavailable — the real cause is in the fetch-wasm output above. Common ones:');
+  warn(
+    'pre-built fbx wasm unavailable — the real cause is in the fetch-wasm output above. Common ones:',
+  );
   warn('  · GitHub auth — set GH_TOKEN/GITHUB_TOKEN or run `gh auth login`');
   warn('  · `Cannot connect to <drive>: resolve failed` — GNU tar (Git for Windows) sits ahead of');
-  warn('    bsdtar on PATH and reads the drive letter as an rsh host; put %SystemRoot%\\System32 first');
+  warn(
+    '    bsdtar on PATH and reads the drive letter as an rsh host; put %SystemRoot%\\System32 first',
+  );
   warn('falling back to local Emscripten build.');
   if (!has('emcc')) {
     throw setupFailure(
@@ -977,7 +1053,7 @@ function ensureFbxWasm(): void {
       'fbx-wasm-build',
       'fbx-wasm-missing',
       'FBX wasm outputs exist after the build',
-      {paths: [FBX_WASM_MJS, FBX_WASM_FILE]},
+      { paths: [FBX_WASM_MJS, FBX_WASM_FILE] },
       'Rerun bun fx setup and inspect the FBX wasm build output.',
     );
   }
@@ -985,7 +1061,9 @@ function ensureFbxWasm(): void {
 }
 
 function codecWasmPresent(): boolean {
-  return existsSync(CODEC_WASM_MJS) && existsSync(CODEC_WASM_FILE) && existsSync(CODEC_ENCODER_WASM_FILE);
+  return (
+    existsSync(CODEC_WASM_MJS) && existsSync(CODEC_WASM_FILE) && existsSync(CODEC_ENCODER_WASM_FILE)
+  );
 }
 
 // Mirrors ensureFbxWasm: the codec package's own postinstall (scripts/ensure-wasm.mjs)
@@ -999,16 +1077,22 @@ function ensureCodecWasm(): void {
   }
 
   step('codec wasm missing — fetching pre-built release bundle ...');
-  const fetched = trySh('pnpm', ['-F', '@forgeax/engine-codec', 'fetch-wasm'], { cwd: ENGINE_DIR });
+  const fetched = trySh('pnpm', ['-F', '@forgeax/engine-codec', 'fetch-wasm'], {
+    cwd: ENGINE_DIR,
+  });
   if (fetched && codecWasmPresent()) {
     ok('codec wasm fetched: packages/codec/pkg/basis_transcoder.{mjs,wasm} + encode/');
     return;
   }
 
-  warn('pre-built codec wasm unavailable — the real cause is in the fetch-wasm output above. Common ones:');
+  warn(
+    'pre-built codec wasm unavailable — the real cause is in the fetch-wasm output above. Common ones:',
+  );
   warn('  · GitHub auth — set GH_TOKEN/GITHUB_TOKEN or run `gh auth login`');
   warn('  · `Cannot connect to <drive>: resolve failed` — GNU tar (Git for Windows) sits ahead of');
-  warn('    bsdtar on PATH and reads the drive letter as an rsh host; put %SystemRoot%\\System32 first');
+  warn(
+    '    bsdtar on PATH and reads the drive letter as an rsh host; put %SystemRoot%\\System32 first',
+  );
   warn('falling back to local Emscripten build.');
   if (!has('emcc')) {
     throw setupFailure(
@@ -1036,7 +1120,7 @@ function ensureCodecWasm(): void {
       'codec-wasm-build',
       'codec-wasm-missing',
       'codec wasm outputs exist after the build',
-      {paths: [CODEC_WASM_MJS, CODEC_WASM_FILE, CODEC_ENCODER_WASM_FILE]},
+      { paths: [CODEC_WASM_MJS, CODEC_WASM_FILE, CODEC_ENCODER_WASM_FILE] },
       'Rerun bun fx setup and inspect the codec wasm build output.',
     );
   }
@@ -1120,7 +1204,10 @@ function nodeModulesHasBunOrBrokenLink(nodeModules: string, bunStore: string): b
     const scopedEntries = readDirectory(entryPath);
     if (!scopedEntries) return true;
     for (const scopedEntry of scopedEntries) {
-      if (scopedEntry.isSymbolicLink() && pointsIntoBunStore(join(entryPath, scopedEntry.name), bunStore)) {
+      if (
+        scopedEntry.isSymbolicLink() &&
+        pointsIntoBunStore(join(entryPath, scopedEntry.name), bunStore)
+      ) {
         return true;
       }
     }
@@ -1153,7 +1240,9 @@ export function resetEngineNodeModulesIfBunLinked(
 /** Build the Engine root TypeScript project-reference graph after the library dist pass. */
 function buildEngineDeclarations(): void {
   if (!engineDeclarationsAreTrusted()) {
-    warn('Engine declaration provenance is untrusted; cleaning the root project-reference outputs ...');
+    warn(
+      'Engine declaration provenance is untrusted; cleaning the root project-reference outputs ...',
+    );
     sh('pnpm', ['exec', 'node', engineTypeScriptBin(), '-b', '--clean', '--pretty', 'false'], {
       cwd: ENGINE_DIR,
       failure: {
@@ -1187,11 +1276,32 @@ async function install(): Promise<void> {
   };
   setupExecutionActive = true;
   try {
-    if (!has('git')) throw setupFailure('preflight', 'git-missing', 'git is available', {}, 'Install Git and rerun bun fx setup.');
-    if (!has('bun')) throw setupFailure('preflight', 'bun-missing', 'bun is available', {}, 'Install Bun from https://bun.sh.');
-    if (!has('pnpm')) throw setupFailure('preflight', 'pnpm-missing', 'pnpm is available', {}, 'Install pnpm from https://pnpm.io.');
+    if (!has('git'))
+      throw setupFailure(
+        'preflight',
+        'git-missing',
+        'git is available',
+        {},
+        'Install Git and rerun bun fx setup.',
+      );
+    if (!has('bun'))
+      throw setupFailure(
+        'preflight',
+        'bun-missing',
+        'bun is available',
+        {},
+        'Install Bun from https://bun.sh.',
+      );
+    if (!has('pnpm'))
+      throw setupFailure(
+        'preflight',
+        'pnpm-missing',
+        'pnpm is available',
+        {},
+        'Install pnpm from https://pnpm.io.',
+      );
 
-    step('1/8 fetching submodules (engine + interface + platform-io) ...');
+    step('1/8 fetching submodules (engine + platform-io + assets) ...');
     sh('git', ['submodule', 'update', '--init', '--recursive'], {
       failure: {
         phase: 'submodules',
@@ -1208,7 +1318,7 @@ async function install(): Promise<void> {
         'editor-bun-install',
         'editor-install-missing',
         'the frozen editor install exists when Bun installation is skipped',
-        {path: join(ROOT, 'node_modules', '.bin', 'tsc')},
+        { path: join(ROOT, 'node_modules', '.bin', 'tsc') },
         'Run bun install first, then rerun bun fx setup.',
       );
     }
@@ -1231,7 +1341,9 @@ async function install(): Promise<void> {
       ok('bun deps ready');
     }
     if (trace.fallbacks.includes('harness-divergence')) {
-      warn('[fx] harness divergence detected; dependency setup continued with Harness sync deferred.');
+      warn(
+        '[fx] harness divergence detected; dependency setup continued with Harness sync deferred.',
+      );
     }
     if (trace.fallbacks.includes('simple-git-hooks-enoent-retry')) {
       warn('[fx] simple-git-hooks ENOENT detected; retried Bun installation once.');
@@ -1299,7 +1411,9 @@ async function install(): Promise<void> {
       missing.push(FBX_WASM_MJS, FBX_WASM_FILE);
     }
     if (!codecWasmPresent()) {
-      warn('missing codec wasm: packages/codec/pkg/basis_transcoder.{mjs,wasm} + encode/basis_encoder.wasm');
+      warn(
+        'missing codec wasm: packages/codec/pkg/basis_transcoder.{mjs,wasm} + encode/basis_encoder.wasm',
+      );
       missing.push(CODEC_WASM_MJS, CODEC_WASM_FILE, CODEC_ENCODER_WASM_FILE);
     }
     if (missing.length > 0) {
@@ -1307,8 +1421,8 @@ async function install(): Promise<void> {
         'critical-artifact-verify',
         'critical-artifact-missing',
         'all critical Engine artifacts exist',
-        {missing},
-        "Rerun bun fx setup; do not create a placeholder artifact.",
+        { missing },
+        'Rerun bun fx setup; do not create a placeholder artifact.',
       );
     }
 
@@ -1320,31 +1434,46 @@ async function install(): Promise<void> {
         phase: 'complete',
         code: 'setup-complete',
         expected: 'all setup gates complete',
-        observed: {gates: ['engine-pnpm', 'wgpu-wasm', 'fbx-wasm', 'codec-wasm', 'engine-dist', 'declaration', 'critical-artifact-verify']},
+        observed: {
+          gates: [
+            'engine-pnpm',
+            'wgpu-wasm',
+            'fbx-wasm',
+            'codec-wasm',
+            'engine-dist',
+            'declaration',
+            'critical-artifact-verify',
+          ],
+        },
         hint: 'Setup is ready for bun fx start.',
         artifactsVerified: true,
       }),
     );
     ok('install complete — run: bun fx start');
   } catch (error) {
-    const failure = error instanceof SetupExecutionError
-      ? error.failure
-      : {
-          phase: 'setup',
-          code: 'setup-failed',
-          expected: 'all setup gates complete',
-          observed: {error: error instanceof Error ? error.message : String(error)},
-          hint: 'Resolve the reported setup failure and rerun bun fx setup.',
-        };
-    printSetupEnvelope(setupEnvelopeFromTrace(trace, {
-      terminalStatus: 'failure',
-      phase: failure.phase,
-      code: failure.code,
-      expected: failure.expected,
-      observed: failure.observed,
-      hint: failure.hint,
-      artifactsVerified: false,
-    }));
+    const failure =
+      error instanceof SetupExecutionError
+        ? error.failure
+        : {
+            phase: 'setup',
+            code: 'setup-failed',
+            expected: 'all setup gates complete',
+            observed: {
+              error: error instanceof Error ? error.message : String(error),
+            },
+            hint: 'Resolve the reported setup failure and rerun bun fx setup.',
+          };
+    printSetupEnvelope(
+      setupEnvelopeFromTrace(trace, {
+        terminalStatus: 'failure',
+        phase: failure.phase,
+        code: failure.code,
+        expected: failure.expected,
+        observed: failure.observed,
+        hint: failure.hint,
+        artifactsVerified: false,
+      }),
+    );
     die(error instanceof Error ? error.message : String(error));
   } finally {
     setupExecutionActive = false;
@@ -1375,11 +1504,21 @@ async function run(argv: string[]): Promise<void> {
     if (!existsSync(game)) die(`--game path is not a directory: ${game}`);
     gameDir = resolve(game);
     if (!existsSync(join(gameDir, 'forge.json'))) die(`--game dir has no forge.json: ${gameDir}`);
+    try {
+      addKnownGame(gameDir, basename(gameDir));
+    } catch (error: unknown) {
+      warn(
+        `known-games registry update failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     ok(`reusing platform-io for game '${gameDir.split(/[/\\]/).pop()}' from ${gameDir}`);
   }
   const manualLogDir = resolve(ROOT, '..', '.forgeax-debug', 'manual-runs');
   const manualGameName = basename(gameDir || 'standalone');
-  const manualRunId = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  const manualRunId = new Date()
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, 'Z');
   const manualLogFile = join(manualLogDir, `${manualGameName}-${manualRunId}.log`);
   mkdirSync(manualLogDir, { recursive: true });
   step(`manual run log → ${manualLogFile}`);
@@ -1432,8 +1571,12 @@ async function run(argv: string[]): Promise<void> {
     FORGEAX_ENGINE_PORT: String(PLAY_RUNTIME_PORT),
     ...(rhiDebug ? { FORGEAX_ENGINE_RHI_DEBUG: '1' } : {}),
   };
-  if (rhiDebug) ok(`RHI-debug capture enabled → viewport capture button opens reviewer :${RHI_REVIEWER_PORT}`);
-  if (bridge) ok(`gateway bridge enabled → relay :${bridgePort} (node skills/forgeax-editor-gateway/scripts/gateway.mjs). Opt out: FORGEAX_BRIDGE=0`);
+  if (rhiDebug)
+    ok(`RHI-debug capture enabled → viewport capture button opens reviewer :${RHI_REVIEWER_PORT}`);
+  if (bridge)
+    ok(
+      `gateway bridge enabled → relay :${bridgePort} (node skills/forgeax-editor-gateway/scripts/gateway.mjs). Opt out: FORGEAX_BRIDGE=0`,
+    );
 
   // preflight — point at setup if the engine build is missing.
   if (
@@ -1444,23 +1587,27 @@ async function run(argv: string[]): Promise<void> {
   }
   requireFreshEngineDist();
   const engineRevision = engineHead();
-  const ddcHostRoot = gameDir === ''
-    ? undefined
-    : resolve(gameDir, '.forgeax', 'ddc', 'v2', 'hosts', `engine-${engineRevision}`);
-  const hostDdcRoot = ddcHostRoot === undefined
-    ? undefined
-    : resolve(ddcHostRoot, `standalone-host-${STANDALONE_PORT}`);
-  const editRuntimeDdcRoot = ddcHostRoot === undefined
-    ? undefined
-    : resolve(ddcHostRoot, `edit-runtime-${EDIT_RUNTIME_PORT}`);
-  const playRuntimeDdcRoot = ddcHostRoot === undefined
-    ? undefined
-    : resolve(ddcHostRoot, `play-runtime-${PLAY_RUNTIME_PORT}`);
-  const viteCacheRoot = process.env.FORGEAX_VITE_CACHE_ROOT
-    ?? resolve(gameDir || ROOT, '.forgeax', 'vite-cache', `engine-${engineRevision}`);
-  const baseDdcBuildCacheRoot = hostDdcRoot === undefined
-    ? undefined
-    : resolve(hostDdcRoot, 'build');
+  const ddcHostRoot =
+    gameDir === ''
+      ? undefined
+      : resolve(gameDir, '.forgeax', 'ddc', 'v2', 'hosts', `engine-${engineRevision}`);
+  const hostDdcRoot =
+    ddcHostRoot === undefined
+      ? undefined
+      : resolve(ddcHostRoot, `standalone-host-${STANDALONE_PORT}`);
+  const editRuntimeDdcRoot =
+    ddcHostRoot === undefined
+      ? undefined
+      : resolve(ddcHostRoot, `edit-runtime-${EDIT_RUNTIME_PORT}`);
+  const playRuntimeDdcRoot =
+    ddcHostRoot === undefined
+      ? undefined
+      : resolve(ddcHostRoot, `play-runtime-${PLAY_RUNTIME_PORT}`);
+  const viteCacheRoot =
+    process.env.FORGEAX_VITE_CACHE_ROOT ??
+    resolve(gameDir || ROOT, '.forgeax', 'vite-cache', `engine-${engineRevision}`);
+  const baseDdcBuildCacheRoot =
+    hostDdcRoot === undefined ? undefined : resolve(hostDdcRoot, 'build');
 
   // A stale Vite/DDC graph can still report "ready" while serving material
   // publication output from a different Engine compiler. Namespace both
@@ -1491,14 +1638,23 @@ async function run(argv: string[]): Promise<void> {
           FORGEAX_DDC_BUILD_CACHE_ROOT: resolve(editRuntimeDdcRoot, 'build'),
         }),
   };
-  const playRuntimeEnv: NodeJS.ProcessEnv = playRuntimeDdcRoot === undefined
-    ? env
-    : {
-        ...env,
-        FORGEAX_DDC_PROJECT_ROOT: playRuntimeDdcRoot,
-        FORGEAX_DDC_BUILD_CACHE_ROOT: resolve(playRuntimeDdcRoot, 'build'),
-      };
-  const editRuntimeArgs = ['-F', '@forgeax/editor-edit-runtime', 'dev', '--', '--port', String(EDIT_RUNTIME_PORT), '--strictPort'];
+  const playRuntimeEnv: NodeJS.ProcessEnv =
+    playRuntimeDdcRoot === undefined
+      ? env
+      : {
+          ...env,
+          FORGEAX_DDC_PROJECT_ROOT: playRuntimeDdcRoot,
+          FORGEAX_DDC_BUILD_CACHE_ROOT: resolve(playRuntimeDdcRoot, 'build'),
+        };
+  const editRuntimeArgs = [
+    '-F',
+    '@forgeax/editor-edit-runtime',
+    'dev',
+    '--',
+    '--port',
+    String(EDIT_RUNTIME_PORT),
+    '--strictPort',
+  ];
 
   if (bg) {
     // Background mode: detached + unref'd so children outlive this process on
@@ -1512,20 +1668,57 @@ async function run(argv: string[]): Promise<void> {
         detach: true,
         logFd: log(),
       });
-    spawnService('bun', editRuntimeArgs, {
+    spawnService('bun', ['run', 'dev'], {
       cwd: ROOT,
-      env: editRuntimeEnv,
+      env,
       detach: true,
       logFd: log(),
     });
-    spawnService('bun', ['run', 'dev'], { cwd: ROOT, env, detach: true, logFd: log() });
-    if (rhiDebug)
-      spawnService('pnpm', ['-F', '@forgeax/engine-rhi-debug-viewer', 'exec', 'vite', '--port', String(RHI_REVIEWER_PORT), '--strictPort'], {
-        cwd: ENGINE_DIR,
-        env,
+    if (gameDir) {
+      spawnService(
+        'bash',
+        [
+          '-lc',
+          shellWaitThenExec(`bun ${editRuntimeArgs.join(' ')}`, {
+            hostPort: STANDALONE_PORT,
+            gameDir,
+            scopeId: resolveHostCatalogScope({ gameDir }),
+          }),
+        ],
+        {
+          cwd: ROOT,
+          env: editRuntimeEnv,
+          detach: true,
+          logFd: log(),
+        },
+      );
+    } else {
+      spawnService('bun', editRuntimeArgs, {
+        cwd: ROOT,
+        env: editRuntimeEnv,
         detach: true,
         logFd: log(),
       });
+    }
+    if (rhiDebug)
+      spawnService(
+        'pnpm',
+        [
+          '-F',
+          '@forgeax/engine-rhi-debug-viewer',
+          'exec',
+          'vite',
+          '--port',
+          String(RHI_REVIEWER_PORT),
+          '--strictPort',
+        ],
+        {
+          cwd: ENGINE_DIR,
+          env,
+          detach: true,
+          logFd: log(),
+        },
+      );
     if (bridge)
       // Spawn with `bun`, not `node`: `ws` lives only in bun's isolated store
       // (node_modules/.bun/ws@*), unhoisted, so bare node ERR_MODULE_NOT_FOUNDs.
@@ -1535,7 +1728,7 @@ async function run(argv: string[]): Promise<void> {
         detach: true,
         logFd: log(),
       });
-    if (play || gameDir)
+    if (play || gameDir) {
       spawnService('bun', ['-F', '@forgeax/editor-play-runtime', 'dev'], {
         cwd: ROOT,
         // FORGEAX_ENGINE_PORT (= PLAY_RUNTIME_PORT) rides in the base `env`.
@@ -1543,6 +1736,14 @@ async function run(argv: string[]): Promise<void> {
         detach: true,
         logFd: log(),
       });
+      if (gameDir) {
+        const gameId = basename(gameDir);
+        await waitForHttpReady(
+          `http://127.0.0.1:${PLAY_RUNTIME_PORT}/preview/host-games/${encodeURIComponent(gameId)}/main.ts`,
+          { log: (message) => step(message) },
+        );
+      }
+    }
     ok(`stack starting in background → http://localhost:${STANDALONE_PORT}`);
     ok('stop with: bun fx stop');
     return;
@@ -1554,40 +1755,81 @@ async function run(argv: string[]): Promise<void> {
 
   if (gameDir) {
     step(`starting game-backend :${GAME_API_PORT} (platform-io reuse, R3) ...`);
-    children.push(spawnService('bun', [join(ROOT, 'apps/standalone', 'game-backend.ts')], {
-      cwd: ROOT,
-      env,
-      teeLogPath: manualLogFile,
-    }));
-  }
-
-  step(`starting edit-runtime :${EDIT_RUNTIME_PORT} (HMR→${STANDALONE_PORT}) ...`);
-  children.push(spawnService('bun', editRuntimeArgs, {
-    cwd: ROOT,
-    env: editRuntimeEnv,
-    teeLogPath: manualLogFile,
-  }));
-
-  step(`starting standalone host :${STANDALONE_PORT} ...`);
-  children.push(spawnService('bun', ['run', 'dev'], {
-    cwd: ROOT,
-    env,
-    teeLogPath: manualLogFile,
-  }));
-
-  if (rhiDebug) {
-    step(`starting RHI reviewer :${RHI_REVIEWER_PORT} ...`);
     children.push(
-      spawnService('pnpm', ['-F', '@forgeax/engine-rhi-debug-viewer', 'exec', 'vite', '--port', String(RHI_REVIEWER_PORT), '--strictPort'], {
-        cwd: ENGINE_DIR,
+      spawnService('bun', [join(ROOT, 'apps/standalone', 'game-backend.ts')], {
+        cwd: ROOT,
         env,
         teeLogPath: manualLogFile,
       }),
     );
   }
 
+  step(`starting standalone host :${STANDALONE_PORT} ...`);
+  children.push(
+    spawnService('bun', ['run', 'dev'], {
+      cwd: ROOT,
+      env,
+      teeLogPath: manualLogFile,
+    }),
+  );
+
+  const hostCatalogScopeId = gameDir ? resolveHostCatalogScope({ gameDir }) : undefined;
+  step(
+    `[boot-trace] fx start: game=${gameDir || '(none)'} scope=${hostCatalogScopeId ?? '(http-only)'} catalogRequired=none editWait=none playWait=preview-main.ts`,
+  );
+  try {
+    if (hostCatalogScopeId !== undefined) {
+      await waitForHostCatalogReady({
+        hostPort: STANDALONE_PORT,
+        gameDir,
+        scopeId: hostCatalogScopeId,
+        log: (message) => step(message),
+      });
+    } else {
+      await waitForHttpReady(`http://127.0.0.1:${STANDALONE_PORT}/`, {
+        log: (message) => step(message),
+      });
+    }
+  } catch (error: unknown) {
+    die(error instanceof Error ? error.message : String(error));
+  }
+
+  step(`starting edit-runtime :${EDIT_RUNTIME_PORT} (HMR→${STANDALONE_PORT}) ...`);
+  children.push(
+    spawnService('bun', editRuntimeArgs, {
+      cwd: ROOT,
+      env: editRuntimeEnv,
+      teeLogPath: manualLogFile,
+    }),
+  );
+
+  if (rhiDebug) {
+    step(`starting RHI reviewer :${RHI_REVIEWER_PORT} ...`);
+    children.push(
+      spawnService(
+        'pnpm',
+        [
+          '-F',
+          '@forgeax/engine-rhi-debug-viewer',
+          'exec',
+          'vite',
+          '--port',
+          String(RHI_REVIEWER_PORT),
+          '--strictPort',
+        ],
+        {
+          cwd: ENGINE_DIR,
+          env,
+          teeLogPath: manualLogFile,
+        },
+      ),
+    );
+  }
+
   if (bridge) {
-    step(`starting gateway bridge relay :${bridgePort} (live editing; FORGEAX_BRIDGE=0 to disable) ...`);
+    step(
+      `starting gateway bridge relay :${bridgePort} (live editing; FORGEAX_BRIDGE=0 to disable) ...`,
+    );
     children.push(
       // `bun` not `node`: `ws` is only in bun's isolated store, unhoisted.
       spawnService('bun', [GATEWAY_RELAY_SCRIPT], {
@@ -1608,6 +1850,13 @@ async function run(argv: string[]): Promise<void> {
         teeLogPath: manualLogFile,
       }),
     );
+    if (gameDir) {
+      const gameId = basename(gameDir);
+      await waitForHttpReady(
+        `http://127.0.0.1:${PLAY_RUNTIME_PORT}/preview/host-games/${encodeURIComponent(gameId)}/main.ts`,
+        { log: (message) => step(message) },
+      );
+    }
   }
 
   ok(`open → http://localhost:${STANDALONE_PORT}   (Ctrl-C to stop)`);
@@ -1637,7 +1886,10 @@ function build(argv: string[]): void {
     else if (arg.startsWith('--max-bytes=')) maxBytes = arg.slice('--max-bytes='.length);
     else if (arg === '--max-entities') maxEntities = argv[++i] ?? '';
     else if (arg.startsWith('--max-entities=')) maxEntities = arg.slice('--max-entities='.length);
-    else die(`unknown build flag: ${arg} (supported: --game <dir>, --out <dir>, --max-bytes N, --max-entities N)`);
+    else
+      die(
+        `unknown build flag: ${arg} (supported: --game <dir>, --out <dir>, --max-bytes N, --max-entities N)`,
+      );
   }
   if (!game) die('build needs --game <dir> (the directory containing forge.json)');
   const gameDir = resolve(ROOT, game);
@@ -1645,15 +1897,19 @@ function build(argv: string[]): void {
   const forgePath = join(gameDir, 'forge.json');
   if (!existsSync(forgePath)) die(`build game directory has no forge.json: ${gameDir}`);
   const gameId = gameDir.split(sep).pop() ?? '';
-  if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(gameId)) die(`build game directory name is not a valid game id: ${gameId}`);
+  if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(gameId))
+    die(`build game directory name is not a valid game id: ${gameId}`);
 
   let manifest: { entry?: unknown };
   try {
-    manifest = JSON.parse(readFileSync(forgePath, 'utf8')) as { entry?: unknown };
+    manifest = JSON.parse(readFileSync(forgePath, 'utf8')) as {
+      entry?: unknown;
+    };
   } catch {
     die(`build cannot parse ${forgePath}`);
   }
-  const entry = typeof manifest.entry === 'string' && manifest.entry.length > 0 ? manifest.entry : 'main.ts';
+  const entry =
+    typeof manifest.entry === 'string' && manifest.entry.length > 0 ? manifest.entry : 'main.ts';
   const entryPath = resolve(gameDir, entry);
   if (!entryPath.startsWith(`${gameDir}${sep}`) || !existsSync(entryPath)) {
     die(`build game entry does not exist inside the game directory: ${entry}`);
@@ -1663,7 +1919,7 @@ function build(argv: string[]): void {
   if (maxBytes) validationArgs.push(`--max-bytes=${maxBytes}`);
   if (maxEntities) validationArgs.push(`--max-entities=${maxEntities}`);
   step(`validating game content before build (${gameId}) ...`);
-  sh('bun', validationArgs, {
+  sh('bun', [...validationArgs, '--defer-produced-references'], {
     failureMessage: `build blocked by game validation for '${gameId}'`,
   });
   requireFreshEngineDist('build');
@@ -1681,6 +1937,10 @@ function build(argv: string[]): void {
     },
     failureMessage: `build failed for game '${gameId}'`,
   });
+  step(`validating produced game references (${gameId}) ...`);
+  sh('bun', [...validationArgs, `--produced-catalog=${join(outDir, 'pack-index.json')}`], {
+    failureMessage: `build blocked by produced game validation for '${gameId}'`,
+  });
   ok(`static artifact ready: ${outDir}`);
 }
 
@@ -1690,7 +1950,11 @@ function build(argv: string[]): void {
 // owns runner provisioning and artifact caching. A local checkout must have
 // completed `bun fx setup` before these checks execute.
 type CiProfile = RegressionProfile;
-type CiOptions = { readonly profile: CiProfile; readonly fixtureLayer?: FixtureLayer; readonly reportPath?: string };
+type CiOptions = {
+  readonly profile: CiProfile;
+  readonly fixtureLayer?: FixtureLayer;
+  readonly reportPath?: string;
+};
 type CiFailureClass = 'admission' | 'environment' | 'source' | 'external-transport';
 type CiCheckResult = {
   readonly id: string;
@@ -1711,14 +1975,22 @@ type CiReport = {
   readonly owner: string;
   readonly profile: CiProfile;
   readonly executionHome: 'local-fast' | 'local-full';
-  readonly provenance: { readonly kind: 'local'; readonly timingDomain: 'local-execution'; readonly editorCommit: string };
+  readonly provenance: {
+    readonly kind: 'local';
+    readonly timingDomain: 'local-execution';
+    readonly editorCommit: string;
+  };
   readonly terminalStatus: 'pass' | 'failure';
   readonly failureClass: CiFailureClass | null;
   readonly code: string | null;
   readonly expected: string | null;
   readonly observed: string | null;
   readonly hint: string;
-  readonly attempts: readonly { readonly attempt: number; readonly attemptId: string; readonly status: 'pass' | 'failure' }[];
+  readonly attempts: readonly {
+    readonly attempt: number;
+    readonly attemptId: string;
+    readonly status: 'pass' | 'failure';
+  }[];
   readonly sloClaim: null;
   readonly prerequisiteRelease: CiPrerequisiteRelease | null;
   readonly fixtureLayer: FixtureLayer | 'all';
@@ -1747,9 +2019,16 @@ type CiPrerequisiteRelease = {
   readonly producerRunId: string;
   readonly producerAttempt: number;
   readonly sourceSha: string;
-  readonly recursivePins: readonly { readonly path: string; readonly pin: string }[];
+  readonly recursivePins: readonly {
+    readonly path: string;
+    readonly pin: string;
+  }[];
   readonly producerSuccess: boolean;
-  readonly compatibility: { readonly status: string; readonly expected?: unknown; readonly observed?: unknown };
+  readonly compatibility: {
+    readonly status: string;
+    readonly expected?: unknown;
+    readonly observed?: unknown;
+  };
   readonly validation: {
     readonly status: 'pass' | 'failure';
     readonly consumer: string;
@@ -1766,8 +2045,16 @@ type CiPrerequisiteRelease = {
 
 const CI_CONTEXT = 'epic=R3-07 work package=R3-07E gates=C1,C2,C3,C4,C5,C6,C7';
 
-function ciRoute(profile: CiProfile, check?: Pick<RegressionCheck, 'roadmapId' | 'fixtureLayer' | 'journey' | 'gate'>): string {
-  const route = check ?? { roadmapId: 'R3-07E', fixtureLayer: 'R0' as const, journey: 'J0/J1/J2/J3/J4/J5', gate: 'C1-C7' };
+function ciRoute(
+  profile: CiProfile,
+  check?: Pick<RegressionCheck, 'roadmapId' | 'fixtureLayer' | 'journey' | 'gate'>,
+): string {
+  const route = check ?? {
+    roadmapId: 'R3-07E',
+    fixtureLayer: 'R0' as const,
+    journey: 'J0/J1/J2/J3/J4/J5',
+    gate: 'C1-C7',
+  };
   return `profile=${profile} ${CI_CONTEXT} roadmap=${route.roadmapId} fixtureLayer=${route.fixtureLayer} journey=${route.journey} gate=${route.gate}`;
 }
 
@@ -1791,21 +2078,30 @@ function parseCiOptions(argv: string[]): CiOptions {
       reportPath = argv[++index];
       if (!reportPath) die('--report needs a file path');
     } else {
-      die(`unknown ci flag '${arg}'; expected --fast, --full, --layer R0|R1|R2, or --report <path>`);
+      die(
+        `unknown ci flag '${arg}'; expected --fast, --full, --layer R0|R1|R2, or --report <path>`,
+      );
     }
   }
   return { profile, fixtureLayer, reportPath };
 }
 
 function defaultCiReportPath(profile: CiProfile, editorCommit: string): string {
-  return join(ROOT, '.forgeax-harness', 'ci-reports', `r3-07-${profile}-${editorCommit.slice(0, 12)}.json`);
+  return join(
+    ROOT,
+    '.forgeax-harness',
+    'ci-reports',
+    `r3-07-${profile}-${editorCommit.slice(0, 12)}.json`,
+  );
 }
 
 function writeCiReport(path: string, report: CiReport): void {
   const validation = validateEditorCiReport(report);
   if (!validation.ok) {
     const { code, expected, observed, hint } = validation.error;
-    die(`CI report contract failure: code=${code} expected=${expected} observed=${observed} hint=${hint}`);
+    die(
+      `CI report contract failure: code=${code} expected=${expected} observed=${observed} hint=${hint}`,
+    );
   }
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`);
@@ -1831,21 +2127,36 @@ function displayValue(value: unknown): string {
 
 function prerequisiteFailureClass(code: string): CiFailureClass {
   if (code === 'compatibility-mismatch') return 'environment';
-  if (code === 'source-mismatch' || code === 'pin-mismatch' || code === 'attempt-mismatch') return 'source';
+  if (code === 'source-mismatch' || code === 'pin-mismatch' || code === 'attempt-mismatch')
+    return 'source';
   return 'admission';
 }
 
 function projectLocalPrerequisiteRelease(
   manifest: Record<string, unknown> | null,
-  validation: { readonly ok: boolean; readonly error?: Record<string, unknown>; readonly consumer?: string; readonly payloadClasses?: readonly string[] },
+  validation: {
+    readonly ok: boolean;
+    readonly error?: Record<string, unknown>;
+    readonly consumer?: string;
+    readonly payloadClasses?: readonly string[];
+  },
   profile: CiProfile,
   payloadClasses: readonly string[],
 ): CiPrerequisiteRelease | null {
-  if (!manifest || typeof manifest.artifactId !== 'string' || typeof manifest.releaseDigest !== 'string' ||
-      typeof manifest.schemaVersion !== 'string' || typeof manifest.producerRunId !== 'string' ||
-      !Number.isInteger(manifest.producerAttempt) || typeof manifest.sourceSha !== 'string' ||
-      !Array.isArray(manifest.recursivePins) || typeof manifest.producerSuccess !== 'boolean' ||
-      !manifest.compatibility || typeof manifest.compatibility !== 'object') return null;
+  if (
+    !manifest ||
+    typeof manifest.artifactId !== 'string' ||
+    typeof manifest.releaseDigest !== 'string' ||
+    typeof manifest.schemaVersion !== 'string' ||
+    typeof manifest.producerRunId !== 'string' ||
+    !Number.isInteger(manifest.producerAttempt) ||
+    typeof manifest.sourceSha !== 'string' ||
+    !Array.isArray(manifest.recursivePins) ||
+    typeof manifest.producerSuccess !== 'boolean' ||
+    !manifest.compatibility ||
+    typeof manifest.compatibility !== 'object'
+  )
+    return null;
   const error = validation.ok ? {} : (validation.error ?? {});
   return {
     artifactId: manifest.artifactId,
@@ -1854,7 +2165,10 @@ function projectLocalPrerequisiteRelease(
     producerRunId: manifest.producerRunId,
     producerAttempt: manifest.producerAttempt as number,
     sourceSha: manifest.sourceSha,
-    recursivePins: manifest.recursivePins as { readonly path: string; readonly pin: string }[],
+    recursivePins: manifest.recursivePins as {
+      readonly path: string;
+      readonly pin: string;
+    }[],
     producerSuccess: manifest.producerSuccess,
     compatibility: {
       status: validation.ok ? 'compatible' : 'rejected',
@@ -1862,7 +2176,11 @@ function projectLocalPrerequisiteRelease(
       observed: error.observed ?? null,
     },
     validation: validation.ok
-      ? { status: 'pass', consumer: profile, payloadClasses: validation.payloadClasses ?? payloadClasses }
+      ? {
+          status: 'pass',
+          consumer: profile,
+          payloadClasses: validation.payloadClasses ?? payloadClasses,
+        }
       : {
           status: 'failure',
           consumer: profile,
@@ -1878,33 +2196,44 @@ function projectLocalPrerequisiteRelease(
   };
 }
 
-function runLocalPrerequisiteRelease(profile: CiProfile, editorCommit: string): {
-  readonly ok: true;
-  readonly report: CiPrerequisiteRelease;
-} | {
-  readonly ok: false;
-  readonly failure: CiFailure;
-  readonly report: CiPrerequisiteRelease | null;
-} {
+function runLocalPrerequisiteRelease(
+  profile: CiProfile,
+  editorCommit: string,
+):
+  | {
+      readonly ok: true;
+      readonly report: CiPrerequisiteRelease;
+    }
+  | {
+      readonly ok: false;
+      readonly failure: CiFailure;
+      readonly report: CiPrerequisiteRelease | null;
+    } {
   const consumers = selectPrerequisiteConsumers(profile);
   const payloadClasses = selectPrerequisitePayloadClasses(profile);
   const outputDir = mkdtempSync(join(tmpdir(), 'forgeax-local-prerequisite-'));
   const producerRunId = `local-${editorCommit.slice(0, 12)}`;
   const bun = resolveBunExecutable('bun');
-  const command = (args: readonly string[]) => spawnSync(bun, [...args], {
-    cwd: ROOT,
-    encoding: 'utf8',
-    env: process.env,
-  });
+  const command = (args: readonly string[]) =>
+    spawnSync(bun, [...args], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: process.env,
+    });
   try {
     const producer = command([
       'scripts/ci/prerequisite-release.mjs',
       'produce',
-      '--output', outputDir,
-      '--profile', 'complete',
-      '--source-sha', editorCommit,
-      '--run-id', producerRunId,
-      '--attempt', '1',
+      '--output',
+      outputDir,
+      '--profile',
+      'complete',
+      '--source-sha',
+      editorCommit,
+      '--run-id',
+      producerRunId,
+      '--attempt',
+      '1',
     ]);
     let producerSummary: Record<string, unknown>;
     try {
@@ -1932,23 +2261,35 @@ function runLocalPrerequisiteRelease(profile: CiProfile, editorCommit: string): 
           failureClass: prerequisiteFailureClass(String(error.code ?? 'producer-failure')),
           code: String(error.code ?? 'producer-failure'),
           expected: displayValue(error.expected ?? 'complete local prerequisite release'),
-          observed: displayValue(error.observed ?? (producer.stderr.trim() || 'producer exited unsuccessfully')),
-          hint: String(error.hint ?? 'Fix local prerequisite materialization and rerun the selected profile.'),
+          observed: displayValue(
+            error.observed ?? (producer.stderr.trim() || 'producer exited unsuccessfully'),
+          ),
+          hint: String(
+            error.hint ?? 'Fix local prerequisite materialization and rerun the selected profile.',
+          ),
           exitCode: producer.status ?? 1,
         },
       };
     }
-    const manifest = JSON.parse(readFileSync(join(outputDir, 'manifest.json'), 'utf8')) as Record<string, unknown>;
+    const manifest = JSON.parse(readFileSync(join(outputDir, 'manifest.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >;
     let lastValidation: Record<string, unknown> | null = null;
     for (const consumer of consumers) {
       const validation = command([
         'scripts/ci/prerequisite-release.mjs',
         'validate',
-        '--manifest', join(outputDir, 'manifest.json'),
-        '--consumer', consumer,
-        '--source-sha', editorCommit,
-        '--run-id', producerRunId,
-        '--attempt', '1',
+        '--manifest',
+        join(outputDir, 'manifest.json'),
+        '--consumer',
+        consumer,
+        '--source-sha',
+        editorCommit,
+        '--run-id',
+        producerRunId,
+        '--attempt',
+        '1',
       ]);
       let result: Record<string, unknown>;
       try {
@@ -1956,7 +2297,19 @@ function runLocalPrerequisiteRelease(profile: CiProfile, editorCommit: string): 
       } catch (error) {
         return {
           ok: false,
-          report: projectLocalPrerequisiteRelease(manifest, {ok: false, error: {code: 'prerequisite-validator-output-invalid', observed: error instanceof Error ? error.message : String(error), hint: 'Inspect the local validator output.'}}, profile, payloadClasses),
+          report: projectLocalPrerequisiteRelease(
+            manifest,
+            {
+              ok: false,
+              error: {
+                code: 'prerequisite-validator-output-invalid',
+                observed: error instanceof Error ? error.message : String(error),
+                hint: 'Inspect the local validator output.',
+              },
+            },
+            profile,
+            payloadClasses,
+          ),
           failure: {
             failureClass: 'environment',
             code: 'prerequisite-validator-output-invalid',
@@ -1969,27 +2322,41 @@ function runLocalPrerequisiteRelease(profile: CiProfile, editorCommit: string): 
       }
       if (validation.status !== 0 || result.ok !== true) {
         const error = (result.error ?? {}) as Record<string, unknown>;
-        const report = projectLocalPrerequisiteRelease(manifest, {ok: false, error}, profile, payloadClasses);
+        const report = projectLocalPrerequisiteRelease(
+          manifest,
+          { ok: false, error },
+          profile,
+          payloadClasses,
+        );
         return {
           ok: false,
           report,
           failure: {
-            failureClass: prerequisiteFailureClass(String(error.code ?? 'prerequisite-validation-failed')),
+            failureClass: prerequisiteFailureClass(
+              String(error.code ?? 'prerequisite-validation-failed'),
+            ),
             code: String(error.code ?? 'prerequisite-validation-failed'),
             expected: displayValue(error.expected ?? 'validated local prerequisite payloads'),
             observed: displayValue(error.observed ?? 'validation failed'),
-            hint: String(error.hint ?? 'Fix the local prerequisite release before running the consumer.'),
+            hint: String(
+              error.hint ?? 'Fix the local prerequisite release before running the consumer.',
+            ),
             exitCode: validation.status ?? 1,
           },
         };
       }
       lastValidation = result;
     }
-    const report = projectLocalPrerequisiteRelease(manifest, {
-      ok: true,
-      consumer: profile,
-      payloadClasses: payloadClasses,
-    }, profile, payloadClasses);
+    const report = projectLocalPrerequisiteRelease(
+      manifest,
+      {
+        ok: true,
+        consumer: profile,
+        payloadClasses: payloadClasses,
+      },
+      profile,
+      payloadClasses,
+    );
     if (!report || !lastValidation) {
       return {
         ok: false,
@@ -2003,9 +2370,9 @@ function runLocalPrerequisiteRelease(profile: CiProfile, editorCommit: string): 
         },
       };
     }
-    return {ok: true, report};
+    return { ok: true, report };
   } finally {
-    rmSync(outputDir, {recursive: true, force: true});
+    rmSync(outputDir, { recursive: true, force: true });
   }
 }
 
@@ -2040,7 +2407,11 @@ function makeCiReport(
     owner: failure?.check?.owner ?? 'editor-ci',
     profile,
     executionHome: ciExecutionHome(profile),
-    provenance: { kind: 'local', timingDomain: 'local-execution', editorCommit },
+    provenance: {
+      kind: 'local',
+      timingDomain: 'local-execution',
+      editorCommit,
+    },
     terminalStatus: failure ? 'failure' : 'pass',
     failureClass: failure?.failureClass ?? null,
     code: failure?.code ?? null,
@@ -2082,7 +2453,9 @@ function discoverContract(): void {
   if (validation.status !== 0) {
     die(`contract discovery admission failed: ${validation.stderr || validation.stdout}`);
   }
-  const contract = JSON.parse(readFileSync(join(ROOT, 'scripts', 'ci', 'editor-ci-contract.json'), 'utf8')) as {
+  const contract = JSON.parse(
+    readFileSync(join(ROOT, 'scripts', 'ci', 'editor-ci-contract.json'), 'utf8'),
+  ) as {
     readonly version: string;
     readonly checks: readonly {
       readonly checkId: string;
@@ -2091,23 +2464,32 @@ function discoverContract(): void {
       readonly executionHome: Readonly<Record<string, boolean>>;
     }[];
     readonly profiles: Readonly<Record<string, readonly string[]>>;
-    readonly requiredContexts: readonly { readonly context: string; readonly checkId: string }[];
+    readonly requiredContexts: readonly {
+      readonly context: string;
+      readonly checkId: string;
+    }[];
     readonly baselineEvidence: unknown;
     readonly prerequisiteRelease: unknown;
   };
-  console.log(JSON.stringify({
-    schemaVersion: contract.version,
-    checks: contract.checks,
-    profiles: contract.profiles,
-    requiredContexts: contract.requiredContexts,
-    baselineEvidence: contract.baselineEvidence,
-    prerequisiteRelease: contract.prerequisiteRelease,
-    recovery: {
-      dirtyWorktree: 'commit or stash changes before executing a local CI profile',
-      missingSetup: 'run bun fx setup before executing engine-backed checks',
-      unsafeBoundary: 'stop when trusted workflow admission cannot be proven',
-    },
-  }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        schemaVersion: contract.version,
+        checks: contract.checks,
+        profiles: contract.profiles,
+        requiredContexts: contract.requiredContexts,
+        baselineEvidence: contract.baselineEvidence,
+        prerequisiteRelease: contract.prerequisiteRelease,
+        recovery: {
+          dirtyWorktree: 'commit or stash changes before executing a local CI profile',
+          missingSetup: 'run bun fx setup before executing engine-backed checks',
+          unsafeBoundary: 'stop when trusted workflow admission cannot be proven',
+        },
+      },
+      null,
+      2,
+    ),
+  );
 }
 
 type BaselineEvidenceInput = {
@@ -2129,13 +2511,19 @@ function baselineCliError(
   hint: string,
   affectedProvenance: unknown = null,
 ): Record<string, unknown> {
-  return {ok: false, status: 'no-claim', error: {code, expected, observed, hint, affectedProvenance}};
+  return {
+    ok: false,
+    status: 'no-claim',
+    error: { code, expected, observed, hint, affectedProvenance },
+  };
 }
 
-function readBaselineEvidence(inputPath: string): Record<string, unknown> {
-  let input: BaselineEvidenceInput & {baselineInput?: BaselineEvidenceInput};
+async function readBaselineEvidence(inputPath: string): Promise<Record<string, unknown>> {
+  let input: BaselineEvidenceInput & { baselineInput?: BaselineEvidenceInput };
   try {
-    input = JSON.parse(readFileSync(resolve(ROOT, inputPath), 'utf8')) as BaselineEvidenceInput & {baselineInput?: BaselineEvidenceInput};
+    input = JSON.parse(readFileSync(resolve(ROOT, inputPath), 'utf8')) as BaselineEvidenceInput & {
+      baselineInput?: BaselineEvidenceInput;
+    };
   } catch (error) {
     return baselineCliError(
       'baseline-input-unreadable',
@@ -2146,17 +2534,37 @@ function readBaselineEvidence(inputPath: string): Record<string, unknown> {
   }
   const evidence = input.baselineInput ?? input;
   try {
+    // @ts-expect-error The baseline owner is intentionally source-first JavaScript.
+    const { validateBaselineEvidence } = await import('./ci/ci-baseline.mjs');
     validateBaselineEvidence(evidence);
   } catch (error) {
     return baselineCliError(
       error instanceof Error && 'code' in error ? String(error.code) : 'baseline-evidence-invalid',
-      error instanceof Error && 'expected' in error ? error.expected : {schemaVersion: BASELINE_EVIDENCE_SCHEMA_VERSION, attemptProvenance: 'complete'},
-      error instanceof Error && 'observed' in error ? error.observed : {schemaVersion: evidence.schemaVersion ?? null, attemptProvenance: evidence.attemptProvenance ?? null},
-      error instanceof Error && 'hint' in error ? String(error.hint) : 'Read a collector-produced attempt evidence packet with source, run, attempt, topology, roster, and workflow provenance.',
-      error instanceof Error && 'affectedProvenance' in error ? error.affectedProvenance : evidence.attemptProvenance ?? null,
+      error instanceof Error && 'expected' in error
+        ? error.expected
+        : {
+            schemaVersion: BASELINE_EVIDENCE_SCHEMA_VERSION,
+            attemptProvenance: 'complete',
+          },
+      error instanceof Error && 'observed' in error
+        ? error.observed
+        : {
+            schemaVersion: evidence.schemaVersion ?? null,
+            attemptProvenance: evidence.attemptProvenance ?? null,
+          },
+      error instanceof Error && 'hint' in error
+        ? String(error.hint)
+        : 'Read a collector-produced attempt evidence packet with source, run, attempt, topology, roster, and workflow provenance.',
+      error instanceof Error && 'affectedProvenance' in error
+        ? error.affectedProvenance
+        : (evidence.attemptProvenance ?? null),
     );
   }
-  const noClaims = Array.isArray(evidence.noClaim) ? evidence.noClaim : evidence.noClaim ? [evidence.noClaim] : [];
+  const noClaims = Array.isArray(evidence.noClaim)
+    ? evidence.noClaim
+    : evidence.noClaim
+      ? [evidence.noClaim]
+      : [];
   const facts = {
     criticalPath: evidence.criticalPath ?? null,
     requiredContexts: evidence.requiredContexts ?? null,
@@ -2170,19 +2578,20 @@ function readBaselineEvidence(inputPath: string): Record<string, unknown> {
     provenance: evidence.attemptProvenance,
     claim: budgetClaim ? 'budgetClaim' : 'no-claim',
   };
-  const packetlessError = evidence.attemptProvenance == null
-    ? noClaims[0] ?? {
-      code: 'attempt-packet-missing',
-      expected: 'a complete current attempt packet or an explicit rejection envelope',
-      observed: 'no attempt provenance and no no-claim envelope',
-      hint: 'Collect the exact current attempt packet before using this baseline projection.',
-      affectedProvenance: null,
-    }
-    : null;
+  const packetlessError =
+    evidence.attemptProvenance == null
+      ? (noClaims[0] ?? {
+          code: 'attempt-packet-missing',
+          expected: 'a complete current attempt packet or an explicit rejection envelope',
+          observed: 'no attempt provenance and no no-claim envelope',
+          hint: 'Collect the exact current attempt packet before using this baseline projection.',
+          affectedProvenance: null,
+        })
+      : null;
   return {
     ok: packetlessError === null,
     status: summary.status,
-    ...(packetlessError ? {error: packetlessError} : {}),
+    ...(packetlessError ? { error: packetlessError } : {}),
     summary,
     schema: {
       version: evidence.schemaVersion,
@@ -2190,11 +2599,13 @@ function readBaselineEvidence(inputPath: string): Record<string, unknown> {
       layers: [...BASELINE_TOP_INDEX_LAYERS],
       errorFields: ['code', 'expected', 'observed', 'hint', 'affectedProvenance'],
     },
-    provenance: {attemptProvenance: structuredClone(evidence.attemptProvenance)},
+    provenance: {
+      attemptProvenance: structuredClone(evidence.attemptProvenance),
+    },
     facts,
-    claims: {budgetClaim},
+    claims: { budgetClaim },
     noClaims,
-    rawPacket: evidence.rawPacket ?? {available: false, path: null},
+    rawPacket: evidence.rawPacket ?? { available: false, path: null },
     attemptProvenance: structuredClone(evidence.attemptProvenance),
     criticalPath: facts.criticalPath,
     requiredContexts: facts.requiredContexts,
@@ -2205,23 +2616,46 @@ function readBaselineEvidence(inputPath: string): Record<string, unknown> {
   };
 }
 
-function discoverBaseline(args: readonly string[]): void {
+async function discoverBaseline(args: readonly string[]): Promise<void> {
   const inputIndex = args.indexOf('--input');
   const inputPath = inputIndex >= 0 ? args[inputIndex + 1] : undefined;
-  const invalidFlags = args.filter((arg, index) => (
-    arg !== '--json' && arg !== '--input' && !(inputIndex >= 0 && index === inputIndex + 1)
-  ));
+  const invalidFlags = args.filter(
+    (arg, index) =>
+      arg !== '--json' && arg !== '--input' && !(inputIndex >= 0 && index === inputIndex + 1),
+  );
   if (!args.includes('--json')) {
-    console.log(JSON.stringify(baselineCliError('baseline-json-required', '--json', 'missing', 'Request JSON output so facts, claims, no-claims, provenance, and recovery fields remain machine-readable.'), null, 2));
+    console.log(
+      JSON.stringify(
+        baselineCliError(
+          'baseline-json-required',
+          '--json',
+          'missing',
+          'Request JSON output so facts, claims, no-claims, provenance, and recovery fields remain machine-readable.',
+        ),
+        null,
+        2,
+      ),
+    );
     process.exitCode = 1;
     return;
   }
   if (invalidFlags.length > 0 || !inputPath) {
-    console.log(JSON.stringify(baselineCliError('baseline-input-missing', '--input PATH', inputPath ?? 'missing', 'Pass the exact collector baseline evidence JSON; this front door does not invent cloud facts locally.'), null, 2));
+    console.log(
+      JSON.stringify(
+        baselineCliError(
+          'baseline-input-missing',
+          '--input PATH',
+          inputPath ?? 'missing',
+          'Pass the exact collector baseline evidence JSON; this front door does not invent cloud facts locally.',
+        ),
+        null,
+        2,
+      ),
+    );
     process.exitCode = 1;
     return;
   }
-  const result = readBaselineEvidence(inputPath);
+  const result = await readBaselineEvidence(inputPath);
   console.log(JSON.stringify(result, null, 2));
   if (result.ok !== true) process.exitCode = 1;
 }
@@ -2274,9 +2708,8 @@ function runCiCheck(check: RegressionCheck): CiCheckResult {
   // retaining one cross-platform execution boundary for every local profile.
   const commandLine = [check.command, ...check.args].join(' ');
   const shell = process.platform === 'win32' ? (process.env.ComSpec ?? 'cmd.exe') : '/bin/sh';
-  const shellArgs = process.platform === 'win32'
-    ? ['/d', '/s', '/c', commandLine]
-    : ['-c', commandLine];
+  const shellArgs =
+    process.platform === 'win32' ? ['/d', '/s', '/c', commandLine] : ['-c', commandLine];
   const result = spawnSync(shell, shellArgs, {
     stdio: 'inherit',
     cwd: ROOT,
@@ -2291,7 +2724,11 @@ function runCiCheck(check: RegressionCheck): CiCheckResult {
     gate: check.gate,
     fixtureLayer: check.fixtureLayer,
     status: failed ? 'failure' : 'pass',
-    failureClass: failed ? (result.error || result.status === null ? 'environment' : 'source') : null,
+    failureClass: failed
+      ? result.error || result.status === null
+        ? 'environment'
+        : 'source'
+      : null,
     durationMs: Date.now() - started,
     exitCode: result.status ?? 1,
   };
@@ -2312,9 +2749,10 @@ function runFreshCloneStep(
     env: process.env,
   });
   if (result.status === 0) return undefined;
-  const observed = result.status === null
-    ? result.error?.message ?? 'process did not exit normally'
-    : `process exited with code ${result.status}`;
+  const observed =
+    result.status === null
+      ? (result.error?.message ?? 'process did not exit normally')
+      : `process exited with code ${result.status}`;
   return {
     failureClass: 'environment',
     code: `fresh-${stage}`,
@@ -2393,10 +2831,10 @@ function verifyFreshFrozenInstall(profile: CiProfile): CiFailure | undefined {
     return runFreshCloneStep(
       profile,
       'frozen-install',
-      'npx',
-      ['--yes', 'bun@1.3.14', 'install', '--cwd', cloneDir, '--frozen-lockfile', '--ignore-scripts'],
-      tempRoot,
-      'Bun 1.3.14 frozen install succeeds in a fresh clone',
+      resolveBunExecutable('bun'),
+      ['x', 'bun@1.4.0', 'install', '--frozen-lockfile', '--ignore-scripts'],
+      cloneDir,
+      'Bun 1.4.0 frozen install succeeds in a fresh clone',
     );
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
@@ -2415,7 +2853,10 @@ function runCiProfile(
   step(`CI: ${route} stage=fresh-clone ...`);
   const freshFailure = verifyFreshFrozenInstall(profile);
   if (freshFailure) {
-    writeCiReport(reportPath, makeCiReport(profile, editorCommit, [], freshFailure, prerequisiteRelease));
+    writeCiReport(
+      reportPath,
+      makeCiReport(profile, editorCommit, [], freshFailure, prerequisiteRelease),
+    );
     die(`CI failure: ${route} stage=${freshFailure.code} report=${reportPath}`);
   }
   for (const check of checks) {
@@ -2424,29 +2865,37 @@ function runCiProfile(
     const result = runCiCheck(check);
     results.push(result);
     if (result.status === 'failure') {
-      const report = makeCiReport(profile, editorCommit, results, {
-        failureClass: result.failureClass ?? 'source',
-        code: 'check-failed',
-        expected: 'selected check exits with code 0',
-        observed: `${check.id} exited with code ${result.exitCode}`,
-        hint: 'Inspect the first failed check and follow its structured recovery boundary.',
-        check,
-      }, prerequisiteRelease);
+      const report = makeCiReport(
+        profile,
+        editorCommit,
+        results,
+        {
+          failureClass: result.failureClass ?? 'source',
+          code: 'check-failed',
+          expected: 'selected check exits with code 0',
+          observed: `${check.id} exited with code ${result.exitCode}`,
+          hint: 'Inspect the first failed check and follow its structured recovery boundary.',
+          check,
+        },
+        prerequisiteRelease,
+      );
       writeCiReport(reportPath, report);
-      die(`CI failure: ${stepRoute} stage=${check.name} command=${check.command} ${check.args.join(' ')} report=${reportPath}`);
+      die(
+        `CI failure: ${stepRoute} stage=${check.name} command=${check.command} ${check.args.join(' ')} report=${reportPath}`,
+      );
     }
   }
   return results;
 }
 
-function ci(argv: string[]): void {
+async function ci(argv: string[]): Promise<void> {
   if (argv[0] === 'baseline') {
-    discoverBaseline(argv.slice(1));
+    await discoverBaseline(argv.slice(1));
     return;
   }
   if (argv[0] === 'contract') {
     if (argv.slice(1).some((arg) => arg !== '--json')) {
-      die("unknown contract flag; expected --json");
+      die('unknown contract flag; expected --json');
     }
     discoverContract();
     return;
@@ -2463,7 +2912,10 @@ function ci(argv: string[]): void {
   ensureCiAdmission(profile, reportPath, editorCommit);
   const prerequisite = runLocalPrerequisiteRelease(profile, editorCommit);
   if (!prerequisite.ok) {
-    writeCiReport(reportPath, makeCiReport(profile, editorCommit, [], prerequisite.failure, prerequisite.report));
+    writeCiReport(
+      reportPath,
+      makeCiReport(profile, editorCommit, [], prerequisite.failure, prerequisite.report),
+    );
     die(`CI prerequisite failure: code=${prerequisite.failure.code} report=${reportPath}`);
   }
   const results = runCiProfile(profile, checks, editorCommit, reportPath, prerequisite.report);
@@ -2573,7 +3025,7 @@ async function main(): Promise<void> {
       clean(rest);
       break;
     case 'ci':
-      ci(rest);
+      await ci(rest);
       break;
     case 'ddc':
       process.exitCode = await runDdcCli(rest);

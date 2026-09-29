@@ -3,7 +3,8 @@ import * as React from 'react';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { createAppHost, HostProvider } from '@forgeax/interface/core/app-shell';
+import { HostProvider } from '@forgeax/app-shell/application';
+import { createTestApplicationHost } from '../../../../scripts/test-support/application-host';
 import { CBSourceTree } from '../CBSourceTree';
 import type { SourceTreeNode } from '../content-browser-format';
 
@@ -49,7 +50,7 @@ const navigated: string[] = [];
 function Harness({ children }: { children?: ReactNode }) {
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({});
   const [favoritesOnly, setFavoritesOnly] = React.useState(false);
-  const [host] = React.useState(() => createAppHost().host);
+  const [host] = React.useState(() => createTestApplicationHost().host);
   return (
     <HostProvider value={host}>
       <CBSourceTree
@@ -66,7 +67,7 @@ function Harness({ children }: { children?: ReactNode }) {
         nav={{ currentPath: '', navigate: (path) => { navigated.push(path); } }}
         openFolderContextMenu={() => {}}
         renamingKey={null}
-        renameValidate={() => null}
+        renameValidate={(_value, _item) => null}
         onRenameCommit={() => {}}
         onRenameCancel={() => {}}
       />
@@ -97,6 +98,10 @@ describe('Content Browser source tree interaction', () => {
   });
 
   it('lists directories only (files never appear), expands by default, collapses on double-click, and keeps leaf folders non-expandable', () => {
+    const allRow = container.querySelector<HTMLButtonElement>('.cb-source-virtual-root');
+    expect(allRow).not.toBeNull();
+    expect(allRow?.textContent).toContain('All');
+
     const assets = container.querySelector<HTMLButtonElement>('.cb-source-row[title="assets"]');
     expect(assets).not.toBeNull();
     // Sub-folders are visible without any interaction (default-expanded).
@@ -120,6 +125,13 @@ describe('Content Browser source tree interaction', () => {
 
     act(() => favRow!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(navigated).toContain('empty');
+  });
+
+  it('navigates to the virtual All root when its row is clicked', () => {
+    const allRow = container.querySelector<HTMLButtonElement>('.cb-source-virtual-root');
+    expect(allRow).not.toBeNull();
+    act(() => allRow!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(navigated).toContain('');
   });
 
   it('collapses a group body when its head is clicked', () => {

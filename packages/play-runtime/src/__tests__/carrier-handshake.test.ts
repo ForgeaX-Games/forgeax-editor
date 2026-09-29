@@ -3,8 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   VagCarrierFailureSchema,
-  VagCarrierHeartbeatSchema,
-} from '@forgeax/editor-core/protocol';
+  VagCarrierHeartbeatSchema } from '@forgeax/editor-core/protocol';
 
 const source = readFileSync(resolve(import.meta.dir, '../main.ts'), 'utf8');
 
@@ -37,18 +36,22 @@ const payload = {
 
 describe('Play carrier handshake', () => {
   test('keeps runtime and carrier generations in the producer envelope', () => {
-    expect(source).toContain('runtimeGeneration: expectedGeneration');
+    expect(source).toMatch(/runtimeGeneration:\s*expectedGeneration/);
     expect(source).toContain("carrierId: qp.get('carrierId')?.trim() || undefined");
     expect(source).toContain("carrierKind: qp.get('carrierKind') === 'iframe'");
-    expect(source).toContain('execution: toVagExecutionEnvelope(carrierExecutionReport)');
-    expect(source).toContain("sendVagMessage(window.parent, VagCarrierHeartbeatSchema, carrierPayload(");
+    expect(source).toContain('execution: toVagExecutionEnvelope(readCarrierExecutionReport?.())');
+    expect(source).toContain(
+      'sendVagMessage(window.parent, VagCarrierHeartbeatSchema, carrierPayload(',
+    );
     expect(VagCarrierHeartbeatSchema.safeParse({ type: 'VAG_CARRIER_HEARTBEAT', payload: {
       ...payload,
       failure: null,
       renderReadiness: 'ready',
       rendererIdentity: 'renderer-a',
       rendererGeneration: 1,
-    } }).success).toBe(true);
+    },
+      }).success,
+    ).toBe(true);
   });
 
   test('publishes the exact boot failure before the binding check can throw', () => {
@@ -58,12 +61,14 @@ describe('Play carrier handshake', () => {
     expect(bindingCheck).toBeGreaterThan(publisher);
     expect(source).toContain('hint: message');
     expect(source).toContain('message,');
-    expect(source).toContain('sendVagMessage(window.parent, VagCarrierFailureSchema, { ...payload, failure: carrierFailure })');
-    expect(VagCarrierFailureSchema.safeParse({ type: 'VAG_CARRIER_FAILURE', payload }).success).toBe(true);
+    expect(source).toMatch(/sendVagMessage\(window\.parent, VagCarrierFailureSchema, \{\s*\.\.\.payload,\s*failure: carrierFailure,?\s*\}\)/);
+    expect(VagCarrierFailureSchema.safeParse({ type: 'VAG_CARRIER_FAILURE', payload,
+      }).success,
+    ).toBe(true);
   });
 
   test('reads managed carrier scope through the Projects API', () => {
-    expect(source).toContain('resolveCarrierScope(carrierRuntimeId, requestedGameIdValidated, fetch)');
+    expect(source).toMatch(/resolveCarrierScope\(\s*carrierRuntimeId,\s*requestedGameIdValidated,\s*fetch,?\s*\)/);
     expect(source.indexOf('await carrierScopeReady;')).toBeLessThan(source.indexOf('let runtimeBinding:'));
     expect(source).not.toContain('/api/workbench/active-game');
   });

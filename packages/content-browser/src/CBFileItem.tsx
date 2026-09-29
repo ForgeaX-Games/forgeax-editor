@@ -3,7 +3,7 @@ import { useTranslation } from '@forgeax/editor-core/i18n';
 import { colorForFileFamily, ContentBrowserIcon, FileFamilyIcon } from './content-browser-icons';
 import { CBInlineRename } from './CBInlineRename';
 import { beginActiveDrag, endActiveDrag, writeDragPayload, type CBDragPayload } from './dnd';
-import type { CBFile } from './types';
+import type { CBFile, CBViewItem } from './types';
 
 interface Props {
   file: CBFile;
@@ -36,7 +36,7 @@ interface Props {
    *  payload reflects the live multi-selection. */
   getDragPayload?: (item: CBFile) => CBDragPayload | null;
   renaming?: boolean;
-  renameValidate?: (value: string) => string | null;
+  renameValidate?: (value: string, item: CBViewItem) => string | null;
   onRenameCommit?: (item: CBFile, value: string) => void;
   onRenameCancel?: () => void;
 }
@@ -164,7 +164,7 @@ function CBFileItemImpl({
       {renaming ? (
         <CBInlineRename
           initial={file.name}
-          validate={renameValidate}
+          validate={renameValidate ? (value) => renameValidate(value, file) : undefined}
           onCommit={(value) => onRenameCommit?.(file, value)}
           onCancel={() => onRenameCancel?.()}
           ariaLabel={t('editor.contentBrowser.contextMenu.rename')}

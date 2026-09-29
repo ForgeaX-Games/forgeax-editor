@@ -16,11 +16,11 @@ import { createPlayOperation, type PlayDispatchResult } from './play-operation';
 // drag-spawn resolver → mesh-stats → preview-skin → disk-watch + beacon
 // listeners.
 
-import { toShared } from '@forgeax/engine-types';
+import { toShared, type RuntimeAssetBinding } from '@forgeax/engine-types';
 import type { World } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY, type InputBackend } from '@forgeax/engine-input';
 import { loadGameProject, FORGE_JSON } from '@forgeax/engine-project';
-import { parseScenePayload } from '@forgeax/engine-assets-runtime';
+import { parseScenePayload, type AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { VfxRuntimeHost } from '@forgeax/engine-vfx-render';
 import type { SceneAsset } from '@forgeax/engine-types';
 import {
@@ -47,14 +47,18 @@ import { assemblePlayWorld, type PlayAssembly } from './play-assemble';
 import { installDragSpawnMeshResolver } from './drag-spawn-resolve';
 import {
   ensureGamePluginsLoaded,
+  resolvePhysicsBackendFromForgePlugins,
   addGamePluginSystems,
   describeGamePluginSystems,
   getPlayPluginFailure,
   installGamePluginProducers,
+  normalizePlayGameEntry,
   type GamePluginInstallation,
   type GamePluginLoad,
+  type PlayGameEntry,
 } from '@forgeax/editor-game-plugins';
 import { createDisposablePlayCarrier } from './disposable-play-carrier';
+import { studioBootTrace } from './studio-boot-trace';
 import { publishPlayCarrierEvent, forwardFeedbackHealth, normalizeCarrierFailureCode } from '../feedback-health';
 
 // ── loose engine handles (the original bootEditor uses `as never` casts because
@@ -102,6 +106,28 @@ export function candidateGameRoots(instanceRootAbs: string, gameRoot: string): s
 }
 
 /**
+ * Convert the authoritative Catalog root into the browser module base served
+ * by the Play runtime. Studio must transform game modules in that Vite realm:
+ * it owns `virtual:forgeax/assets`; the outer IDE intentionally does not.
+ */
+export function runtimeGameModuleBase(binding: RuntimeAssetBinding | undefined): string | null {
+  if (binding === undefined) return null;
+  const catalogRoot = binding.catalogRoots?.find((root) =>
+    root.root.replace(/\\/g, '/').replace(/^\.?\//, '') === 'assets');
+  const catalogPrefix = catalogRoot?.catalogPrefix.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!catalogPrefix?.endsWith('/assets')) return null;
+  // packMarker === 0 means the catalog is served from the host origin's own
+  // /__pack namespace (standalone --game host). That host has no pluginPack, so
+  // game modules must keep loading from its /@fs base. Only a non-empty prefix
+  // (e.g. /preview on the Play runtime owner) identifies the Studio carrier
+  // whose Vite realm owns virtual:forgeax/assets.
+  const packMarker = binding.catalogUrl.indexOf('/__pack/');
+  if (packMarker <= 0) return null;
+  const runtimeBase = binding.catalogUrl.slice(0, packMarker).replace(/\/$/, '');
+  return `${runtimeBase}/${catalogPrefix.slice(0, -'/assets'.length)}`;
+}
+
+/**
  * Everything host-session needs from the booted viewport, declared explicitly
  * (Pipeline Isolation — no implicit context). ViewportComponent assembles this
  * after createApp + createViewport succeed.
@@ -113,6 +139,8 @@ export interface HostSessionContext {
   readonly world: WorldLike;
   /** The renderer (assets + store). */
   readonly renderer: RendererLike;
+  /** App-owned AssetRegistry from createApp; play assembly instantiates scenes through this spine. */
+  readonly assetRegistry?: AssetRegistry;
   /** The editor orbit camera entity id (viewport-owned). */
   readonly cameraEntity: number;
   /** The live viewport (for preview-skin resetCamera). */
@@ -166,6 +194,8 @@ export interface HostSessionContext {
   readonly onVfxDiagnosticsChanged?: () => void;
   /** Host-selected initial SceneAsset GUID. Omitted = forge.json defaultScene. */
   readonly selectedSceneGuid?: string;
+  /** Host-selected asset scope; its Catalog roots own Studio game modules. */
+  readonly runtimeBinding?: RuntimeAssetBinding;
   /** Disposable Play runtime URL. Omitted keeps the legacy in-realm test path. */
   readonly playChildUrl?: (generation: number) => string;
   /**
@@ -183,14 +213,14 @@ export interface HostSessionContext {
   readonly onPlayFailed: (error?: unknown) => void;
 }
 
-type GameBootstrap = (world: unknown, ctx?: unknown) => void | Promise<void>;
+type GameBootstrap = PlayGameEntry;
 
 /** Dependencies for the per-host-session game bootstrap module cache. */
 export interface BootstrapResolverDeps {
   readonly readForgeForPlay: () => Promise<{ entry?: string }>;
   readonly resolveGameFsBase: () => Promise<string>;
   readonly getSceneId: () => string;
-  readonly importModule: (url: string) => Promise<{ bootstrap?: unknown }>;
+  readonly importModule: (url: string) => Promise<unknown>;
 }
 
 /**
@@ -209,6 +239,8 @@ export function createBootstrapResolver(deps: BootstrapResolverDeps): () => Prom
     resolved = true;
     try {
       const forge = await deps.readForgeForPlay();
+      // Plugin-only projects have no bootstrap module to probe.
+      if (!forge.entry) return null;
       const gameFsBase = await deps.resolveGameFsBase();
       const candidates: string[] = [];
       if (forge.entry) candidates.push(forge.entry);
@@ -219,8 +251,9 @@ export function createBootstrapResolver(deps: BootstrapResolverDeps): () => Prom
       for (const rel of candidates) {
         try {
           const mod = await deps.importModule(`${gameFsBase}/${rel}`);
-          if (typeof mod.bootstrap === 'function') {
-            cached = mod.bootstrap as GameBootstrap;
+          const resolved = normalizePlayGameEntry(mod);
+          if (resolved !== null) {
+            cached = resolved;
             return cached;
           }
         } catch (err) {
@@ -371,6 +404,9 @@ export function createHostSession(deps: HostSessionDeps): {
   resolveEditPhysics: () => Promise<PhysicsBackend | undefined>;
   initHostSession: (ctx: HostSessionContext) => Promise<HostSession>;
 } {
+  // Set from initHostSession(ctx) so resolveGameFsBase can prefer the Play
+  // runtime Catalog owner over the IDE `/@fs` base for game module loading.
+  let activeRuntimeBinding: RuntimeAssetBinding | undefined;
   const {
     gateway,
     getSceneId,
@@ -409,12 +445,7 @@ export function createHostSession(deps: HostSessionDeps): {
         return j.content;
       });
       if (gp.ok) {
-        const p = gp.value.physics;
-        let backend: PhysicsBackend | undefined;
-        if (p === '3d' || p === true || p === 'rapier-3d') backend = 'rapier-3d';
-        else if (p === '2d' || p === 'rapier-2d') backend = 'rapier-2d';
-        console.log(`[editor] physics gate: forge.physics=${JSON.stringify(p)} -> ${backend ?? 'none'}`);
-        return backend;
+        return resolvePhysicsBackendFromForgePlugins(gp.value.plugins);
       }
       console.warn('[editor] physics gate: loadGameProject not ok:', (gp.error as { code?: string })?.code ?? gp.error);
     } catch (e) {
@@ -431,17 +462,38 @@ export function createHostSession(deps: HostSessionDeps): {
    * Returns the ▶/■ pair so the Runtime operation transport can serve PanelShell.
    */
   async function initHostSession(ctx: HostSessionContext): Promise<HostSession> {
+    studioBootTrace('host-session.init.begin', {
+      slug: getSceneId(),
+      hasRuntimeBinding: ctx.runtimeBinding !== undefined,
+      hasPlayChildUrl: ctx.playChildUrl !== undefined,
+    });
     const {
       app,
       world,
       renderer,
+      assetRegistry: providedAssetRegistry,
       viewport,
       emitBoot,
       setBootStage,
       discoverGameCameraFromWorld,
       applyActiveCamera,
       selectedSceneGuid,
+      runtimeBinding,
     } = ctx;
+    activeRuntimeBinding = runtimeBinding;
+
+    // Engine's public Renderer intentionally has no asset, readiness, or device
+    // fields. The App owns the one AssetRegistry for this renderer lease; keep a
+    // narrow adapter only for the older host-session helper seams and tests.
+    const assetRegistry = providedAssetRegistry
+      ?? (renderer as unknown as { assets?: AssetRegistry }).assets;
+    if (assetRegistry === undefined) {
+      throw new Error('host session requires the App-owned AssetRegistry');
+    }
+    const assetRenderer: RendererLike = {
+      assets: assetRegistry as unknown as RendererLike['assets'],
+      store: (renderer as unknown as { store?: unknown }).store ?? {},
+    };
 
     // M3 t16 (plan-strategy §2 D-2 / D-11, research F-3): obtain the single
     // core-minted EngineFacade AFTER ViewportComponent injected the world
@@ -498,6 +550,15 @@ export function createHostSession(deps: HostSessionDeps): {
         gameRoots = candidateGameRoots(rootAbs, gameRoot);
       }
       if (cachedGameFsBase !== undefined) return cachedGameFsBase;
+      // Studio multi-game: load game modules from the Play runtime Catalog
+      // owner so `virtual:forgeax/assets` (provided by pluginPack) resolves.
+      // The outer IDE intentionally has no pluginPack, so its `/@fs` base
+      // would fail on guid.ts. Standalone keeps the `/@fs` path (no binding).
+      const runtimeModuleBase = runtimeGameModuleBase(activeRuntimeBinding);
+      if (runtimeModuleBase !== null) {
+        cachedGameFsBase = runtimeModuleBase;
+        return cachedGameFsBase;
+      }
       for (const gameAbs of gameRoots) {
         for (const base of FS_BASE_CANDIDATES) {
           try {
@@ -581,7 +642,19 @@ export function createHostSession(deps: HostSessionDeps): {
     }
 
     setBootStage('loadDoc');
-    await loadDocFromDisk().then((ok) => { if (!ok) loadDocFromStorage(); }).catch(() => { loadDocFromStorage(); });
+    studioBootTrace('host-session.scene-load.begin', { slug: getSceneId() });
+    await loadDocFromDisk()
+      .then((ok) => {
+        studioBootTrace('host-session.scene-load.disk', { ok });
+        if (!ok) loadDocFromStorage();
+      })
+      .catch((err) => {
+        studioBootTrace('host-session.scene-load.disk-error', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+        loadDocFromStorage();
+      });
+    studioBootTrace('host-session.scene-load.done', {});
     emitBoot(`scene ▸ loaded entities=${worldEntityHandles(gateway.activeWorld).length} roots=${getLoadedSceneEntities().length}`);
 
     // single-realm (feat-20260703): the engine AssetRegistry catalog is populated
@@ -628,8 +701,8 @@ export function createHostSession(deps: HostSessionDeps): {
           : undefined;
         const parsed = parseScenePayload(entry.payload as Record<string, unknown>, refs);
         if (!parsed || typeof parsed !== 'object' || !('kind' in parsed) || parsed.kind !== 'scene') return null;
-        if (renderer.assets.catalog === undefined) return null;
-        const cataloged = renderer.assets.catalog(guid, parsed, refs);
+        if (assetRenderer.assets.catalog === undefined) return null;
+        const cataloged = assetRenderer.assets.catalog(guid, parsed, refs);
         return cataloged.ok ? (cataloged.value ?? parsed) : null;
       } catch { return null; }
     };
@@ -708,12 +781,12 @@ export function createHostSession(deps: HostSessionDeps): {
       // invalidate the authored SceneAsset first, or Play would silently replay
       // stale bytes despite the canonical save having succeeded.
       if (invalidateNextPlaySceneAsset) {
-        renderer.assets.invalidate?.(forge.defaultSceneGuid);
+        assetRenderer.assets.invalidate?.(forge.defaultSceneGuid);
         invalidateNextPlaySceneAsset = false;
         const saved = await loadSavedSceneAsset(forge.defaultSceneGuid);
         if (saved !== null) return saved;
       }
-      const assetRes = await renderer.assets.loadByGuid(parsed.value);
+      const assetRes = await assetRenderer.assets.loadByGuid(parsed.value);
       if (!assetRes.ok) {
         const error = assetRes.error as {
           code?: string;
@@ -759,9 +832,18 @@ export function createHostSession(deps: HostSessionDeps): {
     );
     liveWorldPublisher.bind(ctx.world);
 
-    const remoteCarrier = ctx.playChildUrl !== undefined
+    const remotePlayEnabled = ctx.playChildUrl !== undefined
       && app.releaseSurfacePreserveWorld !== undefined
-      && app.restoreSurface !== undefined
+      && app.restoreSurface !== undefined;
+    studioBootTrace('host-session.play-transport', {
+      remotePlayEnabled,
+      hasPlayChildUrl: ctx.playChildUrl !== undefined,
+      hasReleaseSurface: app.releaseSurfacePreserveWorld !== undefined,
+      hasRestoreSurface: app.restoreSurface !== undefined,
+      slug: getSceneId(),
+      hasRuntimeBinding: ctx.runtimeBinding !== undefined,
+    });
+    const remoteCarrier = remotePlayEnabled
       ? createDisposablePlayCarrier({
         container: ctx.viewportContainer,
         url: ctx.playChildUrl,
@@ -780,9 +862,8 @@ export function createHostSession(deps: HostSessionDeps): {
           } };
         },
         onCarrierEvent: publishPlayCarrierEvent,
-        onReady: (payload) => {
-          const execution = (payload as { execution?: { requestedTier?: unknown; actualTier?: unknown; engine?: { realm?: unknown } } } | null)?.execution;
-          emitBoot(`play ▸ child ready; execution requested=${String(execution?.requestedTier ?? 'unreported')} actual=${String(execution?.actualTier ?? 'unreported')} realm=${String(execution?.engine?.realm ?? 'unreported')}`);
+        onReady: () => {
+          emitBoot('play ▸ child ready; first frame submitted');
         },
         onFailure: (failure) => {
           forwardFeedbackHealth({
@@ -857,6 +938,7 @@ export function createHostSession(deps: HostSessionDeps): {
         let installedGamePlugins: GamePluginInstallation | undefined;
         const res = await assemblePlayWorld({
           renderer: renderer as never,
+          ...(ctx.assetRegistry === undefined ? {} : { assetRegistry: ctx.assetRegistry }),
           loadDefaultScene,
           resolveBootstrap,
           attachInput: attachPlayInput,
@@ -980,29 +1062,29 @@ export function createHostSession(deps: HostSessionDeps): {
     // (AC-10/AC-11). The former post-collapse preload seams (the mesh/material
     // pre-resolve loops + their sync resolvers) are deleted (AC-13) — this is
     // their live successor.
-    installDragSpawnMeshResolver(gateway as never, engine, renderer as never);
+    installDragSpawnMeshResolver(gateway as never, engine, assetRenderer as never);
 
     // ── Mesh-stats publish (was bootEditor :1105) ───────────────────────────────
-    installMeshStatsPublisher(renderer);
+    installMeshStatsPublisher(assetRenderer);
 
     // ── Selected-material catalog hook ──────────────────────────────────────────
     // Ensure a Content-Browser-selected material is present in the registry catalog
     // so it stays editable after a reload (fix: standalone-pack material color edit
     // silently no-ops after refresh — see installSelectedMaterialCatalogHook).
-    installSelectedMaterialCatalogHook(renderer);
+    installSelectedMaterialCatalogHook(assetRenderer);
 
     // ── Visible-card material prefetch hook ─────────────────────────────────────
     // Companion to the selected-material hook: warm a standalone-pack material's
     // catalogue entry as soon as its Content Browser card scrolls into view
     // (panelBridge 'requestAssetPrefetch' from CBAssetItem's IntersectionObserver),
     // so the thumbnail shows the real colour and an edit resolves WITHOUT a click.
-    const stopAssetPrefetch = installAssetPrefetchHook(renderer);
+    const stopAssetPrefetch = installAssetPrefetchHook(assetRenderer);
 
     // M3: single-realm — no cross-window sync needed, engine is in-process.
     // initSync() is deleted (plan-strategy S7 M3, requirements AC-06).
 
     // ── Preview-skin + animation hook (was bootEditor :1217) ────────────────────
-    void installPreviewSkinHook({ world, engine, renderer, viewport });
+    void installPreviewSkinHook({ world, engine, renderer: assetRenderer, viewport });
 
     // ── Disk-watch + flush beacons (was bootEditor :1368) ───────────────────────
     // Capture each teardown handle so the active-game host can dispose this
@@ -1031,6 +1113,10 @@ export function createHostSession(deps: HostSessionDeps): {
       stopAssetPrefetch();
     };
 
+    studioBootTrace('host-session.init.done', {
+      slug: getSceneId(),
+      remotePlayEnabled: ctx.playChildUrl !== undefined,
+    });
     return {
       playSimulation,
       stopSimulation,

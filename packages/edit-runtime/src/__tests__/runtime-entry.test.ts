@@ -28,24 +28,30 @@ describe('public Editor runtime entry', () => {
     // ViewportComponent is the sole publisher, so an unmounted entry must fail
     // closed instead of allowing a host-supplied fake to report success.
     expect('registerGameplayBridge' in entry).toBe(false);
-    await expect(entry.executeGameplay({ version: 1, operation: 'describe' })).resolves.toMatchObject({
+    await expect(entry.executeGameplay({ version: 1, operation: 'describe' }),
+    ).resolves.toMatchObject({
       ok: false,
       error: { code: 'surface-unavailable' },
     });
   });
 
   test('publishes the existing viewport transport client through the host bridge', async () => {
-    expect(getViewportRuntimeClientSnapshot()).toMatchObject({ status: 'disconnected', runtime: null });
+    expect(getViewportRuntimeClientSnapshot()).toMatchObject({
+      status: 'disconnected',
+      runtime: null,
+    });
     expect(typeof subscribeViewportRuntimeClient).toBe('function');
-    await expect(forwardViewportRuntimeTransportRequest({
-      jsonrpc: '2.0',
-      version: 'editor-transport/v1',
-      id: 'host-bridge-disconnected',
-      correlationId: 'host-bridge-disconnected',
-      scope: 'viewport:disconnected:0',
-      method: 'discover',
-      params: {},
-    })).resolves.toMatchObject({
+    await expect(
+      forwardViewportRuntimeTransportRequest({
+        jsonrpc: '2.0',
+        version: 'editor-transport/v1',
+        id: 'host-bridge-disconnected',
+        correlationId: 'host-bridge-disconnected',
+        scope: 'viewport:disconnected:0',
+        method: 'discover',
+        params: {},
+      }),
+    ).resolves.toMatchObject({
       error: { code: 'viewport-runtime-disconnected' },
     });
   });

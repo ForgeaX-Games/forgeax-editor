@@ -80,7 +80,15 @@ export {
 // ── cluster 9: doc-version ──
 // M3 (D-6): the origin-less `dispatch` wrapper was deleted (no compat layer,
 // AC-08) — consumers call gateway.dispatch(op) directly through the gateway.
-export { notifyDocChanged, useDocVersion, subscribeDocVersion } from './doc-version';
+export {
+  notifyDocChanged,
+  useDocVersion,
+  subscribeDocVersion,
+  subscribeVisibilityRevision,
+  getVisibilityRevision,
+  getLastVisibilityCommandEntityIds,
+  getLastVisibilityCommandState,
+} from './doc-version';
 
 // ── cluster 10: scene-persistence ──
 // M3 (AC-08): setSceneId + saveDocToDisk are SEALED (session ops now dispatched
@@ -105,6 +113,7 @@ export {
   readPlayConfig,
   writePlayConfig,
   createSceneFile,
+  materializeGeneratedDefaultScene,
   loadDocFromStorage,
   stripDisabledMarker,
   loadDocFromDisk,

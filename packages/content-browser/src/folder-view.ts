@@ -10,6 +10,16 @@ export function isMetaSidecarFile(name: string): boolean {
   return name.toLowerCase().endsWith('.meta.json');
 }
 
+/** A catalog rel may address the sidecar itself (`hud.ui.html.meta.json`) rather
+ *  than its author-facing source file (`hud.ui.html`). Sidecars are excluded
+ *  from the disk tree, so a "is this asset backed by a disk file" check must
+ *  fall through to the owning source file — that file's card is what surfaces
+ *  the asset via the `<rel>.meta.json` fallback in useCBDerivedView. Returns
+ *  the source path when `rel` is a sidecar, else null. */
+export function metaSidecarSourcePath(rel: string): string | null {
+  return rel.toLowerCase().endsWith('.meta.json') ? rel.slice(0, -'.meta.json'.length) : null;
+}
+
 /** What a double-click (activate) on a FILE item should do. Pure so the
  *  routing rule is unit-testable without rendering the panel. */
 export type FileActivateAction =

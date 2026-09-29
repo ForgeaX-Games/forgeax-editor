@@ -1,4 +1,25 @@
 {
+  "editorMenu.build.reload": "重新加载预览",
+  "editorMenu.select.invert": "反选",
+  "editorMenu.select.byType": "按类型选择",
+  "editorMenu.select.byType.mesh": "网格",
+  "editorMenu.select.byType.light": "灯光",
+  "editorMenu.select.byType.camera": "相机",
+  "editorMenu.select.byType.collider": "碰撞体",
+  "editorMenu.select.marquee": "框选模式",
+  "editorMenu.file.save": "保存",
+  "editorMenu.edit.undo": "撤销",
+  "editorMenu.edit.redo": "重做",
+  "editorMenu.edit.delete": "删除",
+  "editorMenu.window.outline": "大纲",
+  "editorMenu.window.inspector": "检查器",
+  "editorMenu.window.files": "文件",
+  "editorMenu.build.play": "▶ Play",
+  "editorMenu.build.stop": "■ Stop",
+  "editorMenu.build.editScene": "✎ Edit 场景",
+  "editorMenu.select.all": "全选",
+  "editorMenu.select.none": "取消选择",
+  "editorMenu.select.frame": "聚焦选中（Frame）",
   "editorKeyboard": {
     "duplicateSelection": "复制选中项",
     "hideSelected": "隐藏选中实体(UE 对标 · 编辑器临时隐藏,不影响游戏)",
@@ -11,6 +32,16 @@
     "viewportNavigation": "视口导航与 Gizmo 模式",
     "shieldGameInput": "编辑器接管时屏蔽游戏输入",
     "closeOverlay": "关闭当前浮层 · 浏览器全屏 → 游戏全屏 → Settings → Dashboard 依次撤回"
+  },
+  "standaloneRecovery": {
+    "shutdownTitle": "上一个会话尚未完成关闭",
+    "shutdownHint": "清理完成后才能启动新会话。请先处理待完成的关闭操作再重试，或重新加载应用。",
+    "retryShutdown": "重试关闭会话",
+    "title": "界面渲染崩溃",
+    "hint": "React 界面渲染时抛错。先试「重试」；不行再「重载此区域」；仍异常则「重新加载 Studio」。桌面 app 无地址栏，必须用下面的按钮恢复。",
+    "retry": "重试",
+    "remount": "重载此区域",
+    "reloadApplication": "重新加载 Studio"
   },
   "editor": {
     "sceneBadge": {
@@ -232,12 +263,21 @@
       "hierarchy": "层级",
       "parent": "父级",
       "focus": "在视口中聚焦此对象（F）",
-      "lockDisabled": "锁定（暂未接入）",
       "displaySettings": "显示设置",
       "showModifiedOnly": "只看已修改",
       "expandAll": "全部展开",
       "collapseAll": "全部折叠",
       "resetAll": "重置全部属性",
+      "sceneInstance": {
+        "title": "场景实例",
+        "localMember": "成员 {{id}}",
+        "source": "源资产",
+        "overrideCount": "{{count}} 处覆盖",
+        "overrideCount_plural": "{{count}} 处覆盖",
+        "modifiedProperties": "已修改属性",
+        "revert": "还原",
+        "revertTitle": "还原为源资产中的值"
+      },
       "animPlay": "播放预览",
       "animPause": "暂停预览",
       "animNoClip": "绑定 clip 到槽 0 后可预览",
@@ -370,6 +410,7 @@
         "itemCount": "{{count}} 项"
       },
       "sourceTree": {
+        "all": "全部",
         "favorites": "收藏夹",
         "favoritesEmpty": "还没有收藏的目录"
       },
@@ -451,6 +492,9 @@
         "moveConflictTitle": "名称已存在",
         "moveConflictNote": "「{{dir}}」中已存在以下名称，移动可能会覆盖它们：",
         "moveConflictConfirm": "仍然移动",
+        "duplicateNameAtLocation": "此位置处已存在命名为「{{name}}」的资产。",
+        "duplicateFolderAtLocation": "此位置处已存在命名为「{{name}}」的文件夹。",
+        "duplicateFileAtLocation": "此位置处已存在命名为「{{name}}」的文件。",
         "sceneSwitch": {
           "title": "场景有未保存的改动",
           "body": "切换到「{{name}}」会替换当前编辑中的场景。请选择如何处理未保存的改动。",
@@ -532,7 +576,8 @@
         "cancelled": "已取消导入：{{name}}",
         "cancel": "取消",
         "retry": "重试 {{name}}",
-        "dismiss": "关闭"
+        "dismiss": "关闭",
+        "targetAlreadyExists": "「{{name}}」已存在于当前导入路径。请删除现有文件、在本地重命名后再导入，或选择空的子文件夹。"
       },
       "tooltip": {
         "kind": "类型：{{kind}}",

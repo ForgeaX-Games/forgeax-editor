@@ -52,10 +52,10 @@
     }
   },
   "dependencies": {
+    "@forgeax/app-shell": "0.103.0",
     "@forgeax/editor-core": "workspace:*",
     "@forgeax/editor-content-browser": "workspace:*",
     "@forgeax/editor-ui": "workspace:*",
-    "@forgeax/interface": "workspace:*",
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-animation": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",

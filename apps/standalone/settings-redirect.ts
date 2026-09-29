@@ -1,18 +1,10 @@
-// Standalone host seam: the interface TopBar gear (and the Ctrl+, shortcut)
-// calls openOverlay('settings'), but the full-screen Settings overlay is a
-// STUDIO product surface (@forgeax/settings) that this host never injects —
-// clicking the gear used to flip activeOverlay and render nothing (dead
-// button). Redirect the intent to the dockable Settings editor panel
-// (ep:settings) through the standard panel:open bus event, the same path the
-// dock Window menu uses. Chrome layout only — no editor state, no gateway op.
-//
-// The store/bus are injected as minimal structural interfaces so the unit
-// test stays hermetic (no interface-store import, no DOM).
-
-export interface OverlayStoreLike {
-  subscribe(listener: (state: { readonly activeOverlay: string | null }) => void): () => void;
-  getState(): { readonly activeOverlay: string | null; closeOverlay(): void };
-}
+// Product destination for the shell's Settings intent. Interface owns overlay
+// observation, clearing and reentry; Editor only toggles its dockable panel.
+// The public installer and bus are injected so product tests need no shell store.
+export type OverlayRedirectInstaller = (
+  overlayId: string,
+  onRedirect: () => void,
+) => () => void;
 
 export interface PanelOpenBusLike {
   emit(event: 'panel:open' | 'panel:close', payload: { id: string; source?: string }): void;
@@ -37,41 +29,20 @@ function log(...args: unknown[]): void {
 }
 
 export function installSettingsPanelRedirect(
-  store: OverlayStoreLike,
+  installOverlayRedirect: OverlayRedirectInstaller,
   bus: PanelOpenBusLike,
   isSettingsPanelOpen: () => boolean = () => false,
 ): () => void {
-  // Reentrancy guard: closeOverlay() sets state synchronously, re-entering
-  // this listener with activeOverlay already null. The flag keeps the
-  // contract explicit instead of relying on that notification ordering.
-  let redirecting = false;
-  let lastLogged: string | null | undefined;
   log('installed');
-  return store.subscribe((state) => {
-    // Log transitions only — the shell store notifies on every state change,
-    // and value-repeats carry no diagnostic signal.
-    if (state.activeOverlay !== lastLogged) {
-      lastLogged = state.activeOverlay;
-      log('notify activeOverlay =', state.activeOverlay);
+  return installOverlayRedirect('settings', () => {
+    // Query live dock visibility on each request, not at installation time.
+    if (isSettingsPanelOpen()) {
+      log('redirect: panel visible — emit panel:close', SETTINGS_PANEL_ID);
+      bus.emit('panel:close', { id: SETTINGS_PANEL_ID, source: 'topbar.settings' });
+    } else {
+      log('redirect: emit panel:open', SETTINGS_PANEL_ID);
+      bus.emit('panel:open', { id: SETTINGS_PANEL_ID, source: 'topbar.settings' });
     }
-    if (redirecting || state.activeOverlay !== 'settings') return;
-    redirecting = true;
-    try {
-      store.getState().closeOverlay();
-      // Toggle parity with the studio overlay: once the intent becomes a DOCK
-      // panel, the overlay store no longer tracks it (activeOverlay snaps back
-      // to null), so Ctrl+, / the gear would otherwise only ever RE-open the
-      // panel — never close it. Mirror app.panel.toggle: visible → panel:close.
-      if (isSettingsPanelOpen()) {
-        log('redirect: panel visible — closeOverlay + emit panel:close', SETTINGS_PANEL_ID);
-        bus.emit('panel:close', { id: SETTINGS_PANEL_ID, source: 'topbar.settings' });
-      } else {
-        log('redirect: closeOverlay + emit panel:open', SETTINGS_PANEL_ID);
-        bus.emit('panel:open', { id: SETTINGS_PANEL_ID, source: 'topbar.settings' });
-      }
-      log('redirect: emitted');
-    } finally {
-      redirecting = false;
-    }
+    log('redirect: emitted');
   });
 }

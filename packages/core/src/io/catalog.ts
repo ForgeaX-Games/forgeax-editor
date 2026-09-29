@@ -173,7 +173,8 @@ export interface CatalogReconcileResult {
 }
 
 /** Public Engine surface required by the canonical Gateway recovery operation. */
-export type CatalogReconcileProvider = () => CatalogReconcileResult | Promise<CatalogReconcileResult>;
+export type CatalogReconcileProvider = () =>
+  | CatalogReconcileResult | Promise<CatalogReconcileResult>;
 export type EngineCatalogReconcileProvider = Pick<
   AssetRegistry,
   'catalogSnapshot' | 'reconcileCatalog'
@@ -247,7 +248,8 @@ function sourceOperationRun(cancellable = true): OperationRunDescriptor {
   };
 }
 
-const sourceRecoveryActions = ['asset.preflight', 'run.get', 'run.wait', 'run.retry', 'catalog.reconcile'] as const;
+const sourceRecoveryActions = ['asset.preflight', 'run.get', 'run.wait', 'run.retry', 'catalog.reconcile',
+] as const;
 
 /**
  * Canonical source mutation schema. `guid` + `scope.sourceKey` identify the
@@ -260,13 +262,15 @@ function sourceScopeArgs(): ArgsSchema {
     type: 'object',
     properties: {
       sourceKey: { type: 'string', minLength: 1, description: 'One producer-issued source key.' },
-      all: { type: 'boolean', description: 'Explicitly select every source output; omission is not equivalent to all.' },
+      all: { type: 'boolean', description: 'Explicitly select every source output; omission is not equivalent to all.',
+      },
     },
     oneOf: [
       {
         type: 'object',
         properties: {
-          sourceKey: { type: 'string', minLength: 1, description: 'One producer-issued source key.' },
+          sourceKey: { type: 'string', minLength: 1, description: 'One producer-issued source key.',
+          },
         },
         required: ['sourceKey'],
         additionalProperties: false,
@@ -274,7 +278,8 @@ function sourceScopeArgs(): ArgsSchema {
       {
         type: 'object',
         properties: {
-          all: { type: 'boolean', enum: [true], description: 'Explicitly select every source output.' },
+          all: { type: 'boolean', enum: [true], description: 'Explicitly select every source output.',
+          },
         },
         required: ['all'],
         additionalProperties: false,
@@ -287,9 +292,11 @@ function sourceMutationArgs(includeConfirmationToken = false, includeOverride = 
   return {
     type: 'object',
     properties: {
-      guid: { type: 'string', minLength: 1, description: 'Stable imported output GUID; never infer identity from a path or output index.' },
+      guid: { type: 'string', minLength: 1, description: 'Stable imported output GUID; never infer identity from a path or output index.',
+      },
       scope: sourceScopeArgs(),
-      expectedRevision: { type: 'string', minLength: 1, description: 'Meta revision observed by preflight; retry after a revision conflict.' },
+      expectedRevision: { type: 'string', minLength: 1, description: 'Meta revision observed by preflight; retry after a revision conflict.',
+      },
       ...(includeOverride ? {
         override: {
           type: 'object',
@@ -297,13 +304,17 @@ function sourceMutationArgs(includeConfirmationToken = false, includeOverride = 
           description: 'Producer-owned override payload for the selected sourceKey; validate against its catalog descriptor schema.',
         },
       } : {}),
-      requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
-      retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
+      requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
+      },
+      retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
+      },
       ...(includeConfirmationToken ? {
-        confirmationToken: { type: 'string', minLength: 1, description: 'Discard confirmation returned by source preflight and bound to its impact set.' },
+        confirmationToken: { type: 'string', minLength: 1, description: 'Discard confirmation returned by source preflight and bound to its impact set.',
+            },
       } : {}),
     },
-    required: ['guid', 'scope', 'expectedRevision', ...(includeOverride ? ['override'] : []), 'requestId'],
+    required: ['guid', 'scope', 'expectedRevision', ...(includeOverride ? ['override'] : []), 'requestId',
+    ],
   };
 }
 
@@ -311,9 +322,11 @@ function sourcePreflightArgs(): ArgsSchema {
   return {
     type: 'object',
     properties: {
-      guid: { type: 'string', minLength: 1, description: 'Stable imported output GUID used to read the owning Meta source fact.' },
+      guid: { type: 'string', minLength: 1, description: 'Stable imported output GUID used to read the owning Meta source fact.',
+      },
       scope: sourceScopeArgs(),
-      requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
+      requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
+      },
     },
     required: ['guid', 'scope', 'requestId'],
   };
@@ -400,10 +413,12 @@ export function versionControlOperationDescriptors(): readonly VersionControlOpe
     id,
     domain: 'session' as const,
     argsSchema: structuredClone(versionControlSchemas[id]!) as ArgsSchema,
-    confirmation: { required: true as const, reason: 'Version-control changes affect the current game repository.' },
+    confirmation: { required: true as const, reason: 'Version-control changes affect the current game repository.',
+      },
     operationRun: structuredClone(versionControlRun),
     recoveryActions: Object.freeze(['version-control.refresh', 'run.wait', 'run.retry']),
-  }))) as readonly VersionControlOperationDescriptor[];
+  })),
+  ) as readonly VersionControlOperationDescriptor[];
 }
 
 // ── Builtin catalog seeding ─────────────────────────────────────────────────
@@ -438,8 +453,12 @@ const builtinOps: ReadonlyArray<{
         // parent is EntityId | null (types.ts) — null / omit spawns a root. Must
         // be `nullable` or the now-enforced door-validation (solo round-14) would
         // wrongly reject `spawnEntity{parent:null}`, a real caller shape.
-        parent: { type: 'number', nullable: true, description: 'parent handle (ChildOf); omit/null spawns a root. Inside a `transaction`, may be a NEGATIVE forward-reference placeholder — see `_id` below.' },
-        components: { type: 'object', description: 'Component data using the live component schema. Use catalog asset GUIDs for shared asset fields such as MeshFilter.assetHandle and MeshRenderer.materials, or bindAssetRef after creation. Numeric asset handles are opaque live references, not catalog indexes; do not guess them. Zero means unassigned, not a builtin mesh. Omit MeshRenderer to use the mesh default material.' },
+        parent: { type: 'number', nullable: true, description: 'parent handle (ChildOf); omit/null spawns a root. Inside a `transaction`, may be a NEGATIVE forward-reference placeholder — see `_id` below.',
+        },
+        components: { type: 'object',
+          description:
+            'Component data using the live component schema. Use catalog asset GUIDs for shared asset fields such as MeshFilter.assetHandle and MeshRenderer.materials, or bindAssetRef after creation. Numeric asset handles are opaque live references, not catalog indexes; do not guess them. Zero means unassigned, not a builtin mesh. Omit MeshRenderer to use the mesh default material.',
+        },
         source: { type: 'string' },
         // FORWARD-REFERENCE placeholder for use INSIDE a `transaction` (solo round-23):
         // give a spawn a NEGATIVE `_id` (e.g. -1), then a LATER sub-op in the same
@@ -450,15 +469,18 @@ const builtinOps: ReadonlyArray<{
         // prior apply (redo/inverse) and is NOT for authoring. Do NOT use `parent: 0` (a
         // batch INDEX) — 0 is a real handle → `INVALID_PARENT`. Outside a transaction,
         // read the created handle from `dispatch(...).result.created[]` instead.
-        _id: { type: 'number', description: 'transaction-only NEGATIVE forward-reference id (e.g. -1); a later sub-op references it as `parent`/`entity` to point at this spawn before its real handle exists. See the note above; use dispatch().result.created[] outside a transaction.' },
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id used to await the authored entity creation terminal run.' },
+        _id: { type: 'number', description: 'transaction-only NEGATIVE forward-reference id (e.g. -1); a later sub-op references it as `parent`/`entity` to point at this spawn before its real handle exists. See the note above; use dispatch().result.created[] outside a transaction.',
+        },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id used to await the authored entity creation terminal run.',
+        },
       },
     },
     title: 'Spawn Entity',
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
@@ -505,7 +527,8 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['reparent', 'delete', 'visibility', 'group', 'ungroup', 'duplicate'] },
+        action: { type: 'string', enum: ['reparent', 'delete', 'visibility', 'group', 'ungroup', 'duplicate'],
+        },
         entities: { type: 'array', items: { type: 'number' } },
         parent: { type: 'number', nullable: true },
         state: { type: 'string', enum: ['inherited', 'hidden', 'visible'] },
@@ -532,11 +555,16 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        root: { type: 'number', description: 'SceneInstance synthetic root handle; obtain it from gateway.sceneInstanceReadModel(root) or sceneInstanceForMember(member).' },
-        member: { type: 'number', description: 'Live member handle belonging to root. Entity identity is the engine handle, not a localId.' },
-        component: { type: 'string', description: 'Existing member component name, discovered with gateway.describeComponent().' },
-        field: { type: 'string', description: 'One field to override. Component add/remove, reparent, and entity-reference edits remain fail-closed in v1.' },
-        value: { description: 'New field value; the engine schema validates it and records the override in the instance state.' },
+        root: { type: 'number', description: 'SceneInstance synthetic root handle; obtain it from gateway.sceneInstanceReadModel(root) or sceneInstanceForMember(member).',
+        },
+        member: { type: 'number', description: 'Live member handle belonging to root. Entity identity is the engine handle, not a localId.',
+        },
+        component: { type: 'string', description: 'Existing member component name, discovered with gateway.describeComponent().',
+        },
+        field: { type: 'string', description: 'One field to override. Component add/remove, reparent, and entity-reference edits remain fail-closed in v1.',
+        },
+        value: { description: 'New field value; the engine schema validates it and records the override in the instance state.',
+        },
       },
       required: ['root', 'member', 'component', 'field', 'value'],
     },
@@ -550,7 +578,8 @@ const builtinOps: ReadonlyArray<{
         root: { type: 'number', description: 'SceneInstance synthetic root handle.' },
         member: { type: 'number', description: 'Live member handle belonging to root.' },
         component: { type: 'string' },
-        field: { type: 'string', description: 'Field whose instance override should be reverted to the source value.' },
+        field: { type: 'string', description: 'Field whose instance override should be reverted to the source value.',
+        },
       },
       required: ['root', 'member', 'component', 'field'],
     },
@@ -603,9 +632,11 @@ const builtinOps: ReadonlyArray<{
           description:
             'a collected SceneAsset POD. Obtain it through gateway.collectSceneAsset(entity); materials are GUID strings, so it is time/scene-safe. For ordinary copies dispatch duplicateEntity instead of importing engine internals.',
         },
-        parent: { type: 'number', nullable: true, description: 'retarget the PRIMARY new root under this parent handle (ChildOf); omit/null keeps it a root.' },
+        parent: { type: 'number', nullable: true, description: 'retarget the PRIMARY new root under this parent handle (ChildOf); omit/null keeps it a root.',
+        },
         name: { type: 'string', description: 'rename the PRIMARY new root (e.g. "{name} copy").' },
-        posOffset: { type: 'array', items: { type: 'number' }, description: '[dx,dy,dz] added to every new root Transform.pos (paste offset).' },
+        posOffset: { type: 'array', items: { type: 'number' }, description: '[dx,dy,dz] added to every new root Transform.pos (paste offset).',
+        },
         label: { type: 'string' },
       },
       required: ['asset'],
@@ -626,8 +657,10 @@ const builtinOps: ReadonlyArray<{
           nullable: true,
           description: 'optional parent override for the primary copied root; omit to retain the source parent.',
         },
-        name: { type: 'string', description: 'optional primary-root name; omit for "{source name} copy".' },
-        posOffset: { type: 'array', items: { type: 'number' }, description: '[dx,dy,dz] added to every new root Transform.pos.' },
+        name: { type: 'string', description: 'optional primary-root name; omit for "{source name} copy".',
+        },
+        posOffset: { type: 'array', items: { type: 'number' }, description: '[dx,dy,dz] added to every new root Transform.pos.',
+        },
         label: { type: 'string' },
       },
       required: ['entity'],
@@ -660,7 +693,8 @@ const builtinOps: ReadonlyArray<{
         },
         commands: {
           type: 'array',
-          description: 'array of EditorOp payloads applied in order as ONE synchronous batch — a single emit → a single full-world repaint. This is the O(N) BULK-AUTHORING path for building a scene at scale: prefer it over a per-op `for (…) await gateway.dispatch(spawnEntity)` loop, which is O(N²) because each await yields the event loop and forces a full-world repaint per op (measured: 500 spawns = ~200s awaited-loop vs ~0.9s transaction). FORWARD-REFERENCES (spawn a root then parent children under it in the same batch): give the root `spawnEntity` a NEGATIVE `_id` (e.g. -1), then set each child spawn\'s `parent` to that same negative value — the alias map resolves it to the root\'s real handle at apply time. This works for any handle field (`parent`, `entity`), not just parent. Do NOT use `parent: 0` as a batch index — 0 is a real handle and fails `INVALID_PARENT`. The whole batch\'s created roots are returned as `dispatch(...).result.created[]` (created[0] = the first spawn).',
+          description:
+            "array of EditorOp payloads applied in order as ONE synchronous batch — a single emit → a single full-world repaint. This is the O(N) BULK-AUTHORING path for building a scene at scale: prefer it over a per-op `for (…) await gateway.dispatch(spawnEntity)` loop, which is O(N²) because each await yields the event loop and forces a full-world repaint per op (measured: 500 spawns = ~200s awaited-loop vs ~0.9s transaction). FORWARD-REFERENCES (spawn a root then parent children under it in the same batch): give the root `spawnEntity` a NEGATIVE `_id` (e.g. -1), then set each child spawn's `parent` to that same negative value — the alias map resolves it to the root's real handle at apply time. This works for any handle field (`parent`, `entity`), not just parent. Do NOT use `parent: 0` as a batch index — 0 is a real handle and fails `INVALID_PARENT`. The whole batch's created roots are returned as `dispatch(...).result.created[]` (created[0] = the first spawn).",
         },
       },
       required: ['label', 'commands'],
@@ -674,7 +708,8 @@ const builtinOps: ReadonlyArray<{
       type: 'object',
       // Pack location is derived from the active game's catalog. Internal undo
       // commands carry a resolved path outside this public schema.
-      properties: { guid: { type: 'string', description: 'Asset GUID in the active game catalog.' } },
+      properties: { guid: { type: 'string', description: 'Asset GUID in the active game catalog.' },
+      },
       required: ['guid'],
     },
     title: 'Destroy Asset',
@@ -718,14 +753,20 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        guid: { type: 'string', description: 'Caller-minted asset GUID (crypto.randomUUID() — 36-char RFC-4122 dash form). REUSE this same guid for the follow-up bindAssetRef; the op cannot return a minted guid (the dispatch result carries only entity handles).' },
-        name: { type: 'string', description: 'Human-readable material name shown in the asset catalog.' },
-        baseColor: { type: 'array', items: { type: 'number' }, description: 'PBR base color authored in sRGB as [r,g,b,a], each 0..1 (a = linear opacity). Values are stored unchanged; render extraction converts RGB to linear.' },
+        guid: { type: 'string', description: 'Caller-minted asset GUID (crypto.randomUUID() — 36-char RFC-4122 dash form). REUSE this same guid for the follow-up bindAssetRef; the op cannot return a minted guid (the dispatch result carries only entity handles).',
+        },
+        name: { type: 'string', description: 'Human-readable material name shown in the asset catalog.',
+        },
+        baseColor: { type: 'array', items: { type: 'number' }, description: 'PBR base color authored in sRGB as [r,g,b,a], each 0..1 (a = linear opacity). Values are stored unchanged; render extraction converts RGB to linear.',
+        },
         metallic: { type: 'number', description: 'PBR metallic 0..1 (default 0 = dielectric).' },
         roughness: { type: 'number', description: 'PBR roughness 0..1 (default 0.5).' },
-        baseColorTexture: { type: 'string', description: 'Optional TextureAsset GUID to set as baseColorTexture. Must be in the LIVE asset catalog (INVALID_ARGS otherwise) — a phantom GUID can never resolve at render. Stored as refs[] index in pack (engine disk format).' },
-        alphaCutoff: { type: 'number', description: 'Optional alpha-cutoff 0..1 (UE-Masked equivalent): baseColorTexture alpha below the cutoff is discarded. Omit for a fully opaque material.' },
-        packPath: { type: 'string', description: 'Optional game-relative or catalog-provided canonical target pack path. Defaults to assets/materials.pack.json, whose writer is independent from scene persistence. The host resolves either form exactly once; an AI normally omits this.' },
+        baseColorTexture: { type: 'string', description: 'Optional TextureAsset GUID to set as baseColorTexture. Must be in the LIVE asset catalog (INVALID_ARGS otherwise) — a phantom GUID can never resolve at render. Stored as refs[] index in pack (engine disk format).',
+        },
+        alphaCutoff: { type: 'number', description: 'Optional alpha-cutoff 0..1 (UE-Masked equivalent): baseColorTexture alpha below the cutoff is discarded. Omit for a fully opaque material.',
+        },
+        packPath: { type: 'string', description: 'Optional game-relative or catalog-provided canonical target pack path. Defaults to assets/materials.pack.json, whose writer is independent from scene persistence. The host resolves either form exactly once; an AI normally omits this.',
+        },
         refs: { type: 'array', items: { type: 'string' } },
       },
       required: ['guid', 'name', 'baseColor'],
@@ -738,12 +779,17 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        guid: { type: 'string', description: 'Stable caller-minted RFC 4122 asset GUID. The first write creates it; later writes replace that same asset.' },
-        name: { type: 'string', description: 'Human-readable UI asset name shown in the asset catalog.' },
-        html: { type: 'string', description: 'Declarative UiAsset markup. Dynamic values and event behavior remain game-code responsibilities.' },
+        guid: { type: 'string', description: 'Stable caller-minted RFC 4122 asset GUID. The first write creates it; later writes replace that same asset.',
+        },
+        name: { type: 'string', description: 'Human-readable UI asset name shown in the asset catalog.',
+        },
+        html: { type: 'string', description: 'Declarative UiAsset markup. Dynamic values and event behavior remain game-code responsibilities.',
+        },
         css: { type: 'string', description: 'Styles scoped to the UiAsset ShadowRoot.' },
-        sourcePath: { type: 'string', description: 'Optional game-relative authoring source path used in structured validation diagnostics.' },
-        packPath: { type: 'string', description: 'Optional game-relative target pack path. Defaults to assets/ui.pack.json.' },
+        sourcePath: { type: 'string', description: 'Optional game-relative authoring source path used in structured validation diagnostics.',
+        },
+        packPath: { type: 'string', description: 'Optional game-relative target pack path. Defaults to assets/ui.pack.json.',
+        },
       },
       required: ['guid', 'name', 'html', 'css'],
     },
@@ -758,7 +804,8 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        packPath: { type: 'string', description: '.pack.json or .meta.json path containing the material asset. Accepts either a game-relative path or the canonical path projected by the asset catalog; the host resolves it exactly once.' },
+        packPath: { type: 'string', description: '.pack.json or .meta.json path containing the material asset. Accepts either a game-relative path or the canonical path projected by the asset catalog; the host resolves it exactly once.',
+        },
         guid: { type: 'string', description: 'Material asset GUID to update.' },
         paramPatch: {
           type: 'object',
@@ -779,13 +826,18 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        guid: { type: 'string', description: 'Caller-minted RFC 4122 asset GUID. Reuse for openAssetEditor after create.' },
-        name: { type: 'string', description: 'Human-readable Material Instance name (UE-style default prefix MI_).' },
+        guid: { type: 'string', description: 'Caller-minted RFC 4122 asset GUID. Reuse for openAssetEditor after create.',
+        },
+        name: { type: 'string', description: 'Human-readable Material Instance name (UE-style default prefix MI_).',
+        },
         parentGuid: { type: 'string', description: 'Parent Material or Material Instance GUID.' },
-        overrides: { type: 'object', description: 'Optional initial overrides map: { [paramKey]: { enabled, value } }.' },
-        physMaterial: { type: 'string', description: 'Optional Physical Material GUID (editor-stored).' },
+        overrides: { type: 'object', description: 'Optional initial overrides map: { [paramKey]: { enabled, value } }.',
+        },
+        physMaterial: { type: 'string', description: 'Optional Physical Material GUID (editor-stored).',
+        },
         lightmass: { type: 'object', description: 'Optional Lightmass settings patch.' },
-        packPath: { type: 'string', description: 'Optional game-relative pack path. Defaults to assets/materials.pack.json.' },
+        packPath: { type: 'string', description: 'Optional game-relative pack path. Defaults to assets/materials.pack.json.',
+        },
       },
       required: ['guid', 'name', 'parentGuid'],
     },
@@ -798,7 +850,8 @@ const builtinOps: ReadonlyArray<{
       properties: {
         packPath: { type: 'string' },
         guid: { type: 'string' },
-        payload: { type: 'object', description: 'Full material-instance payload to persist (staging flush).' },
+        payload: { type: 'object', description: 'Full material-instance payload to persist (staging flush).',
+        },
       },
       required: ['packPath', 'guid', 'payload'],
     },
@@ -811,9 +864,11 @@ const builtinOps: ReadonlyArray<{
       type: 'object',
       properties: {
         guid: { type: 'string', description: 'Caller-minted RFC 4122 asset GUID.' },
-        name: { type: 'string', description: 'Human-readable Input Map name (default prefix IM_).' },
+        name: { type: 'string', description: 'Human-readable Input Map name (default prefix IM_).',
+        },
         actions: { type: 'array', description: 'Optional initial ActionConfig[] rows.' },
-        packPath: { type: 'string', description: 'Optional game-relative pack path. Defaults to assets/input.pack.json.' },
+        packPath: { type: 'string', description: 'Optional game-relative pack path. Defaults to assets/input.pack.json.',
+        },
       },
       required: ['guid', 'name'],
     },
@@ -826,7 +881,8 @@ const builtinOps: ReadonlyArray<{
       properties: {
         packPath: { type: 'string' },
         guid: { type: 'string' },
-        payload: { type: 'object', description: 'Full input-map payload to persist (staging flush).' },
+        payload: { type: 'object', description: 'Full input-map payload to persist (staging flush).',
+        },
       },
       required: ['packPath', 'guid', 'payload'],
     },
@@ -839,7 +895,8 @@ const builtinOps: ReadonlyArray<{
       properties: {
         packPath: { type: 'string' },
         guid: { type: 'string' },
-        parentGuid: { type: 'string', description: 'New parent GUID. Rejected if it would create a cycle.' },
+        parentGuid: { type: 'string', description: 'New parent GUID. Rejected if it would create a cycle.',
+        },
       },
       required: ['packPath', 'guid', 'parentGuid'],
     },
@@ -936,11 +993,13 @@ const builtinOps: ReadonlyArray<{
     title: 'Select Many',
   },
   { id: 'setGizmoMode', domain: 'session',
-    argsSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['translate', 'rotate', 'scale'] } }, required: ['mode'] },
+    argsSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['translate', 'rotate', 'scale'] } }, required: ['mode'],
+    },
     title: 'Set Gizmo Mode',
   },
   { id: 'setGizmoPivot', domain: 'session',
-    argsSchema: { type: 'object', properties: { pivot: { type: 'string', enum: ['center', 'lastSelected'] } }, required: ['pivot'] },
+    argsSchema: { type: 'object', properties: { pivot: { type: 'string', enum: ['center', 'lastSelected'] } }, required: ['pivot'],
+    },
     title: 'Set Gizmo Pivot',
   },
   { id: 'requestFrame', domain: 'session', argsSchema: null, title: 'Request Frame' },
@@ -948,9 +1007,12 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        frames: { type: 'number', minimum: 1, maximum: 8, description: 'Number of consecutive frames to record. Defaults to 1.' },
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id used to read the captured tape result.' },
-        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed capture run being retried; the new requestId remains the public identity of the new attempt.' },
+        frames: { type: 'number', minimum: 1, maximum: 8, description: 'Number of consecutive frames to record. Defaults to 1.',
+        },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id used to read the captured tape result.',
+        },
+        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed capture run being retried; the new requestId remains the public identity of the new attempt.',
+        },
       },
       required: ['requestId'],
     },
@@ -958,7 +1020,8 @@ const builtinOps: ReadonlyArray<{
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
@@ -968,10 +1031,14 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        frames: { type: 'number', minimum: 1, maximum: 8, description: 'Number of consecutive Engine frames to record. Defaults to 2.' },
-        eventLimit: { type: 'number', minimum: 1, maximum: 4096, description: 'Maximum phase records retained by the Engine profiler. Defaults to 512.' },
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id used to read the Engine-validated ProfileCapture result.' },
-        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed CPU profile run being retried; the new requestId remains the public identity of the new attempt.' },
+        frames: { type: 'number', minimum: 1, maximum: 8, description: 'Number of consecutive Engine frames to record. Defaults to 2.',
+        },
+        eventLimit: { type: 'number', minimum: 1, maximum: 4096, description: 'Maximum phase records retained by the Engine profiler. Defaults to 512.',
+        },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id used to read the Engine-validated ProfileCapture result.',
+        },
+        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed CPU profile run being retried; the new requestId remains the public identity of the new attempt.',
+        },
       },
       required: ['requestId'],
     },
@@ -979,7 +1046,8 @@ const builtinOps: ReadonlyArray<{
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
@@ -999,7 +1067,8 @@ const builtinOps: ReadonlyArray<{
     title: 'Replay Particle Effect',
   },
   { id: 'requestRename', domain: 'session',
-    argsSchema: { type: 'object', properties: { entity: { type: 'number' } }, required: ['entity'] },
+    argsSchema: { type: 'object', properties: { entity: { type: 'number' } }, required: ['entity'],
+    },
     title: 'Request Rename',
   },
   { id: 'setSceneId', domain: 'session',
@@ -1019,8 +1088,10 @@ const builtinOps: ReadonlyArray<{
           enum: ['save', 'discard', 'cancel'],
           description: 'When the outgoing scene has unsaved edits: save before switching, discard the in-memory edits, or cancel without switching. Omit only when the scene is clean; dirty omission returns scene-switch-dirty.',
         },
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for the accepted/running/terminal scene-switch OperationRun.' },
-        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed scene-switch run being retried; the new requestId remains the public identity of the new attempt.' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for the accepted/running/terminal scene-switch OperationRun.',
+        },
+        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed scene-switch run being retried; the new requestId remains the public identity of the new attempt.',
+        },
       },
       required: ['id', 'requestId'],
     },
@@ -1028,7 +1099,8 @@ const builtinOps: ReadonlyArray<{
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
@@ -1038,11 +1110,14 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        guid: { type: 'string', minLength: 1, description: 'Imported scene output GUID resolved through loadByGuid.' },
-        sourceKey: { type: 'string', minLength: 1, description: 'Catalog/workspace source identity; never inferred from a file suffix.' },
+        guid: { type: 'string', minLength: 1, description: 'Imported scene output GUID resolved through loadByGuid.',
+        },
+        sourceKey: { type: 'string', minLength: 1, description: 'Catalog/workspace source identity; never inferred from a file suffix.',
+        },
         sourcePath: { type: 'string' },
         revision: { type: 'string' },
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted OperationRun identity for preview load completion.' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted OperationRun identity for preview load completion.',
+        },
       },
       required: ['guid', 'sourceKey', 'revision', 'requestId'],
     },
@@ -1050,7 +1125,8 @@ const builtinOps: ReadonlyArray<{
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
@@ -1060,22 +1136,32 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        importedGuid: { type: 'string', minLength: 1, description: 'Imported scene GUID currently active in the authoring session.' },
-        sourceKey: { type: 'string', minLength: 1, description: 'Producer-issued imported output identity. Must match the active session.' },
-        revision: { type: 'string', minLength: 1, description: 'Effective imported revision. Must match the active session.' },
-        targetPackPath: { type: 'string', minLength: 1, description: 'Explicit game-relative authored .pack.json target. Never inferred from the source path.' },
-        targetName: { type: 'string', minLength: 1, description: 'Explicit authored scene name stored on the new pack entry.' },
-        contentPolicy: { type: 'string', enum: ['effective-base', 'current-session'], description: 'effective-base promotes the immutable preview; current-session fails closed until Engine source authoring is available.' },
-        discardSourceChanges: { type: 'boolean', description: 'Reserved compatibility field; no source-edit session exists with the current Engine.' },
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
+        importedGuid: { type: 'string', minLength: 1, description: 'Imported scene GUID currently active in the authoring session.',
+        },
+        sourceKey: { type: 'string', minLength: 1, description: 'Producer-issued imported output identity. Must match the active session.',
+        },
+        revision: { type: 'string', minLength: 1, description: 'Effective imported revision. Must match the active session.',
+        },
+        targetPackPath: { type: 'string', minLength: 1, description: 'Explicit game-relative authored .pack.json target. Never inferred from the source path.',
+        },
+        targetName: { type: 'string', minLength: 1, description: 'Explicit authored scene name stored on the new pack entry.',
+        },
+        contentPolicy: { type: 'string', enum: ['effective-base', 'current-session'], description: 'effective-base promotes the immutable preview; current-session fails closed until Engine source authoring is available.',
+        },
+        discardSourceChanges: { type: 'boolean', description: 'Reserved compatibility field; no source-edit session exists with the current Engine.',
+        },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
+        },
       },
-      required: ['importedGuid', 'sourceKey', 'revision', 'targetPackPath', 'targetName', 'contentPolicy', 'requestId'],
+      required: ['importedGuid', 'sourceKey', 'revision', 'targetPackPath', 'targetName', 'contentPolicy', 'requestId',
+      ],
     },
     title: 'Promote Imported Scene',
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
@@ -1085,10 +1171,14 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        id: { type: 'string', minLength: 1, description: 'New scene slug. The persisted file is assets/scenes/<slug>.pack.json.' },
-        duplicateCurrent: { type: 'boolean', description: 'When true, serialize the currently loaded scene into the new pack with a new scene GUID; when false, create a canonical empty scene.' },
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id.' },
-        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed create/duplicate run being retried; the new requestId remains the public identity of the new attempt.' },
+        id: { type: 'string', minLength: 1, description: 'New scene slug. The persisted file is assets/scenes/<slug>.pack.json.',
+        },
+        duplicateCurrent: { type: 'boolean', description: 'When true, serialize the currently loaded scene into the new pack with a new scene GUID; when false, create a canonical empty scene.',
+        },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id.',
+        },
+        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed create/duplicate run being retried; the new requestId remains the public identity of the new attempt.',
+        },
       },
       required: ['id', 'duplicateCurrent', 'requestId'],
     },
@@ -1096,7 +1186,8 @@ const builtinOps: ReadonlyArray<{
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
@@ -1107,9 +1198,12 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        sceneGuid: { type: 'string', minLength: 1, description: 'Stable GUID of a scene asset in the active scene manifest. This writes forge.json.defaultScene; it is not a scene id or pack path.' },
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id.' },
-        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed default-scene run being retried; the new requestId remains the public identity of the new attempt.' },
+        sceneGuid: { type: 'string', minLength: 1, description: 'Stable GUID of a scene asset in the active scene manifest. This writes forge.json.defaultScene; it is not a scene id or pack path.',
+        },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id.',
+        },
+        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed default-scene run being retried; the new requestId remains the public identity of the new attempt.',
+        },
       },
       required: ['sceneGuid', 'requestId'],
     },
@@ -1117,7 +1211,8 @@ const builtinOps: ReadonlyArray<{
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
@@ -1128,9 +1223,12 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        sceneGuid: { type: 'string', minLength: 1, description: 'Stable GUID of a scene asset in the active scene manifest. Current, default, and referenced scenes return a terminal scene-delete-guarded error with impact details.' },
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id.' },
-        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed delete-scene run being retried; the new requestId remains the public identity of the new attempt.' },
+        sceneGuid: { type: 'string', minLength: 1, description: 'Stable GUID of a scene asset in the active scene manifest. Current, default, and referenced scenes return a terminal scene-delete-guarded error with impact details.',
+        },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id.',
+        },
+        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Optional failed delete-scene run being retried; the new requestId remains the public identity of the new attempt.',
+        },
       },
       required: ['sceneGuid', 'requestId'],
     },
@@ -1138,7 +1236,8 @@ const builtinOps: ReadonlyArray<{
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
@@ -1170,7 +1269,8 @@ const builtinOps: ReadonlyArray<{
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
@@ -1182,7 +1282,11 @@ const builtinOps: ReadonlyArray<{
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed', 'cancelled'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: {
+        get: 'getOperationRun',
+        wait: 'waitOperationRun',
+        subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: true,
@@ -1212,11 +1316,16 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        target: { type: 'array', items: { type: 'number' }, description: 'Orbit target [x,y,z] (world). Camera orbits AROUND this point.' },
-        yaw: { type: 'number', description: 'Yaw (radians) around world +Y; unbounded (full rotation).' },
-        pitch: { type: 'number', description: 'Pitch (radians) around camera right; clamped to ~[-1.5, 1.5] (near ±86°).' },
-        dist: { type: 'number', description: 'Distance from target to camera; clamped to [2, 300].' },
-        pos: { type: 'array', items: { type: 'number' }, description: 'Optional absolute camera position [x,y,z]; if provided, target is derived as pos + fwd*dist (T6b).' },
+        target: { type: 'array', items: { type: 'number' }, description: 'Orbit target [x,y,z] (world). Camera orbits AROUND this point.',
+        },
+        yaw: { type: 'number', description: 'Yaw (radians) around world +Y; unbounded (full rotation).',
+        },
+        pitch: { type: 'number', description: 'Pitch (radians) around camera right; clamped to ~[-1.5, 1.5] (near ±86°).',
+        },
+        dist: { type: 'number', description: 'Distance from target to camera; clamped to [2, 300].',
+        },
+        pos: { type: 'array', items: { type: 'number' }, description: 'Optional absolute camera position [x,y,z]; if provided, target is derived as pos + fwd*dist (T6b).',
+        },
       },
     },
     title: 'Orbit camera',
@@ -1225,8 +1334,10 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        pos: { type: 'array', items: { type: 'number' }, description: 'Camera position [x,y,z] at the end of the fly gesture.' },
-        yaw: { type: 'number', description: 'Yaw (radians) — engine convention: qCam = yaw·Y × pitch·X, fwd = qCam·[0,0,-1].' },
+        pos: { type: 'array', items: { type: 'number' }, description: 'Camera position [x,y,z] at the end of the fly gesture.',
+        },
+        yaw: { type: 'number', description: 'Yaw (radians) — engine convention: qCam = yaw·Y × pitch·X, fwd = qCam·[0,0,-1].',
+        },
         pitch: { type: 'number', description: 'Pitch (radians); clamped to ~[-1.5, 1.5].' },
       },
     },
@@ -1236,7 +1347,8 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        pos: { type: 'array', items: { type: 'number' }, description: 'Absolute camera position [x,y,z].' },
+        pos: { type: 'array', items: { type: 'number' }, description: 'Absolute camera position [x,y,z].',
+        },
         yaw: { type: 'number', description: 'Yaw (radians).' },
         pitch: { type: 'number', description: 'Pitch (radians); clamped to ~[-1.5, 1.5].' },
       },
@@ -1249,7 +1361,8 @@ const builtinOps: ReadonlyArray<{
       type: 'object',
       properties: {
         pos: { type: 'array', items: { type: 'number' }, description: 'Camera position [x,y,z].' },
-        lookAt: { type: 'array', items: { type: 'number' }, description: 'World point the camera should look at; yaw/pitch derived from (lookAt - pos).' },
+        lookAt: { type: 'array', items: { type: 'number' }, description: 'World point the camera should look at; yaw/pitch derived from (lookAt - pos).',
+        },
       },
       required: ['pos', 'lookAt'],
     },
@@ -1265,7 +1378,8 @@ const builtinOps: ReadonlyArray<{
     },
     title: 'Set camera projection',
   },
-  { id: 'cameraToggleProjection', domain: 'session', argsSchema: null, title: 'Toggle camera projection' },
+  { id: 'cameraToggleProjection', domain: 'session', argsSchema: null, title: 'Toggle camera projection',
+  },
   { id: 'cameraSetView', domain: 'session',
     argsSchema: {
       type: 'object',
@@ -1283,7 +1397,8 @@ const builtinOps: ReadonlyArray<{
   { id: 'cameraAdjustFov', domain: 'session',
     argsSchema: {
       type: 'object',
-      properties: { delta: { type: 'number', description: 'Positive zooms in; negative zooms out.' } },
+      properties: { delta: { type: 'number', description: 'Positive zooms in; negative zooms out.' },
+      },
       required: ['delta'],
     },
     title: 'Adjust camera view scale',
@@ -1291,7 +1406,8 @@ const builtinOps: ReadonlyArray<{
   { id: 'cameraZoom', domain: 'session',
     argsSchema: {
       type: 'object',
-      properties: { delta: { type: 'number', description: 'Positive zooms in; negative zooms out.' } },
+      properties: { delta: { type: 'number', description: 'Positive zooms in; negative zooms out.' },
+      },
       required: ['delta'],
     },
     title: 'Zoom camera',
@@ -1321,12 +1437,17 @@ const builtinOps: ReadonlyArray<{
           description: 'Partial viewport-preferences patch; every field optional. Numbers are clamped to their valid range by the applier.',
           additionalProperties: false,
           properties: {
-            gridVisible: { type: 'boolean', description: 'Show the infinite grid in the Edit viewport; defaults to true and is session-only.' },
-            mouseSensitivity: { type: 'number', description: 'Mouse delta multiplier for orbit/pan/dolly/fly-look (0.05–5).' },
+            gridVisible: { type: 'boolean', description: 'Show the infinite grid in the Edit viewport; defaults to true and is session-only.',
+            },
+            mouseSensitivity: { type: 'number', description: 'Mouse delta multiplier for orbit/pan/dolly/fly-look (0.05–5).',
+            },
             invertY: { type: 'boolean', description: 'Reverse vertical mouse look.' },
-            wheelDirection: { type: 'number', enum: [1, -1], description: 'Wheel direction multiplier; 1 is the editor default.' },
-            wheelSpeedScalar: { type: 'number', description: 'Wheel-speed steps per notch while flying (0.1–4).' },
-            flyBoostMultiplier: { type: 'number', description: 'Temporary Shift-held flight multiplier (1–8).' },
+            wheelDirection: { type: 'number', enum: [1, -1], description: 'Wheel direction multiplier; 1 is the editor default.',
+            },
+            wheelSpeedScalar: { type: 'number', description: 'Wheel-speed steps per notch while flying (0.1–4).',
+            },
+            flyBoostMultiplier: { type: 'number', description: 'Temporary Shift-held flight multiplier (1–8).',
+            },
             flySpeed: { type: 'number', description: 'Fly-mode move speed.' },
             fov: { type: 'number', description: 'Perspective view scale (absolute set).' },
             projection: { type: 'string', enum: ['perspective', 'orthographic'] },
@@ -1354,9 +1475,12 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        destPath: { type: 'string', minLength: 1, description: 'On-disk source path (game-relative accepted); the source must already be on disk unless skipUpload is false with bytes supplied by a UI caller.' },
-        sourceName: { type: 'string', description: 'Optional basename override; defaults to the last path segment. Drives importer selection + cook meta.source.' },
-        base64: { type: 'string', minLength: 1, description: 'Ephemeral source bytes for a human-selected file. Runtime uploads them through assetIO before import.' },
+        destPath: { type: 'string', minLength: 1, description: 'On-disk source path (game-relative accepted); the source must already be on disk unless skipUpload is false with bytes supplied by a UI caller.',
+        },
+        sourceName: { type: 'string', description: 'Optional basename override; defaults to the last path segment. Drives importer selection + cook meta.source.',
+        },
+        base64: { type: 'string', minLength: 1, description: 'Ephemeral source bytes for a human-selected file. Runtime uploads them through assetIO before import.',
+        },
         companionSources: {
           type: 'array',
           description: 'Optional bounded companion source for a compound import, currently the matching .ui.css file.',
@@ -1384,8 +1508,10 @@ const builtinOps: ReadonlyArray<{
             additionalProperties: false,
           },
         },
-        skipUpload: { type: 'boolean', description: 'Bytes already on disk — do not re-upload (default true for path-only callers).' },
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for the accepted/running/terminal OperationRun.' },
+        skipUpload: { type: 'boolean', description: 'Bytes already on disk — do not re-upload (default true for path-only callers).',
+        },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for the accepted/running/terminal OperationRun.',
+        },
       },
       required: ['destPath', 'requestId'],
     },
@@ -1393,7 +1519,8 @@ const builtinOps: ReadonlyArray<{
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed', 'cancelled'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: true,
@@ -1404,8 +1531,10 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
-        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
+        },
+        retryOfRequestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
+        },
       },
       required: ['requestId'],
     },
@@ -1454,7 +1583,8 @@ const builtinOps: ReadonlyArray<{
       type: 'object',
       properties: {
         path: { type: 'string', description: 'Game-relative source path, e.g. assets/Fox.glb.' },
-        requestId: { type: 'string', description: 'Caller-minted correlation id used to poll sourceFileDeleteStatus().' },
+        requestId: { type: 'string', description: 'Caller-minted correlation id used to poll sourceFileDeleteStatus().',
+        },
       },
       required: ['path', 'requestId'],
     },
@@ -1462,7 +1592,8 @@ const builtinOps: ReadonlyArray<{
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
@@ -1484,7 +1615,8 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        parentPath: { type: 'string', description: 'Game-relative parent directory (e.g. "assets", "assets/textures"). Empty string defaults to "assets".' },
+        parentPath: { type: 'string', description: 'Game-relative parent directory (e.g. "assets", "assets/textures"). Empty string defaults to "assets".',
+        },
         name: {
           type: 'string',
           pattern: '^[^\\\\/:*?"<>|\\x00-\\x1f]+$',
@@ -1507,7 +1639,8 @@ const builtinOps: ReadonlyArray<{
         // an older build), so we do NOT enforce a BASENAME pattern here — the
         // applier's checkPathNotJailbreak() catches only "..", NUL, and "\\"
         // to prevent traversal / smuggling. See asset-basename.ts.
-        path: { type: 'string', minLength: 1, description: 'Game-relative directory path to delete recursively (e.g. "assets/textures"). Must not contain ".." segments, NUL bytes, or "\\" separators. The basename is intentionally NOT validated — this is the escape hatch for cleaning up folders that predate name validation.' },
+        path: { type: 'string', minLength: 1, description: 'Game-relative directory path to delete recursively (e.g. "assets/textures"). Must not contain ".." segments, NUL bytes, or "\\" separators. The basename is intentionally NOT validated — this is the escape hatch for cleaning up folders that predate name validation.',
+        },
       },
       required: ['path'],
     },
@@ -1517,7 +1650,8 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', minLength: 1, description: 'Game-relative existing directory path (same jailbreak rules as deleteDirectory.path).' },
+        path: { type: 'string', minLength: 1, description: 'Game-relative existing directory path (same jailbreak rules as deleteDirectory.path).',
+        },
         newName: {
           type: 'string',
           pattern: '^[^\\\\/:*?"<>|\\x00-\\x1f]+$',
@@ -1536,7 +1670,8 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', minLength: 1, description: 'Game-relative existing source file path (e.g. "assets/Fox.glb").' },
+        path: { type: 'string', minLength: 1, description: 'Game-relative existing source file path (e.g. "assets/Fox.glb").',
+        },
         newName: {
           type: 'string',
           pattern: '^[^\\\\/:*?"<>|\\x00-\\x1f]+$',
@@ -1555,8 +1690,10 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', minLength: 1, description: 'Game-relative existing directory path to move (same jailbreak rules as deleteDirectory.path).' },
-        targetDir: { type: 'string', description: 'Game-relative destination PARENT directory (e.g. "assets/levels"). Empty string defaults to "assets". The basename is preserved; the applier rejects moving a directory into itself or a descendant, and a no-op move into the current parent.' },
+        path: { type: 'string', minLength: 1, description: 'Game-relative existing directory path to move (same jailbreak rules as deleteDirectory.path).',
+        },
+        targetDir: { type: 'string', description: 'Game-relative destination PARENT directory (e.g. "assets/levels"). Empty string defaults to "assets". The basename is preserved; the applier rejects moving a directory into itself or a descendant, and a no-op move into the current parent.',
+        },
       },
       required: ['path', 'targetDir'],
     },
@@ -1566,8 +1703,10 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', minLength: 1, description: 'Game-relative existing source file path to move (e.g. "assets/Fox.glb"). Its .meta.json sidecar moves with it.' },
-        targetDir: { type: 'string', description: 'Game-relative destination PARENT directory. Empty string defaults to "assets". The basename is preserved; the applier rejects a no-op move into the current parent.' },
+        path: { type: 'string', minLength: 1, description: 'Game-relative existing source file path to move (e.g. "assets/Fox.glb"). Its .meta.json sidecar moves with it.',
+        },
+        targetDir: { type: 'string', description: 'Game-relative destination PARENT directory. Empty string defaults to "assets". The basename is preserved; the applier rejects a no-op move into the current parent.',
+        },
       },
       required: ['path', 'targetDir'],
     },
@@ -1577,7 +1716,8 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', minLength: 1, description: 'Game-relative file or directory path to reveal in the OS file manager.' },
+        path: { type: 'string', minLength: 1, description: 'Game-relative file or directory path to reveal in the OS file manager.',
+        },
       },
       required: ['path'],
     },
@@ -1592,9 +1732,12 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        sceneGuid: { type: 'string', description: 'A catalogued scene sub-asset GUID (from gateway.assetCatalog(), kind:"scene"). For a just-imported GLB/FBX, the whole-file scene sub-asset — this instantiates its real geometry + hierarchy (incl. Skin+Skeleton joints for a rigged asset), not a placeholder. NOTE: it does NOT create an AnimationPlayer — which clip plays is authoring intent, not baked by the gltf cook; you would author AnimationPlayer + bind an animation-clip yourself (a leg that is currently limited — see the gateway skill "Animate a skinned asset" note).' },
-        name: { type: 'string', description: 'Optional name for the wrapper root entity; defaults to "Scene". The wrapper is the mount ROOT and round-trips as one mounts[] entry.' },
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id.' },
+        sceneGuid: { type: 'string', description: 'A catalogued scene sub-asset GUID (from gateway.assetCatalog(), kind:"scene"). For a just-imported GLB/FBX, the whole-file scene sub-asset — this instantiates its real geometry + hierarchy (incl. Skin+Skeleton joints for a rigged asset), not a placeholder. NOTE: it does NOT create an AnimationPlayer — which clip plays is authoring intent, not baked by the gltf cook; you would author AnimationPlayer + bind an animation-clip yourself (a leg that is currently limited — see the gateway skill "Animate a skinned asset" note).',
+        },
+        name: { type: 'string', description: 'Optional name for the wrapper root entity; defaults to "Scene". The wrapper is the mount ROOT and round-trips as one mounts[] entry.',
+        },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id.',
+        },
       },
       required: ['sceneGuid', 'requestId'],
     },
@@ -1602,7 +1745,8 @@ const builtinOps: ReadonlyArray<{
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
@@ -1619,13 +1763,20 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        entity: { type: 'number', description: 'Target entity handle. Owned entities and mount members are supported; mount-member shared refs fold into mounts[].overrides[] on save.' },
-        component: { type: 'string', description: 'Component carrying the shared<T> field, e.g. "MeshRenderer", "Skylight", "AnimationPlayer". Must already be present on the entity (this patches it).' },
-        field: { type: 'string', description: 'The shared<T> field to bind, e.g. "materials", "equirect", "clips". Discover its type via gateway.describeComponent(component).' },
-        assetType: { type: 'string', description: 'Producer-owned engine asset-union tag for allocSharedRef. For ParticleEffectPlayer.effect and every other shared<T> field, read the field token with gateway.describeComponent(component), then query gateway.assetCatalog({ compatibleWith: assetType }) for candidate GUIDs.' },
-        guids: { type: 'array', items: { type: 'string' }, description: 'Catalogued asset GUID(s) from the producer-compatible asset query. For an array<shared<T>> field, one GUID per slot (unless `slot` is given). For a scalar shared<T> field, a single-element array.' },
-        slot: { type: 'number', description: 'For an array<shared<T>> field, write only this slot index (leaving other slots intact). Omit to write the whole array from `guids`.' },
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id.' },
+        entity: { type: 'number', description: 'Target entity handle. Owned entities and mount members are supported; mount-member shared refs fold into mounts[].overrides[] on save.',
+        },
+        component: { type: 'string', description: 'Component carrying the shared<T> field, e.g. "MeshRenderer", "Skylight", "AnimationPlayer". Must already be present on the entity (this patches it).',
+        },
+        field: { type: 'string', description: 'The shared<T> field to bind, e.g. "materials", "equirect", "clips". Discover its type via gateway.describeComponent(component).',
+        },
+        assetType: { type: 'string', description: 'Producer-owned engine asset-union tag for allocSharedRef. For ParticleEffectPlayer.effect and every other shared<T> field, read the field token with gateway.describeComponent(component), then query gateway.assetCatalog({ compatibleWith: assetType }) for candidate GUIDs.',
+        },
+        guids: { type: 'array', items: { type: 'string' }, description: 'Catalogued asset GUID(s) from the producer-compatible asset query. For an array<shared<T>> field, one GUID per slot (unless `slot` is given). For a scalar shared<T> field, a single-element array.',
+        },
+        slot: { type: 'number', description: 'For an array<shared<T>> field, write only this slot index (leaving other slots intact). Omit to write the whole array from `guids`.',
+        },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$', description: 'Caller-minted correlation id for this accepted/running/terminal OperationRun. Use getOperationRun(), waitOperationRun(), or subscribeOperationRun() with the same id.',
+        },
       },
       required: ['entity', 'component', 'field', 'assetType', 'guids', 'requestId'],
     },
@@ -1633,7 +1784,8 @@ const builtinOps: ReadonlyArray<{
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
@@ -1653,7 +1805,8 @@ const builtinOps: ReadonlyArray<{
           },
           required: ['guid', 'kind', 'name'],
         },
-        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
+        requestId: { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
+        },
       },
       required: ['entity', 'asset', 'requestId'],
     },
@@ -1661,7 +1814,8 @@ const builtinOps: ReadonlyArray<{
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,
@@ -1679,10 +1833,14 @@ const builtinOps: ReadonlyArray<{
     argsSchema: {
       type: 'object',
       properties: {
-        entity: { type: 'number', description: 'Entity handle carrying AnimationPlayer in the active edit world. The first preview write snapshots the runtimeFields; leaving the selection / saving / playing restores the authored values.' },
-        playing: { type: 'boolean', description: 'true resumes playback (paused=false); false pauses. At least one of playing/speed/phase is required per dispatch.' },
-        speed: { type: 'number', minimum: 0, maximum: 10, description: 'Playback speed multiplier written to the primary clip slot (transport clipIndex). 0 freezes the slot.' },
-        phase: { type: 'number', minimum: 0, maximum: 1, description: 'Normalized scrub position 0..1, converted to seconds via the bound clip duration. Fails fast (ASSET_NOT_FOUND) when no clip is bound to the primary slot.' },
+        entity: { type: 'number', description: 'Entity handle carrying AnimationPlayer in the active edit world. The first preview write snapshots the runtimeFields; leaving the selection / saving / playing restores the authored values.',
+        },
+        playing: { type: 'boolean', description: 'true resumes playback (paused=false); false pauses. At least one of playing/speed/phase is required per dispatch.',
+        },
+        speed: { type: 'number', minimum: 0, maximum: 10, description: 'Playback speed multiplier written to the primary clip slot (transport clipIndex). 0 freezes the slot.',
+        },
+        phase: { type: 'number', minimum: 0, maximum: 1, description: 'Normalized scrub position 0..1, converted to seconds via the bound clip duration. Fails fast (ASSET_NOT_FOUND) when no clip is bound to the primary slot.',
+        },
       },
       required: ['entity'],
     },
@@ -1692,13 +1850,16 @@ const builtinOps: ReadonlyArray<{
   // ══ transient domain (3 consolidated) ═══════════════════════════════════
   { id: 'setHoverEntity', domain: 'transient',
     // id nullable: setHoverEntity({id:null}) clears the hover (store/hover.ts).
-    argsSchema: { type: 'object', properties: { id: { type: 'number', nullable: true } }, required: ['id'] },
+    argsSchema: { type: 'object', properties: { id: { type: 'number', nullable: true } }, required: ['id'],
+    },
     title: 'Set Hover Entity',
   },
   { id: 'setFieldPreview', domain: 'transient',
     // id nullable + key/value optional: setFieldPreview({id:null}) clears the
     // preview (store/field-preview.ts).
-    argsSchema: { type: 'object', properties: { id: { type: 'number', nullable: true }, key: { type: 'string' }, value: { type: 'number' } } },
+    argsSchema: { type: 'object', properties: { id: { type: 'number', nullable: true }, key: { type: 'string' }, value: { type: 'number' },
+      },
+    },
     title: 'Set Field Preview',
   },
   { id: 'setAssetSelection', domain: 'session',
@@ -1799,8 +1960,10 @@ const builtinOps: ReadonlyArray<{
           pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
           description: 'Caller-minted correlation id for the accepted/running/terminal project validation run.',
         },
-        maxBytes: { type: 'number', minimum: 0, description: 'Optional producer validator build-byte budget override.' },
-        maxEntities: { type: 'number', minimum: 0, description: 'Optional producer validator entity budget override.' },
+        maxBytes: { type: 'number', minimum: 0, description: 'Optional producer validator build-byte budget override.',
+        },
+        maxEntities: { type: 'number', minimum: 0, description: 'Optional producer validator entity budget override.',
+        },
         retryOfRequestId: {
           type: 'string', minLength: 1, maxLength: 128,
           pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
@@ -1813,7 +1976,8 @@ const builtinOps: ReadonlyArray<{
     operationRun: {
       acceptedStatuses: ['accepted', 'running'],
       terminalStatuses: ['succeeded', 'failed'],
-      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun' },
+      read: { get: 'getOperationRun', wait: 'waitOperationRun', subscribe: 'subscribeOperationRun',
+      },
       retry: { requiresNewRequestId: true },
       retention: { kind: 'terminal-only', maxTerminalRuns: 64 },
       cancellable: false,

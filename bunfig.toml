@@ -1,0 +1,5 @@
+# The standalone application consumes the root Editor facade via file:../...
+# Hoisted linking keeps that dependency on the live checkout instead of copying
+# the source-export monorepo into the isolated store (including a second runtime).
+[install]
+linker = "hoisted"

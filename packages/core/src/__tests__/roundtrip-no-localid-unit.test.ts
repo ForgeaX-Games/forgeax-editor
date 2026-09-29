@@ -59,13 +59,12 @@ function localId(n: number): LocalEntityId {
 function buildSceneAsset(entities: Array<{ name: string; pos: { x: number; y: number; z: number } }>) {
   return {
     kind: 'scene' as const,
-    entities: entities.map((e, i): SceneEntity => ({
-      localId: localId(i),
+    entities: Object.fromEntries(entities.map((e, i) => [`entity-${i}`, {
       components: {
         Transform: { pos: [e.pos.x, e.pos.y, e.pos.z], scale: [1, 1, 1] },
         Name: { value: e.name },
       },
-    })),
+    } satisfies SceneEntity])),
   };
 }
 function collectNames(world: World, root: EntityHandle): string[] {
@@ -137,7 +136,7 @@ describe('w27 — AC-03 round-trip no-localId (unit)', () => {
     }
   });
 
-  it('(c) localId appears only in the on-disk scene asset, not in editor runtime', () => {
+  it('(c) persistent scene keys replace numeric localIds', () => {
     const registry = makeRegistry();
     const worldA = createCoreTestWorld();
     const asset = buildSceneAsset([{ name: 'Node', pos: { x: 0, y: 0, z: 0 } }]);
@@ -156,7 +155,8 @@ describe('w27 — AC-03 round-trip no-localId (unit)', () => {
     const pack = serializeSceneAssetToPack(savedAsset.value, worldA.components.entries(), sceneGuid);
     expect(pack.ok).toBe(true);
     if (!pack.ok) return;
-    expect(savedAsset.value.entities.every((e) => e.localId !== undefined)).toBe(true);
+    expect(Object.keys(savedAsset.value.entities).length).toBeGreaterThan(0);
+    expect(Object.values(savedAsset.value.entities).every((e) => !("localId" in e))).toBe(true);
 
     // The editor session, by contrast, exposes no localId field — its identity is
     // the engine handle read off the world.

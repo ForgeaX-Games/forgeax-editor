@@ -6,8 +6,9 @@ const source = readFileSync(resolve(import.meta.dir, '../../vite.config.ts'), 'u
 const presetSource = readFileSync(resolve(import.meta.dir, '../../../../scripts/vite/engine-vite-preset.ts'), 'utf8');
 
 describe('Play catalog producer registration', () => {
-  test('registers the default target profile importer', () => {
-    expect(presetSource).toContain('targetProfileImporter()');
+  test('does not load the retired template importer', () => {
+    expect(presetSource).not.toContain('targetProfileImporter');
+    expect(presetSource).not.toContain('templates/game-default/assets/plugins');
   });
 
   test('binds one exact game realm and has no per-game projection escape hatch', () => {

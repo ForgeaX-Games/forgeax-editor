@@ -11,6 +11,6 @@ describe('Content Browser subscription red path', () => {
     expect(contentBrowser).not.toContain('subscribeDocVersion');
     expect(contentBrowser).not.toContain('useDocVersion');
     expect(snapshotHook).toContain("panelBridge.on('assetsChanged'");
-    expect(snapshotHook).toContain('model.refresh(hint)');
+    expect(snapshotHook).toContain("model.refresh(hint === 'scene-document-changed' ? 'pack-changed' : hint)");
   });
 });

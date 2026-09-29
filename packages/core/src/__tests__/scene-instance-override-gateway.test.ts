@@ -17,7 +17,6 @@ void AnimationPlayer;
 
 function makeSceneAsset(): SceneAsset {
   const entity: SceneEntity = {
-    localId: 0 as SceneEntity['localId'],
     components: {
       Name: { value: 'Mounted Box' },
       Transform: { pos: [1, 2, 3], scale: [1, 1, 1] },
@@ -27,16 +26,13 @@ function makeSceneAsset(): SceneAsset {
       },
     },
   };
-  return { kind: 'scene', entities: [entity] };
+  return { kind: 'scene', entities: {"entity-0": entity} };
 }
 
 function makeUnnamedSceneAsset(): SceneAsset {
   return {
     kind: 'scene',
-    entities: [{
-      localId: 0 as SceneEntity['localId'],
-      components: { Transform: { pos: [0, 0, 0], scale: [1, 1, 1] } },
-    }],
+    entities: {"entity-0": {components: { Transform: { pos: [0, 0, 0], scale: [1, 1, 1] } }}},
   };
 }
 

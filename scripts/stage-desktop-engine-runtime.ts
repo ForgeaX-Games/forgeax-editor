@@ -1,17 +1,20 @@
 #!/usr/bin/env bun
 
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync,
+} from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import ts from 'typescript';
 
 const EDITOR_ROOT = resolve(import.meta.dir, '..');
 const ENGINE_ROOT = join(EDITOR_ROOT, 'packages/engine');
 const PLAY_ROOT = join(EDITOR_ROOT, 'packages/play-runtime');
-const EXCLUDES = new Set(['.git', '.forgeax-harness', 'node_modules', 'target', '__tests__', 'test', 'tests', '.vite', '.forgeax', 'host-games', 'shared-assets', 'engine-assets']);
+const EXCLUDES = new Set(['.git', '.forgeax-harness', 'node_modules', 'target', '__tests__', 'test', 'tests', '.vite', '.forgeax', 'host-games', 'shared-assets', 'engine-assets',
+]);
 const NATIVE_PACKAGE = /^(?:esbuild|rollup|sharp|fsevents)$|^@(?:esbuild|rollup|img)\//i;
 const NATIVE_FILE = /\.(?:dll|dylib|exe|node|so)(?:\.[0-9]+)*$|(?:aarch64-apple-darwin|x86_64-apple-darwin|x86_64-pc-windows-msvc)/i;
-const ENGINE_WASM_PACKAGES = new Set(['@forgeax/engine-wgpu-wasm', '@forgeax/engine-fbx', '@forgeax/engine-codec']);
+const ENGINE_WASM_PACKAGES = new Set(['@forgeax/engine-wgpu-wasm', '@forgeax/engine-fbx', '@forgeax/engine-codec',
+]);
 const ALWAYS_REBUILD_WORKSPACE_RUNTIME = new Set(['@forgeax/engine-vite-plugin-pack']);
 
 /** Editor-owned Vite config helpers that must travel with the packaged Engine root. */
@@ -25,6 +28,26 @@ export const PACKAGED_VITE_HELPERS = [
     source: 'scripts/vite/ddc-root-policy.ts',
     importPath: '../../scripts/vite/ddc-root-policy.ts',
     output: 'ddc-root-policy.mjs',
+  },
+  {
+    source: 'scripts/vite/vite-fs-allow.ts',
+    importPath: '../../scripts/vite/vite-fs-allow.ts',
+    output: 'vite-fs-allow.mjs',
+  },
+  {
+    source: 'packages/game-plugins/src/index.ts',
+    importPath: '../game-plugins/src/index.ts',
+    output: 'editor-game-plugins.mjs',
+  },
+  {
+    source: 'packages/core/src/asset-roots.ts',
+    importPath: '../core/src/asset-roots.ts',
+    output: 'editor-asset-roots.mjs',
+  },
+  {
+    source: 'packages/play-runtime/src/runtime-scope-controller.ts',
+    importPath: './src/runtime-scope-controller.ts',
+    output: 'src/runtime-scope-controller.mjs',
   },
 ] as const;
 
@@ -87,10 +110,23 @@ function indexWorkspaces(): Map<string, string> {
     const manifest = join(directory, 'package.json');
     if (existsSync(manifest)) {
       const name = readJson(manifest).name;
-      if (name && (!result.has(name) || relative(EDITOR_ROOT, directory).split(/[\\/]/).length < relative(EDITOR_ROOT, result.get(name)!).split(/[\\/]/).length)) result.set(name, directory);
+      if (
+        name &&
+        (!result.has(name) ||
+          relative(EDITOR_ROOT, directory).split(/[\\/]/).length <
+            relative(EDITOR_ROOT, result.get(name)!).split(/[\\/]/).length)
+      )
+        result.set(name, directory);
     }
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      if ((!entry.isDirectory() && !entry.isSymbolicLink()) || EXCLUDES.has(entry.name) || entry.name === 'src' || entry.name === 'dist' || entry.name === 'pkg') continue;
+      if (
+        (!entry.isDirectory() && !entry.isSymbolicLink()) ||
+        EXCLUDES.has(entry.name) ||
+        entry.name === 'src' ||
+        entry.name === 'dist' ||
+        entry.name === 'pkg'
+      )
+        continue;
       walk(join(directory, entry.name), depth + 1);
     }
   };
@@ -98,9 +134,39 @@ function indexWorkspaces(): Map<string, string> {
   return result;
 }
 
-function resolveDependency(parent: string, name: string, fallbacks: readonly string[], version?: string): string | null {
+function templateDependencyRequirements(): Map<string, string[]> {
+  const templates = join(ENGINE_ROOT, 'templates');
+  const requirements = new Map<string, string[]>();
+  for (const entry of readdirSync(templates, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !existsSync(join(templates, entry.name, 'forge.json'))) continue;
+    const manifest = readJson(join(templates, entry.name, 'package.json'));
+    for (const section of [manifest.dependencies, manifest.devDependencies]) {
+      for (const [name, spec] of Object.entries(section ?? {})) {
+        if (typeof spec !== 'string') fail(`template dependency has an invalid range: ${entry.name}/${name}`);
+        requirements.set(name, [...new Set([...(requirements.get(name) ?? []), spec])]);
+      }
+    }
+  }
+  return new Map([...requirements.entries()].sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function resolveDependency(
+  parent: string,
+  name: string,
+  fallbacks: readonly string[],
+  ranges: readonly string[] = [],
+): string | null {
+  const matches = (candidate: string): boolean => {
+    if (ranges.length === 0) return true;
+    const version = readJson(join(candidate, 'package.json')).version;
+    return !!version && ranges.every((range) => Bun.semver.satisfies(version, range));
+  };
   const candidates = [join(parent, 'node_modules', name)];
-  for (let ancestor = dirname(parent); ancestor !== dirname(ancestor); ancestor = dirname(ancestor)) {
+  for (
+    let ancestor = dirname(parent);
+    ancestor !== dirname(ancestor);
+    ancestor = dirname(ancestor)
+  ) {
     if (basename(ancestor) === 'node_modules') candidates.push(join(ancestor, name));
     if (ancestor === EDITOR_ROOT) break;
   }
@@ -108,7 +174,7 @@ function resolveDependency(parent: string, name: string, fallbacks: readonly str
   for (const candidate of candidates) {
     try {
       const resolved = realpathSync(candidate);
-      if (existsSync(join(resolved, 'package.json')) && (!version || readJson(join(resolved, 'package.json')).version === version)) return resolved;
+      if (existsSync(join(resolved, 'package.json')) && matches(resolved)) return resolved;
     } catch {
       // Continue through the declared install roots.
     }
@@ -117,7 +183,7 @@ function resolveDependency(parent: string, name: string, fallbacks: readonly str
   if (existsSync(store)) {
     for (const entry of readdirSync(store)) {
       const candidate = join(store, entry, 'node_modules', name);
-      if (existsSync(join(candidate, 'package.json')) && (!version || readJson(join(candidate, 'package.json')).version === version)) return candidate;
+      if (existsSync(join(candidate, 'package.json')) && matches(candidate)) return candidate;
     }
   }
   return null;
@@ -142,38 +208,54 @@ function buildWorkspaceRuntime(source: string, manifest: PackageJson, force = fa
   if (!main?.startsWith('./dist/')) return;
   const output = join(source, main);
   if (existsSync(output) && !force) return;
-  if (!manifest.scripts?.build) fail(`runtime workspace has no build command: ${manifest.name ?? source}`);
+  if (!manifest.scripts?.build)
+    fail(`runtime workspace has no build command: ${manifest.name ?? source}`);
   run(['run', 'build'], source);
-  if (!existsSync(output)) fail(`runtime workspace build did not create ${main}: ${manifest.name ?? source}`);
+  if (!existsSync(output))
+    fail(`runtime workspace build did not create ${main}: ${manifest.name ?? source}`);
 }
 
 export function assertPackRebindFailureContract(source: string): void {
   if (!source.includes('throw failedRebindFailure')) {
-    fail('Pack runtime does not propagate a failed candidate rebind after restoring the committed binding');
+    fail(
+      'Pack runtime does not propagate a failed candidate rebind after restoring the committed binding',
+    );
   }
 }
 
 function stageDependencyClosure(output: string, scope: 'common' | 'target'): void {
   const destination = join(output, 'engine/node_modules');
   const workspaces = indexWorkspaces();
-  const fallbackRoots = [join(PLAY_ROOT, 'node_modules'), join(EDITOR_ROOT, 'node_modules'), join(ENGINE_ROOT, 'node_modules')];
+  const fallbackRoots = [
+    join(PLAY_ROOT, 'node_modules'),
+    join(EDITOR_ROOT, 'node_modules'),
+    join(ENGINE_ROOT, 'node_modules'),
+  ];
   const play = readJson(join(PLAY_ROOT, 'package.json'));
+  const templateDependencies = templateDependencyRequirements();
   const visiting = new Set<string>();
   const seen = new Set<string>();
-  const visit = (name: string, parent: string, required: boolean): void => {
+  const visit = (name: string, parent: string, required: boolean, ranges: readonly string[] = []): void => {
     if (seen.has(name)) return;
-    const source = workspaces.get(name) ?? resolveDependency(parent, name, fallbackRoots);
+    const requiredRanges = templateDependencies.get(name) ?? ranges;
+    const source = workspaces.get(name) ?? resolveDependency(parent, name, fallbackRoots, requiredRanges);
     if (!source) {
-      if (required) fail(`runtime dependency is not installed: ${name} (from ${parent})`);
+      if (required) {
+        const constraint = requiredRanges.length ? ` satisfying ${requiredRanges.join(' and ')}` : '';
+        fail(`runtime dependency is not installed${constraint}: ${name} (from ${parent})`);
+      }
       return;
     }
     if (visiting.has(name)) return;
     visiting.add(name);
     const manifest = readJson(join(source, 'package.json'));
     for (const child of Object.keys(manifest.dependencies ?? {})) visit(child, source, true);
-    for (const child of Object.keys(manifest.optionalDependencies ?? {})) visit(child, source, false);
-    for (const child of Object.keys(manifest.peerDependencies ?? {})) if (workspaces.has(child)) visit(child, source, true);
-    for (const child of Object.keys(manifest.devDependencies ?? {})) if (workspaces.has(child)) visit(child, source, true);
+    for (const child of Object.keys(manifest.optionalDependencies ?? {}))
+      visit(child, source, false);
+    for (const child of Object.keys(manifest.peerDependencies ?? {}))
+      if (workspaces.has(child)) visit(child, source, true);
+    for (const child of Object.keys(manifest.devDependencies ?? {}))
+      if (workspaces.has(child)) visit(child, source, true);
     const native = isTargetNativePackage(name, source);
     if ((scope === 'target') === native) {
       if (!native && workspaces.get(name) === source) {
@@ -186,21 +268,35 @@ function stageDependencyClosure(output: string, scope: 'common' | 'target'): voi
     visiting.delete(name);
     seen.add(name);
   };
+  // Templates are copied into the product and Server derives project installs
+  // from their manifests. Their declared ranges apply to every traversal, so a
+  // transitive workspace dependency cannot silently select a different tool.
+  for (const [name, ranges] of templateDependencies) visit(name, ENGINE_ROOT, true, ranges);
   visit('vite', PLAY_ROOT, true);
   visit('typescript', PLAY_ROOT, true);
   for (const name of Object.keys(play.dependencies ?? {})) visit(name, PLAY_ROOT, true);
-  if (!existsSync(destination) || readdirSync(destination).length === 0) fail(`${scope} dependency closure is empty`);
+  if (!existsSync(destination) || readdirSync(destination).length === 0)
+    fail(`${scope} dependency closure is empty`);
 }
 
 export function rewritePackagedViteConfig(source: string): string {
-  const sourceFile = ts.createSourceFile('vite.config.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const sourceFile = ts.createSourceFile(
+    'vite.config.ts',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
   const moduleSpecifiers: Array<{ start: number; end: number; value: string }> = [];
   const visit = (node: ts.Node): void => {
-    const moduleSpecifier = ts.isImportDeclaration(node) || ts.isExportDeclaration(node)
-      ? node.moduleSpecifier
-      : ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments.length === 1
-        ? node.arguments[0]
-        : undefined;
+    const moduleSpecifier =
+      ts.isImportDeclaration(node) || ts.isExportDeclaration(node)
+        ? node.moduleSpecifier
+        : ts.isCallExpression(node) &&
+            node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+            node.arguments.length === 1
+          ? node.arguments[0]
+          : undefined;
     if (moduleSpecifier && ts.isStringLiteralLike(moduleSpecifier)) {
       moduleSpecifiers.push({
         start: moduleSpecifier.getStart(sourceFile) + 1,
@@ -223,12 +319,21 @@ export function rewritePackagedViteConfig(source: string): string {
   const unresolved = new Bun.Transpiler({ loader: 'ts' })
     .scanImports(rewritten)
     .find(({ path }) => path.startsWith('../../scripts/vite/') && path.endsWith('.ts'));
-  if (unresolved) fail(`packaged Vite config retains an Editor-private helper import: ${unresolved.path}`);
+  if (unresolved)
+    fail(`packaged Vite config retains an Editor-private helper import: ${unresolved.path}`);
   return rewritten
-    .replace(/from\s+['"]\.\.\/core\/src\/asset-roots\.ts['"]/g, "from '@forgeax/editor-core/asset-roots'")
-    .replace("resolve(here, '..', '..', 'forgeax-editor-assets')", "resolve(here, 'forgeax-editor-assets')")
-    .replace("resolve(here, '..', 'engine', 'forgeax-engine-assets')", "resolve(here, 'forgeax-engine-assets')")
-    .replace("here,\n  '..',\n  'engine',\n  'forgeax-engine-assets',", "here,\n  'forgeax-engine-assets',");
+    .replace(
+      "resolve(here, '..', '..', 'forgeax-editor-assets')",
+      "resolve(here, 'forgeax-editor-assets')",
+    )
+    .replace(
+      "resolve(here, '..', 'engine', 'forgeax-engine-assets')",
+      "resolve(here, 'forgeax-engine-assets')",
+    )
+    .replace(
+      "here,\n  '..',\n  'engine',\n  'forgeax-engine-assets',",
+      "here,\n  'forgeax-engine-assets',",
+    );
 }
 
 export function stageEditorDesktopEngineRuntime(output: string, scope: 'common' | 'target'): void {
@@ -238,27 +343,47 @@ export function stageEditorDesktopEngineRuntime(output: string, scope: 'common' 
   if (scope === 'common') {
     const engine = join(destination, 'engine');
     mkdirSync(engine, { recursive: true });
+    copyTree(join(PLAY_ROOT, 'src'), join(engine, 'src'));
     for (const helper of PACKAGED_VITE_HELPERS) {
-      run(['build', join(EDITOR_ROOT, helper.source), '--target=node', '--packages=external', '--outfile', join(engine, helper.output)]);
+      mkdirSync(dirname(join(engine, helper.output)), { recursive: true });
+      run([
+        'build',
+        join(EDITOR_ROOT, helper.source),
+        '--target=node',
+        '--packages=external',
+        '--outfile',
+        join(engine, helper.output),
+      ]);
     }
     for (const file of ['index.html', 'package.json', 'tsconfig.json', 'rhi-debug-config.ts']) {
       const source = join(PLAY_ROOT, file);
-      if (existsSync(source)) cpSync(source, join(engine, file), { force: false, errorOnExist: true });
+      if (existsSync(source))
+        cpSync(source, join(engine, file), { force: false, errorOnExist: true });
     }
-    writeFileSync(join(engine, 'vite.config.ts'), rewritePackagedViteConfig(readFileSync(join(PLAY_ROOT, 'vite.config.ts'), 'utf8')));
-    copyTree(join(PLAY_ROOT, 'src'), join(engine, 'src'));
-    if (existsSync(join(PLAY_ROOT, 'public'))) copyTree(join(PLAY_ROOT, 'public'), join(engine, 'public'));
+    writeFileSync(
+      join(engine, 'vite.config.ts'),
+      rewritePackagedViteConfig(readFileSync(join(PLAY_ROOT, 'vite.config.ts'), 'utf8')),
+    );
+    if (existsSync(join(PLAY_ROOT, 'public')))
+      copyTree(join(PLAY_ROOT, 'public'), join(engine, 'public'));
     copyTree(join(EDITOR_ROOT, 'forgeax-editor-assets'), join(engine, 'forgeax-editor-assets'));
+    // Play boots before a game is bound; its bootstrap Pack root is this font.
+    copyTree(join(ENGINE_ROOT, 'forgeax-engine-assets/dejavu-fonts'), join(engine, 'forgeax-engine-assets/dejavu-fonts'));
     const catalog = join(destination, 'editor/apps/standalone/template-catalog.ts');
     mkdirSync(dirname(catalog), { recursive: true });
-    cpSync(join(EDITOR_ROOT, 'apps/standalone/template-catalog.ts'), catalog, { force: false, errorOnExist: true });
+    cpSync(join(EDITOR_ROOT, 'apps/standalone/template-catalog.ts'), catalog, {
+      force: false,
+      errorOnExist: true,
+    });
   }
   stageDependencyClosure(destination, scope);
   if (scope === 'common') {
-    assertPackRebindFailureContract(readFileSync(
-      join(destination, 'engine/node_modules/@forgeax/engine-vite-plugin-pack/dist/index.mjs'),
-      'utf8',
-    ));
+    assertPackRebindFailureContract(
+      readFileSync(
+        join(destination, 'engine/node_modules/@forgeax/engine-vite-plugin-pack/dist/index.mjs'),
+        'utf8',
+      ),
+    );
   }
   if (scope === 'common') normalizePortableFileModes(destination);
 }
@@ -269,5 +394,11 @@ if (import.meta.main) {
   if (!output) fail('--output is required');
   if (scope !== 'common' && scope !== 'target') fail('--scope must be common or target');
   stageEditorDesktopEngineRuntime(output, scope);
-  console.log(JSON.stringify({ code: 'EDITOR_DESKTOP_ENGINE_RUNTIME_STAGED', scope, output: resolve(output) }));
+  console.log(
+    JSON.stringify({
+      code: 'EDITOR_DESKTOP_ENGINE_RUNTIME_STAGED',
+      scope,
+      output: resolve(output),
+    }),
+  );
 }

@@ -1,6 +1,6 @@
 // selection-stencil-outline — editorWorld stencil shell chrome.
 
-import { ChildOf, Transform } from '@forgeax/engine-scene';
+import { ChildOf, Transform, GlobalTransform } from '@forgeax/engine-scene';
 import { MeshFilter, MeshRenderer, Materials } from '@forgeax/engine-render';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { Handle } from '@forgeax/engine-types';
@@ -33,6 +33,8 @@ export type SelectionStencilOutlineDeps = {
   readonly sceneWorld: () => World | undefined;
   readonly editorEngine: EngineFacade;
   readonly getSelectionList: () => ReadonlySet<EntityHandle>;
+  /** Hide-command roots only — reconcile/despawn when eye hides without selection; must not spawn on show. */
+  readonly getVisibilityAffectRoots?: () => readonly EntityHandle[];
   readonly getRenderableHandles: (scene: World) => readonly EntityHandle[];
   readonly isAuxVisible: () => boolean;
   readonly isEditMode: () => boolean;
@@ -123,7 +125,7 @@ export function createSelectionStencilOutlinePool(
   function readTarget(scene: World, entity: EntityHandle): RenderTarget | null {
     const meshResult = scene.get(entity, MeshFilter);
     const rendererResult = scene.get(entity, MeshRenderer);
-    const transformResult = scene.get(entity, Transform);
+    const transformResult = scene.get(entity, GlobalTransform);
     if (!meshResult.ok || !rendererResult.ok || !transformResult.ok) return null;
     const sourceMesh = (meshResult.value as { assetHandle: Handle<'MeshAsset', 'shared'> }).assetHandle;
     const mesh = resolveEditorMesh(scene, sourceMesh);
@@ -151,15 +153,21 @@ export function createSelectionStencilOutlinePool(
     return false;
   }
 
+  function reconcileRoots(): EntityHandle[] {
+    const selected = [...deps.getSelectionList()];
+    const affect = deps.getVisibilityAffectRoots?.() ?? [];
+    if (selected.length === 0 && affect.length === 0) return [];
+    return [...new Set([...selected, ...affect])];
+  }
+
   function targets(scene: World): RenderTarget[] {
-    const selected = deps.getSelectionList();
-    if (selected.size === 0) return [];
+    const roots = reconcileRoots();
+    if (roots.length === 0) return [];
     // worldRenderableHandles intentionally includes hidden entities; the
     // outline is chrome for what is on screen, so a hidden selection must
     // not keep drawing ghosts (the scene mesh itself is already skipped by
     // the engine extract).
     const visibility = resolveVisibility(scene);
-    const roots = [...selected];
     return deps.getRenderableHandles(scene)
       .filter((entity) => roots.some((root) => isDescendantOf(scene, entity, root)))
       .filter((entity) => !isEntEffectivelyHidden(scene, entity, visibility))
@@ -167,9 +175,11 @@ export function createSelectionStencilOutlinePool(
       .filter((target): target is RenderTarget => target !== null);
   }
 
-  function despawn(pair: GhostPair): void {
-    try { deps.editorEngine.despawn(pair.writer); } catch { /* stale chrome */ }
-    try { deps.editorEngine.despawn(pair.shell); } catch { /* stale chrome */ }
+  function despawnPair(pair: GhostPair): boolean {
+    let ok = true;
+    try { deps.editorEngine.despawn(pair.writer); } catch { ok = false; }
+    try { deps.editorEngine.despawn(pair.shell); } catch { ok = false; }
+    return ok;
   }
 
   function syncTransform(entity: EntityHandle, world: ArrayLike<number>, expansion: number): void {
@@ -187,7 +197,7 @@ export function createSelectionStencilOutlinePool(
   }
 
   function clear(): void {
-    for (const pair of ghosts.values()) despawn(pair);
+    for (const pair of ghosts.values()) despawnPair(pair);
     ghosts.clear();
   }
 
@@ -219,10 +229,15 @@ export function createSelectionStencilOutlinePool(
     }
     const next = new Map<number, RenderTarget>();
     for (const target of targets(scene)) next.set(target.entity as number, target);
-    for (const [key, pair] of ghosts) {
-      if (!next.has(key)) {
-        despawn(pair);
-        ghosts.delete(key);
+    if (next.size === 0 && ghosts.size > 0) {
+      for (const pair of ghosts.values()) despawnPair(pair);
+      ghosts.clear();
+    } else {
+      for (const [key, pair] of ghosts) {
+        if (!next.has(key)) {
+          despawnPair(pair);
+          ghosts.delete(key);
+        }
       }
     }
     const shellMaterial = ensureOutlineMaterial();

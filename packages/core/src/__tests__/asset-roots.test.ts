@@ -15,10 +15,17 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { resolve, join } from 'node:path';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
-import { resolveGameAssetRoots, resolveGameCatalogRoots, readDeclaredRoots, SHARED_ROOT_PREFIX, expandPackRootsExcludingShaderSources } from '../asset-roots';
+import {
+  createSourceIdentityFor,
+  resolveGameAssetRoots,
+  resolveGameCatalogRoots,
+  readDeclaredRoots,
+  SHARED_ROOT_PREFIX,
+  expandPackRootsExcludingShaderSources,
+} from '../asset-roots';
 
 let tmpRoot: string;
 let gameDir: string;
@@ -99,6 +106,23 @@ describe('resolveGameAssetRoots — @shared alias classification', () => {
       implicitSharedSubs: ['template-game-default'],
     });
     expect(roots2.filter((r) => r.sub === 'template-game-default').length).toBe(1);
+  });
+
+  it('projects symlinked shared paths and local paths to stable identities', () => {
+    writeRoots(['assets', '@shared/characters']);
+    const identityFor = createSourceIdentityFor({ gameDirAbs: gameDir, sharedBase });
+    const sharedPath = join(sharedBase, 'characters', 'Fox.glb');
+    writeFileSync(sharedPath, 'fixture');
+    const farmPath = join(tmpRoot, 'farm', 'shared-assets');
+    mkdirSync(farmPath, { recursive: true });
+    const farmLink = join(farmPath, 'characters');
+    // A symlink is intentionally used here: the real Play host exposes the
+    // shared root through the same kind of Vite farm.
+    symlinkSync(join(sharedBase, 'characters'), farmLink, 'dir');
+
+    expect(identityFor(sharedPath)).toBe('@shared/characters/Fox.glb');
+    expect(identityFor(join(farmLink, 'Fox.glb'))).toBe('@shared/characters/Fox.glb');
+    expect(identityFor(join(gameDir, 'assets', 'scene.pack.json'))).toBe('assets/scene.pack.json');
   });
 });
 

@@ -21,8 +21,8 @@
 // step, no __import round-trip.
 
 import { quat } from '@forgeax/engine-math';
-import { Camera, perspective, TONEMAP_REINHARD_EXTENDED, ANTIALIAS_FXAA, SceneInstance } from '@forgeax/engine-render';
-import { Transform } from '@forgeax/engine-scene';
+import { Camera, perspective, TONEMAP_REINHARD_EXTENDED, ANTIALIAS_FXAA } from '@forgeax/engine-render';
+import { Transform, worldGetSceneInstanceState, sceneEntityAddressKey } from '@forgeax/engine-scene';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { defineSystem, Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import {
@@ -47,7 +47,7 @@ export interface SampleRuntimeOptions {
   readonly defaultScene?: SceneAsset;
 }
 
-interface PackNode { localId: number; components: Record<string, Record<string, unknown>> }
+interface PackNode { key: string; components: SceneAsset["entities"][string]["components"] }
 
 const SAMPLE_PLAYER_ENTITY_KEY = 'sample-player-entity';
 const SAMPLE_PLAYER_INPUT_SYSTEM_NAME = 'sample-player-input';
@@ -83,13 +83,13 @@ const samplePlayerInput = defineSystem({
   },
 });
 
-// Load the authored scene the canonical way -> return the localId->Entity mapping
+// Load the authored scene the canonical way -> return the entity-key-to-Entity mapping
 // (so the caller can find the Player) + the nodes. Returns null on any failure
 // (caller falls back to no player, camera-only). Only used when the host did NOT
 // pre-instantiate the scene (standalone module path).
 async function loadScene(
   ctx: Ctx,
-): Promise<{ mapping: ReadonlyMap<number, EntityHandle>; nodes: PackNode[] } | null> {
+): Promise<{ mapping: ReadonlyMap<string, EntityHandle>; nodes: PackNode[] } | null> {
   const { world, assets } = ctx;
   if (!assets) return null;
   const sceneGuid = AssetGuid.parse(SCENE_GUID);
@@ -98,16 +98,18 @@ async function loadScene(
   if (!loadRes.ok) { console.error('[game] scene loadByGuid failed:', loadRes.error); return null; }
   const sceneHandle = world.allocSharedRef('SceneAsset', loadRes.value);
   const instRes = assets.instantiate<SceneAsset>(sceneHandle, world);
-  if (!instRes.ok) { console.error('[game] scene instantiate failed:', (instRes.error as { code?: string })?.code); return null; }
-  const root = instRes.value;
-  const sceneInst = world.get(root, SceneInstance);
-  if (!sceneInst.ok) { console.error('[game] SceneInstance lookup failed:', sceneInst.error); return null; }
-  const mappingArr = sceneInst.value.mapping;
-  const nodes = loadRes.value.entities as unknown as PackNode[];
-  const mapping = new Map<number, EntityHandle>();
-  for (const n of nodes) {
-    const e = mappingArr[n.localId];
-    if (e !== undefined) mapping.set(n.localId, e as EntityHandle);
+  if (!instRes.ok) { console.error('[game] scene instantiate failed:', JSON.stringify(instRes.error)); return null; }
+  return sceneBinding(world, instRes.value, loadRes.value);
+}
+
+function sceneBinding(world: World, root: EntityHandle, scene: SceneAsset) {
+  const state = worldGetSceneInstanceState(world, root);
+  if (!state.ok) return null;
+  const nodes = Object.entries(scene.entities).map(([key, node]) => ({ key, components: node.components }));
+  const mapping = new Map<string, EntityHandle>();
+  for (const node of nodes) {
+    const entity = state.value.bindings.get(sceneEntityAddressKey(node.key));
+    if (entity !== undefined) mapping.set(node.key, entity);
   }
   return { mapping, nodes };
 }
@@ -132,7 +134,7 @@ export async function runSample(world: World, options: SampleRuntimeOptions = {}
   const aspect = options.aspect ?? 16 / 9;
 
   // ── load the authored scene (the SAME native asset ✎ Edit writes) ────────────
-  let loaded: { mapping: ReadonlyMap<number, EntityHandle>; nodes: PackNode[] } | null = null;
+  let loaded: { mapping: ReadonlyMap<string, EntityHandle>; nodes: PackNode[] } | null = null;
 
   // Asset-first host (editor ▶ Play / preview): the host resolves + instantiates
   // forge.json.defaultScene BEFORE bootstrap runs and hands us the synthetic root
@@ -140,23 +142,10 @@ export async function runSample(world: World, options: SampleRuntimeOptions = {}
   // that instance — re-instantiating here would load the scene TWICE (host copy +
   // our copy), duplicating the sun (render-system-multi-light) and, once a camera
   // is added, the camera. Recover { mapping, nodes } from the SceneInstance on the
-  // host root (localId->Entity) + the author-side entity list (carries Name).
+  // host root (entity-key-to-Entity) + the author-side entity list (carries Name).
   const hostRoot = options.defaultSceneRoot;
   if (hostRoot !== undefined && options.defaultScene !== undefined) {
-    const sceneInst = world.get(hostRoot, SceneInstance);
-    if (!sceneInst.ok) {
-      console.error('[game] SceneInstance lookup on host root failed:', sceneInst.error);
-    } else {
-      // mapping is a Uint32Array sized maxLocalId+1, indexed by localId; skip
-      // unspawned slots (ENTITY_NULL_RAW = 0xffffffff) and 0.
-      const mappingArr = sceneInst.value.mapping as unknown as { length: number; [i: number]: number };
-      const mapping = new Map<number, EntityHandle>();
-      for (let localId = 0; localId < mappingArr.length; localId++) {
-        const e = mappingArr[localId];
-        if (e !== undefined && e !== 0xffffffff && e !== 0) mapping.set(localId, e as EntityHandle);
-      }
-      loaded = { mapping, nodes: options.defaultScene.entities as unknown as PackNode[] };
-    }
+    loaded = sceneBinding(world, hostRoot, options.defaultScene);
   }
 
   // Fallback: no host-instantiated scene (standalone game module, or the host has
@@ -177,7 +166,7 @@ export async function runSample(world: World, options: SampleRuntimeOptions = {}
     if (playerNode) {
       const t = (playerNode.components.Transform ?? {}) as { pos?: number[] };
       initX = t.pos?.[0] ?? 0; initZ = t.pos?.[2] ?? 0;
-      player = loaded.mapping.get(playerNode.localId);
+      player = loaded.mapping.get(playerNode.key);
     }
   }
   if (player !== undefined) {
@@ -192,7 +181,7 @@ export async function runSample(world: World, options: SampleRuntimeOptions = {}
   const authoredCameraNode = loaded?.nodes.find((n) => n.components.Camera !== undefined);
   const authoredCamera = authoredCameraNode === undefined
     ? undefined
-    : loaded?.mapping.get(authoredCameraNode.localId);
+    : loaded?.mapping.get(authoredCameraNode.key);
   // The camera is spawned in code (same as templates/game-default): ▶ Play forks a
   // fresh play world whose only camera is this one when the scene has no authored
   // camera. clearColor = visible sky (the sample scene has no SkyboxBackground

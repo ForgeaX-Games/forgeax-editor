@@ -5,6 +5,7 @@
     {
       "guid": "7e43f472-4c4d-4ee3-9aa1-bc89e7402811",
       "kind": "material",
+      "execution": "cooked",
       "sourceKey": "arc-nova-sigil.wgsl",
       "payload": {
         "kind": "material",

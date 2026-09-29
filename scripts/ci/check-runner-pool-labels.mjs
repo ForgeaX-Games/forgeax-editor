@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Enforce explicit resource-pool labels on every self-hosted workflow job.
-// GitHub-hosted labels remain valid for cross-platform jobs such as nightly.
+// Enforce explicit resource-pool labels on every active workflow job. Ordinary
+// CI stays on self-hosted Linux; hosted native runners are disabled for daily
+// development and reserved for an explicitly low-frequency nightly lane.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -79,23 +80,81 @@ function hostedLabel(label) {
   return HOSTED_LABEL_PATTERN.test(label);
 }
 
+function hostedLabelsForClassification(classification) {
+  if (classification.kind === 'github-hosted') return classification.labels;
+  return classification.hostedLabels ?? [];
+}
+
+function isDisabledCondition(value) {
+  return /^(?:\$\{\{\s*)?false(?:\s*\}\})?\s*$/.test(value.trim());
+}
+
+function isDisabledJob(block) {
+  return block.split(/\r?\n/).some((line) => {
+    const match = line.match(/^\s*if:\s*(.*)$/);
+    return match ? isDisabledCondition(match[1]) : false;
+  });
+}
+
+function isNightlyWorkflow(file) {
+  return /nightly/i.test(file);
+}
+
 function selectorError(file, line, job, message) {
   return `${file}:${line}: job ${job}: ${message}`;
+}
+
+function jobBlock(lines, lineNumber) {
+  const selectorIndex = lineNumber - 1;
+  let start = selectorIndex;
+  while (start >= 0 && !/^ {2}[A-Za-z0-9_.-]+:\s*$/.test(withoutComment(lines[start]))) {
+    start -= 1;
+  }
+  let end = lines.length;
+  for (let index = selectorIndex + 1; index < lines.length; index += 1) {
+    if (/^ {2}[A-Za-z0-9_.-]+:\s*$/.test(withoutComment(lines[index]))) {
+      end = index;
+      break;
+    }
+  }
+  return lines.slice(start, end).map(withoutComment).join('\n');
 }
 
 export function classifyRunnerSelector(value, runnerValues = []) {
   const trimmed = value.trim();
 
   if (/fromJSON\(\s*matrix\.runner\s*\)/.test(trimmed)) {
-    const labels = runnerValues.flatMap(parseRunnerValue);
-    if (labels.length === 0) {
+    const entries = runnerValues.map(parseRunnerValue).filter((entry) => entry.length > 0);
+    const labels = entries.flat();
+    if (entries.length === 0) {
       return { kind: 'error', message: 'dynamic matrix.runner has no statically declared values' };
     }
-    if (labels.includes(SELF_HOSTED_LABEL)) {
-      return {
-        kind: 'error',
-        message: 'dynamic self-hosted runner selection must declare standard or heavy explicitly',
-      };
+    const selfHostedEntries = entries.filter((entry) => entry.includes(SELF_HOSTED_LABEL));
+    const hostedEntries = entries.filter((entry) => !entry.includes(SELF_HOSTED_LABEL));
+    if (selfHostedEntries.length > 0) {
+      const pools = [];
+      for (const entry of selfHostedEntries) {
+        const entryPools = entry.filter((label) => POOL_LABELS.includes(label));
+        if (entryPools.length !== 1) {
+          return {
+            kind: 'error',
+            message:
+              'dynamic self-hosted runner selection must declare exactly one of standard or heavy explicitly',
+          };
+        }
+        pools.push(entryPools[0]);
+      }
+      const invalidHostedLabels = hostedEntries.flat().filter((label) => !hostedLabel(label));
+      if (invalidHostedLabels.length > 0) {
+        return {
+          kind: 'error',
+          message: `unsupported dynamic runner labels: ${invalidHostedLabels.join(', ')}`,
+        };
+      }
+      const pool = new Set(pools).size === 1 ? pools[0] : null;
+      return hostedEntries.length > 0
+        ? { kind: 'mixed', labels, hostedLabels: hostedEntries.flat(), pool }
+        : { kind: 'self-hosted', labels, pool };
     }
     return labels.every(hostedLabel)
       ? { kind: 'github-hosted', labels }
@@ -148,8 +207,13 @@ export function checkWorkflowText(text, file = '<workflow>') {
     const jobMatch = clean.match(/^ {2}([A-Za-z0-9_.-]+):\s*$/);
     if (jobMatch) {
       currentJob = jobMatch[1];
-      jobs.set(currentJob, { hasRunsOn: false, hasUses: false });
+      jobs.set(currentJob, { hasRunsOn: false, hasUses: false, disabled: false });
       continue;
+    }
+
+    const jobIfMatch = clean.match(/^ {4}if:\s*(.*)$/);
+    if (jobIfMatch && jobs.has(currentJob)) {
+      jobs.get(currentJob).disabled = isDisabledCondition(jobIfMatch[1]);
     }
 
     if (/^ {4}uses:\s*\S+/.test(clean) && jobs.has(currentJob)) {
@@ -168,15 +232,33 @@ export function checkWorkflowText(text, file = '<workflow>') {
     }
 
     jobs.get(currentJob).hasRunsOn = true;
+    if (isDisabledJob(jobBlock(lines, lineNumber))) continue;
+
     const classification = classifyRunnerSelector(value, runnerValues);
     selectors.push({ file, line: lineNumber, job: currentJob, value, ...classification });
     if (classification.kind === 'error') {
       errors.push(selectorError(file, lineNumber, currentJob, classification.message));
+      continue;
+    }
+
+    if (hostedLabelsForClassification(classification).length > 0 && !isNightlyWorkflow(file)) {
+      const hostedLabels = hostedLabelsForClassification(classification);
+      const hasNativeHosted = hostedLabels.some((label) => /^(?:macos|windows)-/i.test(label));
+      errors.push(
+        selectorError(
+          file,
+          lineNumber,
+          currentJob,
+          hasNativeHosted
+            ? 'direct GitHub-hosted macOS/Windows is disabled; do not use it for daily development. Disable this job with if: ${{ false }} or move it to the approved nightly lane'
+            : 'GitHub-hosted Linux is disabled; use self-hosted Linux X64 with exactly one standard or heavy capacity label',
+        ),
+      );
     }
   }
 
   for (const [job, definition] of jobs) {
-    if (!definition.hasRunsOn && !definition.hasUses) {
+    if (!definition.disabled && !definition.hasRunsOn && !definition.hasUses) {
       errors.push(`${file}: job ${job}: job must declare runs-on or use a reusable workflow`);
     }
   }
@@ -209,7 +291,7 @@ function main() {
   const result = checkWorkflowDirectory(workflowsDir);
   if (result.errors.length > 0) {
     process.stderr.write(
-      `[reason] runner-pool-label-contract: every self-hosted job must declare exactly one of standard or heavy;\n         ${result.errors.join('\n         ')}\n[rerun]  node scripts/ci/check-runner-pool-labels.mjs --workflows-dir ${workflowsDir}\n[hint]   GitHub-hosted ubuntu/windows/macos selectors are allowed; self-hosted selectors are not.\n`,
+      `[reason] runner-pool-label-contract: every active Linux job must use self-hosted Linux X64 with exactly one standard/heavy capacity label; direct hosted macOS/Windows is disabled for daily development;\n         ${result.errors.join('\n         ')}\n[rerun]  node scripts/ci/check-runner-pool-labels.mjs --workflows-dir ${workflowsDir}\n[hint]   Disable non-compliant jobs with if: \${{ false }} or move the low-frequency native lane to nightly.\n`,
     );
     process.exitCode = 1;
     return;

@@ -1,4 +1,4 @@
-// scan/scan-content-hash.ts — xxHash64-based content hash for L2 false-positive guard.
+// scan/scan-content-hash.ts — xxHash64-based content hash for false-positive guard.
 //
 // Implements xxHash64 (XXH64) in pure JavaScript with typed arrays for performance.
 // The hash strategy is: xxHash64 of (first 64KB + last 64KB + fileSize as 8-byte LE).

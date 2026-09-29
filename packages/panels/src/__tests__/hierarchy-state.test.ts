@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
-import { gateway } from '@forgeax/editor-core';
+import { gateway, type EntityHandle } from '@forgeax/editor-core';
 
 import {
   HIERARCHY_ENTITY_TYPE_ID,
@@ -18,6 +18,8 @@ import {
   getHierarchyPanelSnapshot,
   getHierarchyParentEntities,
   getHierarchyVisibleMatches,
+  hierarchyProjectionMatchesWorld,
+  readHierarchyWorldStructureEpoch,
   hasHierarchyViewFilter,
   hierarchyTypeCategory,
   resetHierarchyViewState,
@@ -29,6 +31,7 @@ import {
   toggleHierarchyColumn,
   toggleHierarchyFilter,
   toggleHierarchyShowEditorWorld,
+  type HierarchyStructureProjection,
 } from '../hierarchy-state';
 
 // hierarchy-state owns a module-global view snapshot + localStorage-backed
@@ -57,7 +60,8 @@ describe('hierarchyTypeCategory', () => {
 
 describe('componentTypeLabel', () => {
   it('returns the translation when present and the raw id on a miss', () => {
-    const translate = (key: string) => (key === 'editor.hierarchy.types.Transform' ? 'Transform (localized)' : key);
+    const translate = (key: string) =>
+      key === 'editor.hierarchy.types.Transform' ? 'Transform (localized)' : key;
     expect(componentTypeLabel('Transform', translate)).toBe('Transform (localized)');
     // A t() that echoes the key (miss) falls back to the raw component name.
     expect(componentTypeLabel('BrandNewComponent', (key) => key)).toBe('BrandNewComponent');
@@ -69,7 +73,8 @@ describe('getHierarchyEntityType', () => {
 
   it('picks the highest-priority intent component as the representative type', () => {
     // Light beats a generic RigidBody per CATEGORY_RULES ordering.
-    const type = getHierarchyEntityType(['Transform', 'RigidBody', 'PointLight'], world, 0 as never);
+    const type = getHierarchyEntityType(['Transform', 'RigidBody', 'PointLight'], world, 0 as never,
+    );
     expect(type.id).toBe('PointLight');
     expect(type.label).toBe('PointLight');
   });
@@ -206,5 +211,26 @@ describe('world-backed reads over the active world', () => {
       doc.world = previous;
       lease.value.dispose();
     }
+  });
+});
+
+describe('hierarchyProjectionMatchesWorld', () => {
+  it('rejects a projection whose structureEpoch lags the live world even when counts match', () => {
+    const world = { getStructureEpoch: () => 7 };
+    const projection: HierarchyStructureProjection = {
+      structureEpoch: 3,
+      rows: [{
+        id: 1 as EntityHandle,
+        name: 'A',
+        typeId: 'entity',
+        mobility: 'static',
+        childIds: [],
+      },
+      ],
+    };
+    expect(hierarchyProjectionMatchesWorld(projection, world, 1)).toBe(false);
+    expect(hierarchyProjectionMatchesWorld({ ...projection, structureEpoch: 7 }, world, 1)).toBe(true,
+    );
+    expect(readHierarchyWorldStructureEpoch(world)).toBe(7);
   });
 });

@@ -91,8 +91,8 @@ describe('worktree bootstrap contract', () => {
 
   test('detects incomplete recursive submodules', () => {
     expect(
-      submoduleStatusProblems([' 1234567 packages/engine', '-abcdef0 packages/interface', '+7654321 packages/platform-io'].join('\n')),
-    ).toEqual(['packages/interface', 'packages/platform-io']);
+      submoduleStatusProblems([' 1234567 packages/engine', '-abcdef0 forgeax-editor-assets', '+7654321 packages/platform-io'].join('\n')),
+    ).toEqual(['forgeax-editor-assets', 'packages/platform-io']);
   });
 
   test('uses deterministic frozen Bun installation without lifecycle races', () => {

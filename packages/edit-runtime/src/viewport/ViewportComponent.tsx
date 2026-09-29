@@ -1,6 +1,9 @@
 import { hasPendingDiskSave } from '@forgeax/editor-core';
 import type { PlayPreparation } from './play-preparation';
-export { createPlayPreparation, type PlayPreparation } from './play-preparation';
+export {
+  createPlayPreparation,
+  type PlayPreparation,
+} from './play-preparation';
 import { getLocale } from '@forgeax/editor-core/i18n';
 import { createPlayFailureReporter, installPlayFailureNotice } from './play-failure-notice';
 import type { PlayDispatchResult } from './play-operation';
@@ -37,6 +40,7 @@ import type { PlayDispatchResult } from './play-operation';
 // (single world), AC-04 (engine boots once in host), AC-12 (active-camera cut).
 
 import { useEffect, useRef } from 'react';
+import { useKeybindingScope } from '@forgeax/app-shell/application';
 import { Name, Transform } from '@forgeax/engine-scene';
 import {
   Camera,
@@ -46,6 +50,7 @@ import {
   perspective,
   TONEMAP_REINHARD_EXTENDED,
   type RenderFeature,
+  type RenderFeatureDiagnostics,
   type Renderer,
 } from '@forgeax/engine-render';
 import { setActiveCamera } from '@forgeax/engine-render/authoring';
@@ -78,6 +83,8 @@ import {
   entComponent,
   entComponents,
   entName,
+  readEntityVisibility,
+  resolveVisibility,
   registerEditorWorldProjectionProvider,
   notifyDocChanged,
   switchSceneFile,
@@ -99,6 +106,8 @@ import {
   registerInputMapLoader,
   getActiveRuntimeUiGraph,
   bindViewportRuntimeClient,
+  refreshViewportRuntimeHierarchySnapshot,
+  traceHierarchyVisibility,
   forwardViewportRuntimeTransportRequest,
   configureEditorPageNavigation,
 } from '@forgeax/editor-core';
@@ -108,7 +117,9 @@ import type {
   RendererOwnerAdmissionRequest,
   TransportService,
 } from '@forgeax/editor-product';
-import { createSourceAuthoringRuntime, installCatalogReconcileProvider } from '../runtime/source-authoring-runtime';
+import { createSourceAuthoringRuntime, installCatalogReconcileProvider,
+} from '../runtime/source-authoring-runtime';
+import { installSourcePackageCatalogBarrier } from '../runtime/source-package-catalog-barrier';
 import { createSourceAuthoringTransport } from '../runtime/source-authoring-transport';
 import { createCatalogSource } from '@forgeax/engine-assets-runtime';
 import { createCatalogClient } from '@forgeax/engine-vite-plugin-pack/catalog-client';
@@ -147,8 +158,7 @@ import { installColliderDebugOverlay } from './collider-debug-overlay';
 import { createFramePhaseProfiler } from './frame-phase-profiler';
 import { captureGameplayViewport } from './gameplay-capture';
 import {
-  resolveEditViewportPixelRatio,
-} from './edit-viewport-resolution';
+  resolveEditViewportPixelRatio } from './edit-viewport-resolution';
 // M6 extraction (plan-strategy §2 D-5, AC-08): console / network / diagnostics
 // bridges moved to viewport-runtime-bridges.ts (decoupled from the createApp
 // hotspot, AC-10). bootViewport keeps only the call sites.
@@ -181,16 +191,27 @@ import {
   createMaterialPublicationBinding,
   validatePerspectiveFov,
 } from './render-diagnostics';
-import { configureHostSession, resolveEditPhysics, initHostSession, type HostSession, type HostGameSession } from '../host-boot';
-import { registerViewportSessionAppliers, type CaptureProducerProvenance } from './viewport-session-appliers';
+import { configureHostSession, resolveEditPhysics, initHostSession, type HostSession, type HostGameSession,
+} from '../host-boot';
+import { registerViewportSessionAppliers, type CaptureProducerProvenance,
+} from './viewport-session-appliers';
 import {
   createEditVfxRuntimeBridge,
-  createParticleCameraSource,
-} from './vfx-runtime-bridge';
+  createParticleCameraSource } from './vfx-runtime-bridge';
 import { editorComponentVocabularyPlugin } from '@forgeax/editor-game-plugins';
 import { supportsVfxRenderFeature } from './vfx-render-capability';
 import { createBootLease } from './boot-lease';
-import { prepareViewportShaderManifestUrl } from './shader-manifest-url';
+import {
+  shouldSupersedeStaleViewportBoot,
+  waitForHostSurfaceGate,
+  waitUntilDomConnected,
+} from './viewport-boot-gate';
+import {
+  applyRuntimeScopeGeneration,
+  waitForScopedPackCatalog } from './scoped-catalog-readiness';
+import { installStudioBootTraceProbe, studioBootTrace, studioBootTraceSession,
+} from './studio-boot-trace';
+import { resolveViewportShaderManifestUrl, prepareViewportShaderManifestUrl } from './shader-manifest-url';
 import {
   errorMessage,
   carrierFailureFromError,
@@ -223,6 +244,8 @@ import '../theme.css';
 
 // ── single-boot latch (AC-04) — the engine boots exactly once per document ─────
 let bootStarted = false;
+/** Container the in-flight or completed boot bound to (StrictMode remount detection). */
+let activeBootContainer: HTMLDivElement | null = null;
 
 // Renderer provenance belongs to the Edit renderer realm, not to the public
 // Engine Renderer shape. The module survives resetEditRealm(), so a replacement
@@ -278,10 +301,10 @@ export function deriveInfiniteGridVisibility(input: {
   readonly sceneHasRenderableContent?: boolean;
 }): boolean {
   return (
-    input.gridVisible
-    && input.display === 'scene'
-    && input.playPhase === 'edit'
-    && input.sceneHasRenderableContent === true
+    input.gridVisible &&
+    input.display === 'scene' &&
+    input.playPhase === 'edit' &&
+    input.sceneHasRenderableContent === true
   );
 }
 
@@ -320,9 +343,9 @@ export function countRenderableSceneMeshEntities(world: World): number {
 
 function isInfiniteGridRenderFeatureHealthy(renderer: Renderer | undefined): boolean {
   if (renderer === undefined) return false;
-  const feature = renderer.inspect().featureDiagnostics.find(
-    (candidate) => candidate.identity === INFINITE_GRID_FEATURE_ID,
-  );
+  const feature = renderer
+    .inspect()
+    .featureDiagnostics.find((candidate) => candidate.identity === INFINITE_GRID_FEATURE_ID);
   return feature?.status !== 'failed';
 }
 
@@ -345,20 +368,20 @@ async function loadRuntimeAssetPayload(
 
 function requirePlayRuntimeBinding(binding: RuntimeAssetBinding | undefined): RuntimeAssetBinding {
   if (
-    binding === undefined
-    || binding.schemaVersion !== 'runtime-asset-binding-v1'
-    || typeof binding.gameId !== 'string'
-    || binding.gameId.trim().length === 0
-    || typeof binding.scopeId !== 'string'
-    || binding.scopeId.trim().length === 0
-    || !Number.isSafeInteger(binding.generation)
-    || binding.generation < 1
-    || (binding.status !== 'ready' && binding.status !== 'degraded')
-    || typeof binding.catalogUrl !== 'string'
-    || binding.catalogUrl.trim().length === 0
-    || typeof binding.importUrlBase !== 'string'
-    || binding.importUrlBase.trim().length === 0
-    || typeof binding.packageUrlBase !== 'string'
+    binding === undefined ||
+    binding.schemaVersion !== 'runtime-asset-binding-v1' ||
+    typeof binding.gameId !== 'string' ||
+    binding.gameId.trim().length === 0 ||
+    typeof binding.scopeId !== 'string' ||
+    binding.scopeId.trim().length === 0 ||
+    !Number.isSafeInteger(binding.generation) ||
+    binding.generation < 1 ||
+    (binding.status !== 'ready' && binding.status !== 'degraded') ||
+    typeof binding.catalogUrl !== 'string' ||
+    binding.catalogUrl.trim().length === 0 ||
+    typeof binding.importUrlBase !== 'string' ||
+    binding.importUrlBase.trim().length === 0 ||
+    typeof binding.packageUrlBase !== 'string'
   ) {
     throw new Error('[editor] Play child URL requires a complete runtime asset binding');
   }
@@ -377,7 +400,9 @@ async function installManagedCarrierHealth(
   rendererProvenance: RendererRealmProvenance | null,
 ): Promise<ManagedCarrierHealth> {
   if (rendererProvenance === null) {
-    throw new Error('renderer provenance unavailable: the Edit renderer realm could not mint identity');
+    throw new Error(
+      'renderer provenance unavailable: the Edit renderer realm could not mint identity',
+    );
   }
   const params = new URLSearchParams(window.location.search);
   const managedRuntimeId = params.get('runtimeId')?.trim() || null;
@@ -385,13 +410,16 @@ async function installManagedCarrierHealth(
   const requestedCarrierKind = params.get('carrierKind');
   const carrierKind = isViewportCarrierKind(requestedCarrierKind) ? requestedCarrierKind : 'local';
   const requestedRuntimeGeneration = Number(params.get('runtimeGeneration') ?? 1);
-  const runtimeGeneration = Number.isSafeInteger(requestedRuntimeGeneration) && requestedRuntimeGeneration > 0
-    ? requestedRuntimeGeneration : 1;
+  const runtimeGeneration =
+    Number.isSafeInteger(requestedRuntimeGeneration) && requestedRuntimeGeneration > 0
+      ? requestedRuntimeGeneration
+      : 1;
   const managed = managedRuntimeId !== null && challengeResponse !== null;
 
   const healthResponse = await fetch('/api/health', { cache: 'no-store' });
-  if (!healthResponse.ok) throw new Error(`carrier health unavailable: HTTP ${healthResponse.status}`);
-  const health = await healthResponse.json() as { instanceRootAbs?: unknown };
+  if (!healthResponse.ok)
+    throw new Error(`carrier health unavailable: HTTP ${healthResponse.status}`);
+  const health = (await healthResponse.json()) as { instanceRootAbs?: unknown };
   if (typeof health.instanceRootAbs !== 'string' || health.instanceRootAbs.length === 0) {
     throw new Error('carrier health response did not identify the instance root');
   }
@@ -407,11 +435,25 @@ async function installManagedCarrierHealth(
   const scope = { projectId: instanceRootAbs, gameId };
   canvas.dataset.forgeaxCarrierCanvas = canvasIdentity;
   let sentinel = 0;
-  let renderReadiness: 'pending' | 'ready' | 'unavailable' = renderer.state() === 'alive' ? 'ready' : 'unavailable';
-  let failure: { code: string; stage: 'renderer'; retryable: boolean; hint: string; at: string; message?: string } | null = null;
+  let renderReadiness: 'pending' | 'ready' | 'unavailable' =
+    renderer.state() === 'alive' ? 'ready' : 'unavailable';
+  let failure: {
+    code: string;
+    stage: 'renderer';
+    retryable: boolean;
+    hint: string;
+    at: string;
+    message?: string;
+  } | null = null;
   const getIdentity = (): GameplayIdentity | null => {
     if (renderReadiness !== 'ready') return null;
-    return { runtimeId, scope, pageIdentity, canvasIdentity, rendererGeneration };
+    return {
+      runtimeId,
+      scope,
+      pageIdentity,
+      canvasIdentity,
+      rendererGeneration,
+    };
   };
   const payload = () => ({
     version: VAG_CARRIER_PROTOCOL_VERSION,
@@ -490,7 +532,8 @@ async function installManagedCarrierHealth(
     dispose: () => {
       unsubscribeRenderer();
       if (heartbeat !== undefined) window.clearInterval(heartbeat);
-      if (canvas.dataset.forgeaxCarrierCanvas === canvasIdentity) delete canvas.dataset.forgeaxCarrierCanvas;
+      if (canvas.dataset.forgeaxCarrierCanvas === canvasIdentity)
+        delete canvas.dataset.forgeaxCarrierCanvas;
       const host = window as unknown as Record<string, unknown>;
       if (host.__forgeax_carrier_health === lastPublished) delete host.__forgeax_carrier_health;
     },
@@ -506,7 +549,10 @@ export interface GenerationFenceToken {
   readonly generation: number;
 }
 
-export function createStaleGenerationError(actual: number, expected: number): {
+export function createStaleGenerationError(
+  actual: number,
+  expected: number,
+): {
   readonly code: 'version-control-stale-generation';
   readonly hint: string;
   readonly expected: number;
@@ -521,7 +567,8 @@ export function createStaleGenerationError(actual: number, expected: number): {
 }
 
 export function createGenerationFence(initialGeneration: number) {
-  if (!Number.isSafeInteger(initialGeneration) || initialGeneration < 1) throw new Error('generation must be positive');
+  if (!Number.isSafeInteger(initialGeneration) || initialGeneration < 1)
+    throw new Error('generation must be positive');
   let generation = initialGeneration;
   return {
     capture: (): GenerationFenceToken => ({ generation }),
@@ -530,11 +577,19 @@ export function createGenerationFence(initialGeneration: number) {
       generation += 1;
       return generation;
     },
-    assert: (token: GenerationFenceToken):
+    assert: (
+      token: GenerationFenceToken,
+    ):
       | { readonly ok: true; readonly generation: number }
-      | { readonly ok: false; readonly error: ReturnType<typeof createStaleGenerationError> } => {
+      | {
+          readonly ok: false;
+          readonly error: ReturnType<typeof createStaleGenerationError>;
+        } => {
       if (token.generation === generation) return { ok: true, generation };
-      return { ok: false, error: createStaleGenerationError(token.generation, generation) };
+      return {
+        ok: false,
+        error: createStaleGenerationError(token.generation, generation),
+      };
     },
   };
 }
@@ -555,9 +610,11 @@ export function resetEditRealm(options: ResetEditRealmOptions = {}): void {
   bootLease.invalidate();
   const previousResetOptions = currentResetOptions;
   currentResetOptions = options;
-  if (options.nextRuntimeGeneration !== undefined
-    && Number.isSafeInteger(options.nextRuntimeGeneration)
-    && options.nextRuntimeGeneration > 0) {
+  if (
+    options.nextRuntimeGeneration !== undefined &&
+    Number.isSafeInteger(options.nextRuntimeGeneration) &&
+    options.nextRuntimeGeneration > 0
+  ) {
     runtimeGenerationOverride = options.nextRuntimeGeneration;
   }
   const leadTeardown = activeRealmTeardown;
@@ -566,22 +623,65 @@ export function resetEditRealm(options: ResetEditRealmOptions = {}): void {
   // that depend on earlier ones unwind first. Swallow individual failures so one
   // bad teardown can't strand the rest (a half-torn realm wedges the next boot).
   try {
-    try { leadTeardown?.(); } catch (e) { console.warn('[editor] active realm teardown failed:', e); }
+    try {
+      leadTeardown?.();
+    } catch (e) {
+      console.warn('[editor] active realm teardown failed:', e);
+    }
     for (let i = teardownFns.length - 1; i >= 0; i--) {
-      try { teardownFns[i]!(); } catch (e) { console.warn('[editor] resetEditRealm teardown step failed:', e); }
+      try {
+        teardownFns[i]!();
+      } catch (e) {
+        console.warn('[editor] resetEditRealm teardown step failed:', e);
+      }
     }
   } finally {
     currentResetOptions = previousResetOptions;
   }
   teardownFns.length = 0;
   // Drop the global handle so nothing keeps the dead app/world/renderer alive.
-  try { delete (window as unknown as Record<string, unknown>).__forgeax_editor; } catch { /* non-config */ }
-  try { delete (window as unknown as Record<string, unknown>).__forgeax_carrier_health; } catch { /* non-config */ }
+  try {
+    delete (window as unknown as Record<string, unknown>).__forgeax_editor;
+  } catch {
+    /* non-config */
+  }
+  try {
+    delete (window as unknown as Record<string, unknown>).__forgeax_carrier_health;
+  } catch {
+    /* non-config */
+  }
   if (window.parent !== window) {
-    try { delete (window.parent as unknown as Record<string, unknown>).__forgeax_editor; } catch { /* cross-origin */ }
-    try { delete (window.parent as unknown as Record<string, unknown>).__forgeax_carrier_health; } catch { /* cross-origin */ }
+    try {
+      delete (window.parent as unknown as Record<string, unknown>).__forgeax_editor;
+    } catch {
+      /* cross-origin */
+    }
+    try {
+      delete (window.parent as unknown as Record<string, unknown>).__forgeax_carrier_health;
+    } catch {
+      /* cross-origin */
+    }
   }
   bootStarted = false;
+  activeBootContainer = null;
+}
+
+function launchViewportBoot(
+  container: HTMLDivElement,
+  actionsRef: React.MutableRefObject<BootFns>,
+  gameSession: HostGameSession,
+): void {
+  bootStarted = true;
+  activeBootContainer = container;
+  const bootId = bootLease.begin();
+  const isCurrentBoot = () => bootLease.isCurrent(bootId);
+  void bootViewport(container, actionsRef, gameSession, isCurrentBoot).catch((error: unknown) => {
+    if (!isCurrentBoot()) return;
+    console.error('[editor] viewport boot failed:', error);
+    resetEditRealm();
+    emitBoot(`boot ✗ failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    paintDiagnosticMessage(container, error);
+  });
 }
 
 // The document can be reloaded while the asynchronous viewport boot is still
@@ -601,12 +701,45 @@ if (typeof window !== 'undefined') {
 
 // ── boot breadcrumb + dead-boot watchdog (was main.tsx :56-108) ───────────────
 function emitBoot(message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
-  panelBridge.emit('editorHealth', { level, code: 'boot', message, ts: Date.now() });
+  panelBridge.emit('editorHealth', {
+    level,
+    code: 'boot',
+    message,
+    ts: Date.now(),
+  });
+  if (import.meta.env.DEV) {
+    const log = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info;
+    log(`[forgeax:boot] ${message}`);
+  }
 }
 
 interface BootFns {
-  playSimulation: (policy?: PlayDirtyPolicy, origin?: CommandOrigin, requestId?: string) => PlayDispatchResult;
+  playSimulation: (
+    policy?: PlayDirtyPolicy,
+    origin?: CommandOrigin,
+    requestId?: string,
+  ) => PlayDispatchResult;
   stopSimulation: () => void;
+}
+
+const PLAY_LIFECYCLE_UNAVAILABLE_ERROR = {
+  code: 'play-lifecycle-unavailable' as const,
+  hint: 'Play lifecycle is not ready yet; wait for viewport boot to finish.',
+};
+
+const PLAY_LIFECYCLE_UNAVAILABLE: DispatchResult = {
+  ok: false,
+  error: PLAY_LIFECYCLE_UNAVAILABLE_ERROR,
+};
+
+function unavailablePlayActions(): BootFns {
+  return {
+    playSimulation: () => {
+      gateway.failPlayAttempt(PLAY_LIFECYCLE_UNAVAILABLE_ERROR);
+      return PLAY_LIFECYCLE_UNAVAILABLE;
+    },
+    stopSimulation: () => {},
+  };
 }
 
 /**
@@ -648,43 +781,39 @@ export function ViewportComponent({
   playPreparation,
 }: ViewportComponentProps = {}): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  useKeybindingScope(containerRef, 'editor.viewport');
   // Deferred ▶/■ actions are reached through the hosting PanelShell toolbar and
   // the Runtime transport. This renderer surface deliberately owns no product
   // controls, whether docked or detached.
-  const actionsRef = useRef<BootFns>({
-    playSimulation: () => ({ ok: false, error: { code: 'play-unavailable', hint: 'The viewport is not ready.' } }),
-    stopSimulation: () => {},
-  });
+  const actionsRef = useRef<BootFns>(unavailablePlayActions());
   useEffect(() => {
     setPreviewRuntimeBinding(runtimeBinding);
     return () => clearPreviewRuntimeBinding(runtimeBinding);
   }, [runtimeBinding]);
   useEffect(() => {
-    if (bootStarted) return;
-    bootStarted = true;
-    const bootId = bootLease.begin();
-    const isCurrentBoot = () => bootLease.isCurrent(bootId);
     const container = containerRef.current;
     if (!container) return;
 
-    void bootViewport(container, actionsRef, {
+    if (bootStarted && activeBootContainer === container) return;
+
+    if (shouldSupersedeStaleViewportBoot(bootStarted, activeBootContainer, container)) {
+      studioBootTrace('viewport.launch.supersede-stale', {});
+      resetEditRealm();
+    } else if (bootStarted && activeBootContainer !== container) {
+      studioBootTrace('viewport.launch.invalidate-lease', {});
+      bootLease.invalidate();
+    }
+
+    studioBootTrace('viewport.launch.begin', {
+      slug: gameSlug,
+      hasRuntimeBinding: runtimeBinding !== undefined,
+    });
+    launchViewportBoot(container, actionsRef, {
       slug: gameSlug,
       gameRoot,
       runtimeBinding,
       selectedSceneGuid,
       versionControlTransition,
-    }, isCurrentBoot, playPreparation).catch((error: unknown) => {
-      if (!isCurrentBoot()) return;
-      // A rejected boot must converge to a visible terminal state. Without a
-      // catch here, the overlay remains on "Starting engine…" forever while
-      // the browser only reports an unhandled rejection.
-      console.error('[editor] viewport boot failed:', error);
-      resetEditRealm();
-      emitBoot(
-        `boot ✗ failed: ${error instanceof Error ? error.message : String(error)}`,
-        'error',
-      );
-      paintDiagnosticMessage(container, error);
     });
     // No cleanup returned: the viewport lifecycle is NOT managed by React.
     // Standalone teardown = page navigation. Multi-game host teardown =
@@ -698,7 +827,13 @@ export function ViewportComponent({
     <div
       ref={containerRef}
       className="ep-viewport-root"
-      style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: '#16161a' }}
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: '100%',
+        overflow: 'hidden',
+        background: '#16161a',
+      }}
     />
   );
 }
@@ -712,20 +847,56 @@ async function bootViewport(
   playPreparation?: PlayPreparation,
 ): Promise<Viewport | null> {
   if (!isCurrentBoot()) return null;
+  installStudioBootTraceProbe();
+  studioBootTraceSession({
+    slug: gameSession.slug,
+    gameRoot: gameSession.gameRoot ?? null,
+    hasRuntimeBinding: gameSession.runtimeBinding !== undefined,
+    bindingScopeId: gameSession.runtimeBinding?.scopeId ?? null,
+    bindingGeneration: gameSession.runtimeBinding?.generation ?? null,
+    bindingGameId: gameSession.runtimeBinding?.gameId ?? null,
+  });
+  studioBootTrace('viewport.boot.enter', {});
+
+  if (!(await waitForHostSurfaceGate(isCurrentBoot))) {
+    if (!isCurrentBoot()) return null;
+    studioBootTrace('viewport.boot.abort', { reason: 'host-surface-gate' });
+    const error = new Error('[editor] viewport host surface not ready before boot');
+    console.error(error);
+    paintDiagnosticMessage(container, error);
+    return null;
+  }
+  if (!(await waitUntilDomConnected(container, isCurrentBoot))) {
+    if (!isCurrentBoot()) return null;
+    studioBootTrace('viewport.boot.abort', {
+      reason: 'container-not-connected',
+    });
+    const error = new Error('[editor] viewport container not connected before boot');
+    console.error(error);
+    paintDiagnosticMessage(container, error);
+    return null;
+  }
+
   const registerTeardown = (fn: () => void): void => {
     if (isCurrentBoot()) {
       registerRealmTeardown(fn);
       return;
     }
-    try { fn(); } catch (error) {
+    try {
+      fn();
+    } catch (error) {
       console.warn('[editor] stale viewport boot cleanup failed:', error);
     }
   };
   const BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
   const requestedRuntimeIdentity = readViewportRuntimeIdentity(window.location.search);
-  const runtimeIdentity = runtimeGenerationOverride === null
-    ? requestedRuntimeIdentity
-    : { ...requestedRuntimeIdentity, runtimeGeneration: runtimeGenerationOverride };
+  const runtimeIdentity =
+    runtimeGenerationOverride === null
+      ? requestedRuntimeIdentity
+      : {
+          ...requestedRuntimeIdentity,
+          runtimeGeneration: runtimeGenerationOverride,
+        };
   runtimeGenerationOverride = null;
   let referenceCreationTransport: TransportService | null = null;
 
@@ -734,81 +905,99 @@ async function bootViewport(
     generation: runtimeIdentity.runtimeGeneration,
   });
   let versionControlBinding!: VersionControlRuntimeBinding;
-  const versionControlTransition = gameSession.versionControlTransition ?? ((): VersionControlRuntimeTransition | undefined => {
-    const barrier = getGatewayWriteBarrier(gateway);
-    if (barrier === undefined || gameSession.gameRoot === undefined) return undefined;
-    const handoff = createSwitchHandoff({
-      generation: runtimeIdentity.runtimeGeneration,
-      projectionLease: `projection:${runtimeIdentity.runtimeId}:${runtimeIdentity.runtimeGeneration}`,
-      actionLease: `action:${runtimeIdentity.runtimeId}:${runtimeIdentity.runtimeGeneration}`,
-    });
-    let transitionRepositoryIdentity: string | undefined;
-    return {
-      barrier,
-      handoff,
-      readPreflight: () => {
-        const state = barrier.snapshot();
-        const snapshot = versionControlBinding.provider.snapshot();
-        const recovery = versionControlBinding.recovery.snapshot();
-        transitionRepositoryIdentity = snapshot.status === 'ready' ? snapshot.repositoryIdentity : undefined;
-        const dirtyRecords = snapshot.status === 'ready' ? snapshot.dirtyRecords : [];
-        return {
-          playActive: gateway.playPhase === 'starting' || gateway.playPhase === 'play',
-          stagingActive: state.phase === 'staging',
-          dirty: dirtyRecords.length > 0,
-          untracked: dirtyRecords.some((record) => record.kind === 'untracked'),
-          targetDrifted: false,
-          // The applier owns one session lease while this callback runs; only
-          // additional writers indicate a competing Gateway operation.
-          writeOperationActive: state.activeWriters > 1,
-          rootMatches: versionControlHost.gameRoot === gameSession.gameRoot,
-          repositoryRecoveryRequired: snapshot.status === 'recovery-required' || recovery.state !== 'ready',
-          generation: runtimeIdentity.runtimeGeneration,
-        };
-      },
-      teardown: () => resetEditRealm({ nextRuntimeGeneration: runtimeIdentity.runtimeGeneration + 1 }),
-      bootSuccessor: async (generation: number) => {
-        bootStarted = true;
-        const bootId = bootLease.begin();
-        const successor = await bootViewport(
-          container,
-          actionsRef,
-          { ...gameSession, versionControlTransition: undefined },
-          () => bootLease.isCurrent(bootId),
-        );
-        if (successor === null) throw new Error('successor Runtime did not boot');
-        return {
-          generation,
-          projectionLease: `projection:${runtimeIdentity.runtimeId}:${generation}`,
-          actionLease: `action:${runtimeIdentity.runtimeId}:${generation}`,
-          repositoryIdentity: transitionRepositoryIdentity ?? gameSession.gameRoot ?? '',
-          targetCommit: handoff.snapshot().targetCommit ?? '',
-        };
-      },
-      terminal: () => {},
-      committed: (result) => {
-        if (result === null || typeof result !== 'object' || (result as { readonly status?: unknown }).status !== 'succeeded' || window.parent === window) return;
-        const generation = result !== null && typeof result === 'object'
-          && typeof (result as { readonly generation?: unknown }).generation === 'number'
-          ? (result as { readonly generation: number }).generation
-          : runtimeIdentity.runtimeGeneration + 1;
-        // Publish after the terminal callback yields so the shell can bind the
-        // successor without racing the current Runtime's completion bookkeeping.
-        window.setTimeout(() => {
-          try {
-            window.parent.dispatchEvent(new CustomEvent('forgeax-generation-ready', {
-              detail: { runtimeGeneration: generation },
-            }));
-          } catch {
-            // A detached carrier can finish its successor boot without a live
-            // parent; the handoff result remains authoritative.
-          }
-        }, 0);
-      },
-      disposeOld: () => {},
-      freeze: (reason: string) => barrier.freeze(reason),
-    } satisfies VersionControlRuntimeTransition;
-  })();
+  const versionControlTransition =
+    gameSession.versionControlTransition ??
+    ((): VersionControlRuntimeTransition | undefined => {
+      const barrier = getGatewayWriteBarrier(gateway);
+      if (barrier === undefined || gameSession.gameRoot === undefined) return undefined;
+      const handoff = createSwitchHandoff({
+        generation: runtimeIdentity.runtimeGeneration,
+        projectionLease: `projection:${runtimeIdentity.runtimeId}:${runtimeIdentity.runtimeGeneration}`,
+        actionLease: `action:${runtimeIdentity.runtimeId}:${runtimeIdentity.runtimeGeneration}`,
+      });
+      let transitionRepositoryIdentity: string | undefined;
+      return {
+        barrier,
+        handoff,
+        readPreflight: () => {
+          const state = barrier.snapshot();
+          const snapshot = versionControlBinding.provider.snapshot();
+          const recovery = versionControlBinding.recovery.snapshot();
+          transitionRepositoryIdentity =
+            snapshot.status === 'ready' ? snapshot.repositoryIdentity : undefined;
+          const dirtyRecords = snapshot.status === 'ready' ? snapshot.dirtyRecords : [];
+          return {
+            playActive: gateway.playPhase === 'starting' || gateway.playPhase === 'play',
+            stagingActive: state.phase === 'staging',
+            dirty: dirtyRecords.length > 0,
+            untracked: dirtyRecords.some((record) => record.kind === 'untracked'),
+            targetDrifted: false,
+            // The applier owns one session lease while this callback runs; only
+            // additional writers indicate a competing Gateway operation.
+            writeOperationActive: state.activeWriters > 1,
+            rootMatches: versionControlHost.gameRoot === gameSession.gameRoot,
+            repositoryRecoveryRequired:
+              snapshot.status === 'recovery-required' || recovery.state !== 'ready',
+            generation: runtimeIdentity.runtimeGeneration,
+          };
+        },
+        teardown: () =>
+          resetEditRealm({
+            nextRuntimeGeneration: runtimeIdentity.runtimeGeneration + 1,
+          }),
+        bootSuccessor: async (generation: number) => {
+          activeBootContainer = container;
+          bootStarted = true;
+          const bootId = bootLease.begin();
+          const successor = await bootViewport(
+            container,
+            actionsRef,
+            { ...gameSession, versionControlTransition: undefined },
+            () => bootLease.isCurrent(bootId),
+          );
+          if (successor === null) throw new Error('successor Runtime did not boot');
+          return {
+            generation,
+            projectionLease: `projection:${runtimeIdentity.runtimeId}:${generation}`,
+            actionLease: `action:${runtimeIdentity.runtimeId}:${generation}`,
+            repositoryIdentity: transitionRepositoryIdentity ?? gameSession.gameRoot ?? '',
+            targetCommit: handoff.snapshot().targetCommit ?? '',
+          };
+        },
+        terminal: () => {},
+        committed: (result) => {
+          if (
+            result === null ||
+            typeof result !== 'object' ||
+            (result as { readonly status?: unknown }).status !== 'succeeded' ||
+            window.parent === window
+          )
+            return;
+          const generation =
+            result !== null &&
+            typeof result === 'object' &&
+            typeof (result as { readonly generation?: unknown }).generation === 'number'
+              ? (result as { readonly generation: number }).generation
+              : runtimeIdentity.runtimeGeneration + 1;
+          // Publish after the terminal callback yields so the shell can bind the
+          // successor without racing the current Runtime's completion bookkeeping.
+          window.setTimeout(() => {
+            try {
+              window.parent.dispatchEvent(
+                new CustomEvent('forgeax-generation-ready', {
+                  detail: { runtimeGeneration: generation },
+                }),
+              );
+            } catch {
+              // A detached carrier can finish its successor boot without a live
+              // parent; the handoff result remains authoritative.
+            }
+          }, 0);
+        },
+        disposeOld: () => {},
+        freeze: (reason: string) => barrier.freeze(reason),
+      } satisfies VersionControlRuntimeTransition;
+    })();
   versionControlBinding = createVersionControlRuntimeBinding({
     gateway,
     generation: runtimeIdentity.runtimeGeneration,
@@ -830,6 +1019,40 @@ async function bootViewport(
   // main.tsx so the two hosts can't drift. Without this the Assets panel's
   // ContentBrowser throws PATH_RESOLVER_NOT_SET.
   await configureHostSession(gameSession);
+  // Standalone/single-realm dev-standalone already blocks on host catalog before
+  // edit-runtime boots; only the Studio iframe carrier races Play scope bind.
+  const shouldWaitForScopedCatalog =
+    gameSession.runtimeBinding !== undefined &&
+    typeof window !== 'undefined' &&
+    window.parent !== window;
+  if (shouldWaitForScopedCatalog) {
+    emitBoot('pack ▸ waiting for scoped catalog');
+    const catalogReady = await waitForScopedPackCatalog(gameSession.runtimeBinding, isCurrentBoot);
+    if (!catalogReady.ok) {
+      if (!isCurrentBoot()) return null;
+      const detail =
+        catalogReady.lastStatus !== undefined
+          ? ` (HTTP ${catalogReady.lastStatus}${catalogReady.lastBody ? `: ${catalogReady.lastBody}` : ''})`
+        : '';
+      const error = new Error(`[editor] scoped catalog not ready: ${catalogReady.message}${detail}`,
+      );
+      console.error(error);
+      emitBoot(`pack ▸ catalog failed: ${catalogReady.message}`, 'error');
+      paintDiagnosticMessage(container, error);
+      return null;
+    }
+    if (
+      catalogReady.effectiveGeneration !== undefined &&
+      gameSession.runtimeBinding !== undefined
+    ) {
+      const scopedBinding = applyRuntimeScopeGeneration(
+        gameSession.runtimeBinding,
+        catalogReady.effectiveGeneration,
+      );
+      assetIO.setRuntimeBinding(scopedBinding);
+    }
+    emitBoot('pack ▸ scoped catalog ready');
+  }
   const referenceCreationScope = Object.freeze({
     gameRoot: gameSession.gameRoot ?? gameSession.slug ?? 'default',
     sceneId: getSceneFile() ?? getSceneId(),
@@ -859,6 +1082,9 @@ async function bootViewport(
 
   // physics gate (host-boot.resolveEditPhysics — must precede createApp).
   const editPhysics = await resolveEditPhysics();
+  studioBootTrace('viewport.physics.resolved', {
+    backend: editPhysics ?? null,
+  });
   if (!isCurrentBoot()) return null;
 
   // ── M4 (w18/w19/w21): world-manager — the super coordination layer ──────────
@@ -904,6 +1130,10 @@ async function bootViewport(
   // NO self-hosted rAF, NO direct renderer.draw (AC-07): the engine's frame loop
   // pulls drawSource each frame and draws both worlds.
   emitBoot('boot ▸ createApp');
+  studioBootTrace('viewport.createApp.begin', {
+    slug: gameSession.slug,
+    hasRuntimeBinding: gameSession.runtimeBinding !== undefined,
+  });
 
   let cameraEntity!: EntityHandle;
   // The feature is registered before createViewport/createApp finishes. The
@@ -926,18 +1156,21 @@ async function bootViewport(
       const gridVisible = getViewportPreferences().gridVisible;
       const display = getViewportQuadrant().display;
       const playPhase = gateway.playPhase;
-      const ecsMeshEntities = sceneWorld === undefined ? 0 : countRenderableSceneMeshEntities(sceneWorld);
+      const ecsMeshEntities =
+        sceneWorld === undefined ? 0 : countRenderableSceneMeshEntities(sceneWorld);
       const sceneHasViewBindGroupSupport = resolveInfiniteGridSceneHasRenderableContent(
         sceneWorld,
         frustumStats,
       );
       const renderFeatureHealthy = isInfiniteGridRenderFeatureHealthy(infiniteGridRenderer);
-      const visible = renderFeatureHealthy && deriveInfiniteGridVisibility({
-        gridVisible,
-        display,
-        playPhase,
-        sceneHasRenderableContent: sceneHasViewBindGroupSupport,
-      });
+      const visible =
+        renderFeatureHealthy &&
+        deriveInfiniteGridVisibility({
+          gridVisible,
+          display,
+          playPhase,
+          sceneHasRenderableContent: sceneHasViewBindGroupSupport,
+        });
       let reason = visible ? 'shown' : 'hidden';
       if (!renderFeatureHealthy) reason = 'render-feature-unhealthy';
       else if (!gridVisible) reason = 'grid-preference-off';
@@ -946,11 +1179,12 @@ async function bootViewport(
       else if (sceneWorld === undefined) reason = 'scene-world-missing';
       else if (ecsMeshEntities === 0) reason = 'no-ecs-mesh-entities';
       else if (!sceneHasFrustumVisibleRenderables(frustumStats)) {
-        reason = frustumStats === undefined
-          ? 'frustum-stats-unavailable'
-          : frustumStats.total <= 0
-            ? 'frustum-total-zero'
-            : 'all-frustum-culled';
+        reason =
+          frustumStats === undefined
+            ? 'frustum-stats-unavailable'
+            : frustumStats.total <= 0
+              ? 'frustum-total-zero'
+              : 'all-frustum-culled';
       }
       traceInfiniteGridVisibility({
         visible,
@@ -973,6 +1207,7 @@ async function bootViewport(
   });
   const renderFeatures = [
     infiniteGridFeature,
+    vfxBridge.host.feature,
     gizmoRenderFeature,
   ] as readonly RenderFeature<unknown>[];
   // Diagnostics are producer-driven through the public Renderer event stream.
@@ -996,15 +1231,24 @@ async function bootViewport(
   // (dispatch/query/listOps/describeComponent) only need the ECS world; the
   // viewport won't render but the eval channel still mounts. Dynamic import
   // so the null RHI is never bundled into production builds.
-  if (gameSession.slug && gameSession.slug !== 'default' && gameSession.runtimeBinding === undefined) {
+  if (
+    gameSession.slug &&
+    gameSession.slug !== 'default' &&
+    gameSession.runtimeBinding === undefined
+  ) {
     const error = new Error('[editor] active game has no runtime asset binding');
+    studioBootTrace('viewport.boot.abort', {
+      reason: 'missing-runtime-binding',
+      slug: gameSession.slug,
+    });
     console.error(error);
     paintDiagnosticMessage(container, error);
     return null;
   }
-  const devImportTransport = gameSession.runtimeBinding === undefined
-    ? undefined
-    : createDevImportTransport(gameSession.runtimeBinding);
+  const devImportTransport =
+    gameSession.runtimeBinding === undefined
+      ? undefined
+      : createDevImportTransport(gameSession.runtimeBinding);
   // A late-bound Studio game owns its shader packages in the Play runtime. The
   // local edit manifest is intentionally builtin-only, so use the scoped Play
   // manifest for the same runtime binding that supplies its asset catalog.
@@ -1019,23 +1263,39 @@ async function bootViewport(
       URL.revokeObjectURL(shaderManifestUrl);
     });
   }
-  const createAppResult = await createApp(canvas, {
-    input: canvasInput.editor,
-    features: renderFeatures,
-    // Engine keeps optional capabilities behind plugins. The editor must
-    // admit Skin because authored scene mounts can contain imported rigs;
-    // otherwise loading a perfectly valid scene fails closed at instantiate.
-    plugins: [editorComponentVocabularyPlugin(), skinningPlugin()],
-    pointerLockAllowed: () => false,
-    drawSource: worldManager.createDrawSource(),
-    profiler,
-  }, {
-    shaderManifestUrl,
-    ...(devImportTransport === undefined ? {} : { importTransport: devImportTransport }),
-  });
+  if (!(await waitUntilDomConnected(canvas, isCurrentBoot))) {
+    if (!isCurrentBoot()) return null;
+    const error = new Error('[editor] viewport canvas not connected before createApp');
+    console.error(error);
+    paintDiagnosticMessage(container, error);
+    return null;
+  }
+  const createAppResult = await createApp(
+    canvas,
+    {
+      assetRuntimeBinding: gameSession.runtimeBinding,
+      input: canvasInput.editor,
+      features: renderFeatures,
+      // Engine keeps optional capabilities behind plugins. The editor must
+      // admit Skin because authored scene mounts can contain imported rigs;
+      // otherwise loading a perfectly valid scene fails closed at instantiate.
+      plugins: [editorComponentVocabularyPlugin(), skinningPlugin()],
+      pointerLockAllowed: () => false,
+      drawSource: worldManager.createDrawSource(),
+      profiler,
+    },
+    {
+      shaderManifestUrl,
+      ...(devImportTransport === undefined ? {} : { importTransport: devImportTransport }),
+    },
+  );
   if (!isCurrentBoot()) {
     if (createAppResult.ok) {
-      try { createAppResult.value.stop(); } catch { /* stale app is already unwinding */ }
+      try {
+        createAppResult.value.stop();
+      } catch {
+        /* stale app is already unwinding */
+      }
     }
     return null;
   }
@@ -1043,34 +1303,47 @@ async function bootViewport(
   let app = createAppResult;
   if (!app.ok) {
     const errCode = (app.error as unknown as Record<string, unknown>)?.code;
-    const isGpuError = errCode === 'rhi-not-available'
-      || errCode === 'engine-environment-error'
-      || errCode === 'webgpu-runtime-error';
+    const isGpuError =
+      errCode === 'rhi-not-available' ||
+      errCode === 'engine-environment-error' ||
+      errCode === 'webgpu-runtime-error';
     if (isGpuError) {
       console.warn('[editor] createApp failed (no GPU), retrying with null RHI:', app.error);
       const rhiNull = await import('@forgeax/engine-rhi-null');
-      app = await createApp(canvas, {
-        input: canvasInput.editor,
-        features: renderFeatures,
-        plugins: [editorComponentVocabularyPlugin(), skinningPlugin()],
-        pointerLockAllowed: () => false,
-        drawSource: worldManager.createDrawSource(),
-        profiler,
-        rhi: rhiNull.rhi as import('@forgeax/engine-rhi').RhiInstance,
-      }, {
-        shaderManifestUrl,
-        ...(devImportTransport === undefined ? {} : { importTransport: devImportTransport }),
-      });
+      app = await createApp(
+        canvas,
+        {
+          assetRuntimeBinding: gameSession.runtimeBinding,
+          input: canvasInput.editor,
+          features: renderFeatures,
+          plugins: [editorComponentVocabularyPlugin(), skinningPlugin()],
+          pointerLockAllowed: () => false,
+          drawSource: worldManager.createDrawSource(),
+          profiler,
+          rhi: rhiNull.rhi as import('@forgeax/engine-rhi').RhiInstance,
+        },
+        {
+          shaderManifestUrl,
+          ...(devImportTransport === undefined ? {} : { importTransport: devImportTransport }),
+        },
+      );
     }
   }
   if (!isCurrentBoot()) {
     if (app.ok) {
-      try { app.value.stop(); } catch { /* stale app is already unwinding */ }
+      try {
+        app.value.stop();
+      } catch {
+        /* stale app is already unwinding */
+      }
     }
     return null;
   }
 
   if (!app.ok) {
+    studioBootTrace('viewport.createApp.failed', {
+      code: (app.error as unknown as { code?: unknown })?.code ?? null,
+    });
     const errorDetail = (app.error as unknown as { readonly detail?: unknown }).detail;
     console.error('[editor] createApp failed:', app.error, errorDetail);
     forwardFeedbackHealth({
@@ -1081,6 +1354,7 @@ async function bootViewport(
     paintDiagnosticMessage(container, app.error);
     return null;
   }
+  studioBootTrace('viewport.createApp.ok', {});
   const editorApp = app.value;
   const { world, renderer } = editorApp;
   const assets = editorApp.assets;
@@ -1095,7 +1369,8 @@ async function bootViewport(
   // than inferred from the public Engine Renderer object.
   const rendererProvenance = mintRendererRealmProvenance();
   if (rendererProvenance !== null) {
-    const canvasIdentity = canvas.dataset.forgeaxCarrierCanvas ?? `canvas-${rendererProvenance.identity}`;
+    const canvasIdentity =
+      canvas.dataset.forgeaxCarrierCanvas ?? `canvas-${rendererProvenance.identity}`;
     canvas.dataset.forgeaxCarrierCanvas = canvasIdentity;
     const ownerIdentity: RendererOwnerAdmissionIdentity = {
       carrierId: runtimeIdentity.carrierId,
@@ -1106,7 +1381,10 @@ async function bootViewport(
       rendererGeneration: String(rendererProvenance.generation),
     };
     const rendererOwnerAdapter = renderer as unknown as {
-      applyShadowSubmitMode?: (mode: RendererOwnerAdmissionRequest['shadowSubmitMode'], rendererGeneration: string) => unknown;
+      applyShadowSubmitMode?: (
+        mode: RendererOwnerAdmissionRequest['shadowSubmitMode'],
+        rendererGeneration: string,
+      ) => unknown;
       restoreShadowSubmitMode?: (rendererGeneration: string) => unknown;
     };
     const ownerLease = createRendererOwnerAdmissionLease({
@@ -1117,17 +1395,38 @@ async function bootViewport(
         if (typeof applyShadowSubmitMode !== 'function') {
           throw new Error('renderer-owner-admission-adapter-unavailable');
         }
-        const result = applyShadowSubmitMode(input.shadowSubmitMode, input.identity.rendererGeneration);
-        if (result !== undefined && typeof result === 'object' && result !== null && 'ok' in result && result.ok === false) {
-          throw (result as { readonly error?: unknown }).error ?? new Error('renderer-owner-admission-apply-failed');
+        const result = applyShadowSubmitMode(
+          input.shadowSubmitMode,
+          input.identity.rendererGeneration,
+        );
+        if (
+          result !== undefined &&
+          typeof result === 'object' &&
+          result !== null &&
+          'ok' in result &&
+          result.ok === false
+        ) {
+          throw (
+            (result as { readonly error?: unknown }).error ??
+            new Error('renderer-owner-admission-apply-failed')
+          );
         }
       },
       restore() {
         const restoreShadowSubmitMode = rendererOwnerAdapter.restoreShadowSubmitMode;
         if (typeof restoreShadowSubmitMode !== 'function') return;
         const result = restoreShadowSubmitMode(ownerIdentity.rendererGeneration);
-        if (result !== undefined && typeof result === 'object' && result !== null && 'ok' in result && result.ok === false) {
-          throw (result as { readonly error?: unknown }).error ?? new Error('renderer-owner-admission-restore-failed');
+        if (
+          result !== undefined &&
+          typeof result === 'object' &&
+          result !== null &&
+          'ok' in result &&
+          result.ok === false
+        ) {
+          throw (
+            (result as { readonly error?: unknown }).error ??
+            new Error('renderer-owner-admission-restore-failed')
+          );
         }
       },
     });
@@ -1147,12 +1446,23 @@ async function bootViewport(
   });
   const closeEditorRealm = createEditorAppTeardown({
     unregisterErrorListener: unregisterEditorErrorListener,
-    disposeSession: () => session?.dispose({ flushPendingSave: currentResetOptions.flushPendingSave }),
+    disposeSession: () =>
+      session?.dispose({
+        flushPendingSave: currentResetOptions.flushPendingSave,
+      }),
     stopApp: () => {
-      try { editorApp.stop(); } catch (e) { console.warn('[editor] editorApp.stop() failed:', e); }
+      try {
+        editorApp.stop();
+      } catch (e) {
+        console.warn('[editor] editorApp.stop() failed:', e);
+      }
     },
     removeCanvas: () => {
-      try { canvas.remove(); } catch { /* already detached */ }
+      try {
+        canvas.remove();
+      } catch {
+        /* already detached */
+      }
     },
   });
   activeRealmTeardown = closeEditorRealm;
@@ -1161,29 +1471,29 @@ async function bootViewport(
     readFeatureDiagnostics: () => renderer.inspect().featureDiagnostics,
   });
   registerTeardown(gateway.registerRuntimeDiagnosticsProvider(infiniteGridDiagnostics));
-  registerTeardown(renderer.subscribe((event) => {
-    if (event.kind === 'state-changed' || event.kind === 'error') infiniteGridDiagnostics.notify();
-    if (event.kind === 'error') {
-      const feature = renderer.inspect().featureDiagnostics.find(
-        (candidate) => candidate.identity === INFINITE_GRID_FEATURE_ID,
-      );
-      traceInfiniteGridRendererError(event.error, {
-        frustumStats: { ...renderer.inspect().frustumStats },
-        featureStatus: feature?.status ?? null,
-        featureLatestError: feature?.latestError ?? null,
-      });
-    }
-  }));
+  registerTeardown(
+    renderer.subscribe((event) => {
+      if (event.kind === 'state-changed' || event.kind === 'error')
+        infiniteGridDiagnostics.notify();
+      if (event.kind === 'error') {
+        const feature = renderer
+          .inspect()
+          .featureDiagnostics.find((candidate) => candidate.identity === INFINITE_GRID_FEATURE_ID);
+        traceInfiniteGridRendererError(event.error, {
+          frustumStats: { ...renderer.inspect().frustumStats },
+          featureStatus: feature?.status ?? null,
+          featureLatestError: feature?.latestError ?? null,
+        });
+      }
+    }),
+  );
   let vfxRenderFeatureEnabled = false;
   if (supportsVfxRenderFeature(renderer.inspect().capabilities)) {
-    try {
-      await editorApp.pluginContext.plugin(renderFeaturePlugin(vfxBridge.host.feature));
-      vfxRenderFeatureEnabled = true;
-    } catch (error) {
-      console.warn('[editor] VFX render feature installation failed:', error);
-    }
+    vfxRenderFeatureEnabled = true;
   } else {
-    console.warn('[editor] VFX render feature disabled: active RHI lacks compute or indirect-drawing capability');
+    console.warn(
+      '[editor] VFX render feature disabled: active RHI lacks compute or indirect-drawing capability',
+    );
   }
   if (!isCurrentBoot()) {
     teardownIfStale(isCurrentBoot, closeEditorRealm);
@@ -1193,11 +1503,17 @@ async function bootViewport(
   registerTeardown(gateway.registerRuntimeDiagnosticsProvider(executionDiagnostics.provider));
   vfxRenderer = renderer;
   infiniteGridRenderer = renderer;
-  registerTeardown(renderer.subscribe((event) => {
-    if (event.kind === 'state-changed' || event.kind === 'error' || event.kind === 'frame-submitted') {
-      vfxBridge.notifyDiagnosticsChanged();
-    }
-  }));
+  registerTeardown(
+    renderer.subscribe((event) => {
+      if (
+        event.kind === 'state-changed' ||
+        event.kind === 'error' ||
+        event.kind === 'frame-submitted'
+      ) {
+        vfxBridge.notifyDiagnosticsChanged();
+      }
+    }),
+  );
   if (gameSession.runtimeBinding !== undefined) {
     assets.configureRuntimeBinding(gameSession.runtimeBinding);
   }
@@ -1224,7 +1540,14 @@ async function bootViewport(
     world,
     debugDraw: editorApp.debugDraw,
     getSelection,
-    getEntityComponents: (entity) => entComponents(gateway.doc.world, entity),
+    getEntityComponents: (entity) => entComponents(gateway.activeWorld, entity),
+    isSelectionVisibleInViewport: (entity) => {
+      const activeWorld = gateway.activeWorld;
+      return (
+        readEntityVisibility(activeWorld, entity, resolveVisibility(activeWorld)).effective !==
+        'hidden'
+      );
+    },
     isAuxVisible,
     isEditMode: () => getViewportQuadrant().run === 'edit',
   });
@@ -1237,18 +1560,25 @@ async function bootViewport(
       async () => {
         const response = await fetch(binding.catalogUrl, { cache: 'no-store' });
         if (!response.ok) throw new Error(`scoped catalog request failed: ${response.status}`);
-        const body = await response.json() as unknown;
+        const body = (await response.json()) as unknown;
         return Array.isArray(body)
-          ? body as readonly import('@forgeax/engine-types').CatalogEntry[]
-          : (body as { entries?: readonly import('@forgeax/engine-types').CatalogEntry[] }).entries ?? [];
+          ? (body as readonly import('@forgeax/engine-types').CatalogEntry[])
+          : ((
+              body as {
+                entries?: readonly import('@forgeax/engine-types').CatalogEntry[];
+              }
+            ).entries ?? []);
       },
-      import.meta.hot as unknown as import('@forgeax/engine-vite-plugin-pack/catalog-client').CatalogHotChannel,
+      import.meta
+        .hot as unknown as import('@forgeax/engine-vite-plugin-pack/catalog-client').CatalogHotChannel,
     );
-    assets.setCatalogSource(createCatalogSource({
-      url: binding.catalogUrl,
-      expectedScope: binding,
-      subscribe: catalogClient.subscribe,
-    }));
+    assets.setCatalogSource(
+      createCatalogSource({
+        url: binding.catalogUrl,
+        expectedScope: binding,
+        subscribe: catalogClient.subscribe,
+      }),
+    );
     const catalogResult = await assets.enumerateCatalog();
     if (!catalogResult.ok) {
       console.warn('[editor] scoped catalog unavailable:', catalogResult.error);
@@ -1298,13 +1628,20 @@ async function bootViewport(
     gameId: gameSession.runtimeBinding?.gameId,
     scopeId: gameSession.runtimeBinding?.scopeId,
     generation: gameSession.runtimeBinding?.generation,
-    endpoint: gameSession.runtimeBinding?.catalogUrl.replace(/\/__pack\/scopes\/.*$/, "/api/assets/source/execute"),
+    endpoint: gameSession.runtimeBinding?.catalogUrl.replace(
+      /\/__pack\/scopes\/.*$/,
+      '/api/assets/source/execute',
+    ),
   });
-  registerTeardown(installSourceAuthoringOps(createSourceAuthoringRuntime({
-    preflightSource: sourceTransport.preflightSource,
-    structuredOperations: sourceTransport.operations,
-    executeStructured: sourceTransport.execute,
-  })));
+  registerTeardown(
+    installSourceAuthoringOps(
+      createSourceAuthoringRuntime({
+        preflightSource: sourceTransport.preflightSource,
+        structuredOperations: sourceTransport.operations,
+        executeStructured: sourceTransport.execute,
+      }),
+    ),
+  );
   // Post-write catalog-sync seam (editor-core pack-ops): createMaterial's pack
   // write resolves BEFORE the vite-plugin-pack watcher rebuilds the served
   // pack-index (~150 ms debounce), so an immediate broadcastAssetsChanged()
@@ -1320,6 +1657,7 @@ async function bootViewport(
     await createAuthoredAssetCatalogBarrier(reg)(guid);
   });
   registerTeardown(() => registerPostAssetWriteCatalogSync(null));
+  registerTeardown(installSourcePackageCatalogBarrier());
   // Registry binding is a document-state change, even though no authored world
   // entity changed. Notify panel subscribers so a Content Browser mounted before
   // engine boot can acquire the live registry instead of retaining an empty model.
@@ -1357,36 +1695,49 @@ async function bootViewport(
   // structural half of AC-01: the camera can never land in the sceneWorld because
   // the only write path onto editorWorld is this facade (plan-strategy §2 D-2/D-5).
   const aspect = canvas.width / canvas.height || 1;
-  cameraEntity = worldManager.editorFacade.spawn(
-    { component: Name, data: { value: 'Editor Camera' } },
-    { component: Transform, data: { pos: [0, 1.5, 9] } },
-    { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect }), tonemap: TONEMAP_REINHARD_EXTENDED, clearColor: [0.42, 0.55, 0.78, 1] } },
-  ).unwrap();
+  cameraEntity = worldManager.editorFacade
+    .spawn(
+      { component: Name, data: { value: 'Editor Camera' } },
+      { component: Transform, data: { pos: [0, 1.5, 9] } },
+      {
+        component: Camera,
+        data: {
+          ...perspective({ fov: Math.PI / 3, aspect }),
+          tonemap: TONEMAP_REINHARD_EXTENDED,
+          clearColor: [0.42, 0.55, 0.78, 1],
+        },
+      },
+    )
+    .unwrap();
   setEditorCameraEntity(cameraEntity as unknown as number);
   // Hierarchy/Inspector chrome: Camera-only projection of editorWorld. Panels
   // read this seam instead of minting a scene HandlePair for the orbit camera
   // (pack-play litmus — editor camera must not enter the scene pack).
-  registerTeardown(registerEditorWorldProjectionProvider(() => {
-    const world = worldManager.editorWorld;
-    const cameraId = getEditorCameraEntity();
-    if (cameraId === undefined) return { cameraId: null, rows: [] };
-    const handle = cameraId as EntityHandle;
-    const directCam = world.get(handle, Camera);
-    const cam = directCam.ok ? directCam : entComponent(world, handle, 'Camera');
-    const directTr = world.get(handle, Transform);
-    const tr = directTr.ok ? directTr : entComponent(world, handle, 'Transform');
-    const name = entName(world, handle);
-    return {
-      cameraId: handle,
-      rows: [{
-        id: handle,
-        name: name.startsWith('#') ? 'Editor Camera' : name,
-        typeId: 'Camera',
-        camera: cam.ok ? (cam.value as Record<string, unknown>) : {},
-        transform: tr.ok ? (tr.value as Record<string, unknown>) : null,
-      }],
-    };
-  }));
+  registerTeardown(
+    registerEditorWorldProjectionProvider(() => {
+      const world = worldManager.editorWorld;
+      const cameraId = getEditorCameraEntity();
+      if (cameraId === undefined) return { cameraId: null, rows: [] };
+      const handle = cameraId as EntityHandle;
+      const directCam = world.get(handle, Camera);
+      const cam = directCam.ok ? directCam : entComponent(world, handle, 'Camera');
+      const directTr = world.get(handle, Transform);
+      const tr = directTr.ok ? directTr : entComponent(world, handle, 'Transform');
+      const name = entName(world, handle);
+      return {
+        cameraId: handle,
+        rows: [
+          {
+            id: handle,
+            name: name.startsWith('#') ? 'Editor Camera' : name,
+            typeId: 'Camera',
+            camera: cam.ok ? (cam.value as Record<string, unknown>) : {},
+            transform: tr.ok ? (tr.value as Record<string, unknown>) : null,
+          },
+        ],
+      };
+    }),
+  );
 
   // viewport interaction: orbit/pan/zoom, click-to-select, drag-to-move (was :591).
   // M4 (w19/w20): the viewport receives TWO facades — `editorEngine`
@@ -1407,7 +1758,13 @@ async function bootViewport(
   // the editor camera projection + gizmo track the new aspect ratio on every
   // container resize (dock-panel drags + window resizes).
   onContainerResize = () => createdViewport.refresh();
-  registerTeardown(() => { try { createdViewport.dispose(); } catch { /* already disposed */ } });
+  registerTeardown(() => {
+    try {
+      createdViewport.dispose();
+    } catch {
+      /* already disposed */
+    }
+  });
 
   // M5 t32 (requirements AC-11): mount the operation-scope eval channel in every
   // Editor runtime. Its normal scope is {gateway, query, _import}; this semantic
@@ -1424,16 +1781,21 @@ async function bootViewport(
   // explicitly enables VITE_FORGEAX_BRIDGE. Either signal may grant raw scope;
   // production hosts provide neither and still retain normal Gateway scripts.
   {
-    const rawScopeEnabled = Boolean(import.meta.env.DEV)
-      || import.meta.env.VITE_FORGEAX_BRIDGE === '1';
-    const channel = createEvalChannel(gateway, rawScopeEnabled
-      ? { rawScope: { world, renderer, assets } }
-      : undefined);
+    const rawScopeEnabled =
+      Boolean(import.meta.env.DEV) || import.meta.env.VITE_FORGEAX_BRIDGE === '1';
+    const channel = createEvalChannel(
+      gateway,
+      rawScopeEnabled ? { rawScope: { world, renderer, assets: assets } } : undefined,
+    );
     (globalThis as Record<string, unknown>).__forgeaxEval = channel;
     // Propagate to parent frame when running inside a same-origin carrier iframe
     // so that Playwright page.evaluate() in the main frame can access it directly.
     if (window.parent !== window) {
-      try { (window.parent as unknown as Record<string, unknown>).__forgeaxEval = channel; } catch { /* cross-origin */ }
+      try {
+        (window.parent as unknown as Record<string, unknown>).__forgeaxEval = channel;
+      } catch {
+        /* cross-origin */
+      }
     }
 
     // ── live gateway bridge (DEV-only) ────────────────────────────────────
@@ -1479,8 +1841,11 @@ async function bootViewport(
             // reconnected (a fresh WebSocket instance); the relay keys replies by
             // request id, so sending on the live socket still resolves the pending
             // request. Capturing the enqueue-time socket would send on a closed one.
-            try { bridgeWs?.send(JSON.stringify({ type: 'result', id: job.id, payload })); }
-            catch { /* socket gone; relay will time the request out */ }
+            try {
+              bridgeWs?.send(JSON.stringify({ type: 'result', id: job.id, payload }));
+            } catch {
+              /* socket gone; relay will time the request out */
+            }
           };
           // eval returns {ok, value|error}; value may be a Promise (async IIFE /
           // _import). Await it, then send a JSON-safe envelope back. Non-
@@ -1488,24 +1853,54 @@ async function bootViewport(
           // one bad field never wedges the channel.
           void (async () => {
             let res: unknown;
-            try { res = channel.eval(job.code); } catch (e) {
-              return reply({ ok: false, error: { code: 'BRIDGE_EVAL_THREW', hint: String((e as Error)?.message ?? e) } });
+            try {
+              res = channel.eval(job.code);
+            } catch (e) {
+              return reply({
+                ok: false,
+                error: {
+                  code: 'BRIDGE_EVAL_THREW',
+                  hint: String((e as Error)?.message ?? e),
+                },
+              });
             }
             const r = res as { ok?: boolean; value?: unknown };
-            if (r?.ok && r.value != null && typeof (r.value as { then?: unknown }).then === 'function') {
-              try { r.value = await (r.value as Promise<unknown>); }
-              catch (e) { return reply({ ok: false, error: { code: 'SCRIPT_RUNTIME_ERROR', hint: `async rejected: ${String((e as Error)?.message ?? e)}` } }); }
+            if (
+              r?.ok &&
+              r.value != null &&
+              typeof (r.value as { then?: unknown }).then === 'function'
+            ) {
+              try {
+                r.value = await (r.value as Promise<unknown>);
+              } catch (e) {
+                return reply({
+                  ok: false,
+                  error: {
+                    code: 'SCRIPT_RUNTIME_ERROR',
+                    hint: `async rejected: ${String((e as Error)?.message ?? e)}`,
+                  },
+                });
+              }
             }
-            try { JSON.stringify(res); reply(res); }
-            catch { reply({ ok: true, value: '[unserializable value — check the live window]' }); }
+            try {
+              JSON.stringify(res);
+              reply(res);
+            } catch {
+              reply({
+                ok: true,
+                value: '[unserializable value — check the live window]',
+              });
+            }
           })();
         }
       };
-      world.addSystem(Update, {
-        name: 'editor-bridge-eval-drain',
-        queries: [],
-        fn: drainEvalQueue,
-      }).unwrap();
+      world
+        .addSystem(Update, {
+          name: 'editor-bridge-eval-drain',
+          queries: [],
+          fn: drainEvalQueue,
+        })
+        .unwrap();
       // Follow-the-live-app: expose the drain so the host session registers it on
       // the PLAY world too (the edit App is paused during play → its Update system
       // goes quiet, and a bridge eval submitted while playing would never drain).
@@ -1513,8 +1908,9 @@ async function bootViewport(
 
       const connectBridge = (): void => {
         if (bridgeStopped) return;
-        try { bridgeWs = new WebSocket(`ws://127.0.0.1:${bridgePort}/bridge`); }
-        catch { return; }
+        try {
+          bridgeWs = new WebSocket(`ws://127.0.0.1:${bridgePort}/bridge`);
+        } catch { return; }
         bridgeWs.addEventListener('open', () => { bridgeBackoff = 1000; });
         bridgeWs.addEventListener('message', (ev) => {
           let msg: { type?: string; id?: number; code?: string };
@@ -1617,8 +2013,8 @@ async function bootViewport(
     session = await initHostSession({
       app: editorApp as never,
       world: world as never,
-      // drag-spawn-resolve reads renderer.assets.loadByGuid; createApp keeps assets on editorApp.
-      renderer: { ...renderer, assets } as never,
+      renderer: renderer as never,
+      assetRegistry: assets,
       cameraEntity: cameraEntity as unknown as number,
       viewport,
       viewportContainer: container,
@@ -1633,31 +2029,45 @@ async function bootViewport(
       // Keep the play App's sole frame loop, but switch its declared renderer
       // projection by quadrant: game camera in play·game; editor camera over the
       // live play world in play·scene.
-      createPlayDrawSource: (playWorld) => worldManager.createPlayDrawSource(
-        playWorld as import('@forgeax/engine-ecs').World,
-        () => getViewportQuadrant().display === 'scene',
-      ),
+      createPlayDrawSource: (playWorld) =>
+        worldManager.createPlayDrawSource(
+          playWorld as import('@forgeax/engine-ecs').World,
+          () => getViewportQuadrant().display === 'scene',
+        ),
       physics: editPhysics,
       vfxRuntimeHost: vfxBridge.host,
       vfxRenderFeatureEnabled,
       onVfxDiagnosticsChanged: vfxBridge.notifyDiagnosticsChanged,
-      ...(gameSession.selectedSceneGuid ? { selectedSceneGuid: gameSession.selectedSceneGuid } : {}),
-      ...(gameSession.slug ? {
-        playChildUrl: (generation: number) => {
-          const binding = requirePlayRuntimeBinding(gameSession.runtimeBinding);
-          const params = new URLSearchParams({
-            game: gameSession.slug!,
-            playGeneration: String(generation),
-            runtimeId: runtimeIdentity.runtimeId,
-            runtimeScopeId: binding.scopeId,
-            runtimeGeneration: String(binding.generation),
-            carrierId: `${runtimeIdentity.carrierId}:play:${generation}`,
-            carrierKind: 'iframe',
-          });
-          if (gameSession.selectedSceneGuid) params.set('sceneGuid', gameSession.selectedSceneGuid);
-          return `/preview/?${params.toString()}`;
-        },
-      } : {}),
+      ...(gameSession.runtimeBinding ? { runtimeBinding: gameSession.runtimeBinding } : {}),
+      ...(gameSession.selectedSceneGuid
+        ? { selectedSceneGuid: gameSession.selectedSceneGuid }
+        : {}),
+      ...(gameSession.slug &&
+      gameSession.slug !== 'default' &&
+      gameSession.runtimeBinding !== undefined
+        ? {
+            playChildUrl: (generation: number) => {
+              const binding = requirePlayRuntimeBinding(gameSession.runtimeBinding);
+              const params = new URLSearchParams({
+                game: gameSession.slug!,
+                playGeneration: String(generation),
+                runtimeId: runtimeIdentity.runtimeId,
+                runtimeScopeId: binding.scopeId,
+                runtimeGeneration: String(binding.generation),
+                carrierId: `${runtimeIdentity.carrierId}:play:${generation}`,
+                carrierKind: 'iframe',
+              });
+              // Studio iframe edit-host races orchestrator scope bind; standalone
+              // single-realm hosts publish a stable binding before ▶ Play.
+              if (typeof window !== 'undefined' && window.parent !== window) {
+                params.set('runtimeBindingPoll', '1');
+              }
+              if (gameSession.selectedSceneGuid)
+                params.set('sceneGuid', gameSession.selectedSceneGuid);
+              return `/preview/?${params.toString()}`;
+            },
+          }
+        : {}),
       // DEV bridge follow-the-live-app: keep the eval-queue drain ticking on the
       // play App while the edit App is paused during play (undefined in prod).
       ...(bridgeDrainForPlay ? { onPlayFrame: bridgeDrainForPlay } : {}),
@@ -1698,7 +2108,11 @@ async function bootViewport(
         vfxBridge.notifyDiagnosticsChanged();
         livePlayWorld = undefined;
         canvasInput.revokeGame();
-        setViewportQuadrant({ run: 'edit', display: 'scene', control: 'editor' });
+        setViewportQuadrant({
+          run: 'edit',
+          display: 'scene',
+          control: 'editor',
+        });
         refreshVisibilityTarget();
         if (error !== undefined && isReportablePlayFailure(error)) {
           forwardFeedbackHealth({
@@ -1716,11 +2130,20 @@ async function bootViewport(
       return null;
     }
     console.error('[editor] host session init failed:', err);
-    reportPlayStartupFailure(err);
+    const hostSessionUnavailable = {
+      code: 'host-session-unavailable' as const,
+      hint: 'Host session failed to initialize; reload the editor.',
+    };
     session = {
-      playSimulation: () => reportPlayStartupFailure(err),
+      playSimulation: () => {
+        gateway.failPlayAttempt(hostSessionUnavailable);
+        return { ok: false, error: hostSessionUnavailable };
+      },
       stopSimulation: () => {},
-      captureFrame: () => Promise.reject(new Error('RHI debug capture is unavailable; host session failed to initialize')),
+      captureFrame: () =>
+        Promise.reject(
+          new Error('RHI debug capture is unavailable; host session failed to initialize'),
+        ),
       dispose: () => {},
       currentPlayWorld: () => null,
       currentPlayRunId: () => null,
@@ -1744,10 +2167,12 @@ async function bootViewport(
   };
   // Scripted state transitions use the same physical boundary transition as UI
   // gestures; the quadrant remains the SSOT, while the boundary owns cleanup.
-  registerTeardown(onViewportQuadrantChange((q) => {
-    if (q.inputTarget === 'game') canvasInput.grantGame();
-    else canvasInput.revokeGame();
-  }));
+  registerTeardown(
+    onViewportQuadrantChange((q) => {
+      if (q.inputTarget === 'game') canvasInput.grantGame();
+      else canvasInput.revokeGame();
+    }),
+  );
 
   // A capture-phase activation grants the game lease only from the play·game
   // observation state. In edit·scene and play·scene the same physical canvas is
@@ -1775,7 +2200,10 @@ async function bootViewport(
   };
   const revokeOnFocus = (event: FocusEvent): void => {
     const target = event.target as HTMLElement | null;
-    if (target?.matches('input, textarea, select, [contenteditable="true"]') || target?.isContentEditable) {
+    if (
+      target?.matches('input, textarea, select, [contenteditable="true"]') ||
+      target?.isContentEditable
+    ) {
       revokeGameControl();
     }
   };
@@ -1812,24 +2240,33 @@ async function bootViewport(
 
   if (playPreparation) {
     const sessionActions = actionsRef.current;
-    registerTeardown(playPreparation.attach({
-      play: sessionActions.playSimulation,
-      stop: sessionActions.stopSimulation,
-      isPlaying: () => gateway.playPhase === 'play',
-      preparing: () => gateway.beginPlayAttempt(),
-      failed: reportPlayStartupFailure,
-      prepareScene: async (policy, origin) => {
-        if (!hasPendingDiskSave()) return;
-        if (policy === 'cancel') throw { code: 'play-cancelled-dirty', hint: 'The scene has unsaved edits.' };
-        if (policy !== 'save-then-play') return;
-        const saveId = crypto.randomUUID();
-        const accepted = gateway.dispatch({ kind: 'saveDocToDisk', requestId: saveId }, origin);
-        const saved = accepted.ok ? await gateway.waitOperationRun(saveId) : undefined;
-        if (!saved?.ok || saved.value?.status !== 'succeeded') {
-          throw { code: 'play-save-failed', hint: 'Save must succeed before preparing the runtime.' };
-        }
-      },
-    }));
+    registerTeardown(
+      playPreparation.attach({
+        play: sessionActions.playSimulation,
+        stop: sessionActions.stopSimulation,
+        isPlaying: () => gateway.playPhase === 'play',
+        preparing: () => gateway.beginPlayAttempt(),
+        failed: reportPlayStartupFailure,
+        prepareScene: async (policy, origin) => {
+          if (!hasPendingDiskSave()) return;
+          if (policy === 'cancel')
+            throw {
+              code: 'play-cancelled-dirty',
+              hint: 'The scene has unsaved edits.',
+            };
+          if (policy !== 'save-then-play') return;
+          const saveId = crypto.randomUUID();
+          const accepted = gateway.dispatch({ kind: 'saveDocToDisk', requestId: saveId }, origin);
+          const saved = accepted.ok ? await gateway.waitOperationRun(saveId) : undefined;
+          if (!saved?.ok || saved.value?.status !== 'succeeded') {
+            throw {
+              code: 'play-save-failed',
+              hint: 'Save must succeed before preparing the runtime.',
+            };
+          }
+        },
+      }),
+    );
     actionsRef.current = {
       playSimulation: playPreparation.play,
       stopSimulation: playPreparation.stop,
@@ -1849,63 +2286,76 @@ async function bootViewport(
   // point the gateway would legitimately return UNKNOWN_OP — headless form). The
   // returned unregister fns run on teardown to avoid leaking a stale applier across
   // a cross-game realm reset.
-  registerTeardown(registerViewportSessionAppliers({
-    play: (policy, origin, requestId) => actionsRef.current.playSimulation(policy, origin, requestId),
-    stop: () => actionsRef.current.stopSimulation(),
-    setDisplay: (display) => {
-      if (display !== 'game') revokeGameControl();
-      setViewportQuadrant({ display });
-    },
-    grantGameControl,
-    releaseGameControl: revokeGameControl,
-    replayParticleEffect: (entity) => {
-      const control = vfxBridge.host.acquireControl(gateway.activeWorld);
-      if (!control.ok) return { ok: false, error: control.error };
-      const replayed = control.value.replay({ player: entity as EntityHandle });
-      return replayed.ok ? { ok: true } : { ok: false, error: replayed.error };
-    },
-    captureFrame: async (frames) => {
-      const capture = await session.captureFrame(frames);
-      const candidate = capture !== null && typeof capture === 'object' && !Array.isArray(capture)
-        ? capture as Record<string, unknown>
-        : undefined;
-      if (candidate?.provenance !== undefined) return capture;
-      if (getViewportQuadrant().run === 'play') {
-        throw { code: 'play-carrier-provenance-unavailable', hint: 'Play capture did not come from the current live carrier' };
-      }
-      const rendererBackend = renderer.inspect().capabilities.backendKind;
-      if (rendererProvenance === null || rendererBackend.trim() === '') {
-        throw { code: 'capture-provenance-unavailable', hint: 'the active Edit renderer did not publish complete provenance' };
-      }
-      const provenance: CaptureProducerProvenance = {
-        backend: rendererBackend,
-        rendererIdentity: rendererProvenance.identity,
-        rendererGeneration: rendererProvenance.generation,
-        carrierGeneration: runtimeIdentity.runtimeGeneration,
-        carrierId: runtimeIdentity.carrierId,
-        carrierKind: runtimeIdentity.carrierKind,
-        runtimeId: runtimeIdentity.runtimeId,
-        runtimeGeneration: runtimeIdentity.runtimeGeneration,
-      };
-      return { ...(candidate ?? {}), provenance };
-    },
-    profiler,
-    world,
-    activeWorld: () => gateway.activeWorld,
-    removeSystem: (targetWorld, name) => {
-      const schedule = targetWorld.inspect().schedules.find((entry) =>
-        entry.systems.some((system) => system.name === name),
-      );
-      if (schedule === undefined) {
-        return { ok: false, error: `system '${name}' is not installed by a World Plugin` };
-      }
-      const removed = targetWorld.removeSystem(schedule.schedule, name);
-      return removed.ok
-        ? { ok: true }
-        : { ok: false, error: removed.error };
-    },
-    gateway,
-  }));
+  registerTeardown(
+    registerViewportSessionAppliers({
+      play: (policy, origin, requestId) =>
+        actionsRef.current.playSimulation(policy, origin, requestId),
+      stop: () => actionsRef.current.stopSimulation(),
+      setDisplay: (display) => {
+        if (display !== 'game') revokeGameControl();
+        setViewportQuadrant({ display });
+      },
+      grantGameControl,
+      releaseGameControl: revokeGameControl,
+      replayParticleEffect: (entity) => {
+        const control = vfxBridge.host.acquireControl(gateway.activeWorld);
+        if (!control.ok) return { ok: false, error: control.error };
+        const replayed = control.value.replay({
+          player: entity as EntityHandle,
+        });
+        return replayed.ok ? { ok: true } : { ok: false, error: replayed.error };
+      },
+      captureFrame: async (frames) => {
+        const capture = await session!.captureFrame(frames);
+        const candidate =
+          capture !== null && typeof capture === 'object' && !Array.isArray(capture)
+            ? (capture as Record<string, unknown>)
+            : undefined;
+        if (candidate?.provenance !== undefined) return capture;
+        if (getViewportQuadrant().run === 'play') {
+          throw {
+            code: 'play-carrier-provenance-unavailable',
+            hint: 'Play capture did not come from the current live carrier',
+          };
+        }
+        const rendererBackend = renderer.inspect().capabilities.backendKind;
+        if (rendererProvenance === null || rendererBackend.trim() === '') {
+          throw {
+            code: 'capture-provenance-unavailable',
+            hint: 'the active Edit renderer did not publish complete provenance',
+          };
+        }
+        const provenance: CaptureProducerProvenance = {
+          backend: rendererBackend,
+          rendererIdentity: rendererProvenance.identity,
+          rendererGeneration: rendererProvenance.generation,
+          carrierGeneration: runtimeIdentity.runtimeGeneration,
+          carrierId: runtimeIdentity.carrierId,
+          carrierKind: runtimeIdentity.carrierKind,
+          runtimeId: runtimeIdentity.runtimeId,
+          runtimeGeneration: runtimeIdentity.runtimeGeneration,
+        };
+        return { ...(candidate ?? {}), provenance };
+      },
+      profiler,
+      world,
+      activeWorld: () => gateway.activeWorld,
+      removeSystem: (targetWorld, name) => {
+        const schedule = targetWorld
+          .inspect()
+          .schedules.find((entry) => entry.systems.some((system) => system.name === name));
+        if (schedule === undefined) {
+          return {
+            ok: false,
+            error: `system '${name}' is not installed by a World Plugin`,
+          };
+        }
+        const removed = targetWorld.removeSystem(schedule.schedule, name);
+        return removed.ok ? { ok: true } : { ok: false, error: removed.error };
+      },
+      gateway,
+    }),
+  );
 
   // M4 T4-6 (G-6): setDisplay is a SESSION-domain op — display toggle (scene⇄game)
   // is ledger-visible + AI-equivalent, symmetric to play/stop. The router (and the
@@ -1935,7 +2385,11 @@ async function bootViewport(
 
   // Expose the viewport quadrant SSOT for out-of-frame scripting (was :503).
   const editorGlobal = {
-    app: editorApp, world, renderer, gateway, switchScene: switchSceneFile,
+    app: editorApp,
+    world,
+    renderer,
+    gateway,
+    switchScene: switchSceneFile,
     runtime: {
       runtimeGeneration: runtimeIdentity.runtimeGeneration,
       repositoryIdentity: gameSession.gameRoot ?? null,
@@ -1958,7 +2412,8 @@ async function bootViewport(
           : referenceCreationTransport.handle(request);
       },
     },
-    playSimulation: (policy: PlayDirtyPolicy = 'last-saved', origin: CommandOrigin = 'human') => actionsRef.current.playSimulation(policy, origin),
+    playSimulation: (policy: PlayDirtyPolicy = 'last-saved', origin: CommandOrigin = 'human') =>
+      actionsRef.current.playSimulation(policy, origin),
     stopSimulation: () => actionsRef.current.stopSimulation(),
     dispose: () => session!.dispose(),
     currentPlayWorld: () => session!.currentPlayWorld(),
@@ -1968,10 +2423,11 @@ async function bootViewport(
     // Read-only diagnostic seam for runtime acceptance tests. Writes still use
     // gateway.dispatch; this helper exposes the same structured stale-handle
     // result used by the Inspector without adding a second mutation path.
-    readActiveEntityComponent: (entity: EntityHandle, component: string) => (
-      entComponent(gateway.activeWorld, entity, component)
-    ),
-    getViewportQuadrant, setViewportQuadrant, onViewportQuadrantChange,
+    readActiveEntityComponent: (entity: EntityHandle, component: string) =>
+      entComponent(gateway.activeWorld, entity, component),
+    getViewportQuadrant,
+    setViewportQuadrant,
+    onViewportQuadrantChange,
     // M5 (w29): expose the super coordination layer so out-of-frame scripts (AC-02
     // e2e) can witness the separate editorWorld (camera + editor chrome) + query bindings.
     worldManager,
@@ -1980,19 +2436,25 @@ async function bootViewport(
   // Propagate to parent frame when running inside a same-origin carrier iframe
   // so that Playwright page.evaluate() in the main frame can access it directly.
   if (window.parent !== window) {
-    try { (window.parent as unknown as Record<string, unknown>).__forgeax_editor = editorGlobal; } catch { /* cross-origin */ }
+    try {
+      (window.parent as unknown as Record<string, unknown>).__forgeax_editor = editorGlobal;
+    } catch {
+      /* cross-origin */
+    }
   }
 
   // Generated-visual presenters obtain their host inputs through this explicit
   // registration, never by querying #app or the DEV-only debug object above.
   // Register immediately before starting the app so teardown unregisters the
   // source before it stops the renderer and releases the canvas.
-  registerTeardown(registerEditorVisualHost({
-    gateway: gateway as never,
-    canvas,
-    gameRoot: gameSession.gameRoot,
-    getActiveCameraEntity: deriveActiveCameraEntity,
-  }));
+  registerTeardown(
+    registerEditorVisualHost({
+      gateway: gateway as never,
+      canvas,
+      gameRoot: gameSession.gameRoot,
+      getActiveCameraEntity: deriveActiveCameraEntity,
+    }),
+  );
 
   // start the live render loop + reporters (was :895). The host error listener
   // is installed immediately after createApp so an in-flight HMR/page reload
@@ -2000,32 +2462,42 @@ async function bootViewport(
   // Register the telemetry system before arming the App loop. World schedules
   // are consumed by the first running frame; installing this after start can
   // leave the live carrier rendering while the FPS publisher never runs.
-  registerTeardown(installFpsReport(
-    (listener) => renderer.subscribe((event) => {
-      if (event.kind === 'frame-submitted') listener();
-    }),
-    { shouldPublish: () => !remotePlayFpsActive },
-  ));
+  registerTeardown(
+    installFpsReport(
+      (listener) =>
+        renderer.subscribe((event) => {
+          if (event.kind === 'frame-submitted') listener();
+        }),
+      { shouldPublish: () => !remotePlayFpsActive },
+    ),
+  );
   editorApp.start();
   const reportedSaveRuns = new Set<string>();
-  registerTeardown(gateway.subscribeOperationRuns((run) => {
-    if (run.status !== 'failed' || run.operationId !== 'saveDocToDisk' || reportedSaveRuns.has(run.runId)) return;
-    reportedSaveRuns.add(run.runId);
-    forwardFeedbackHealth({
-      source: 'edit',
-      code: normalizeSaveFailureCode(run.error),
-      message: errorMessage(run.error, 'The scene could not be saved.'),
-    });
-  }));
+  registerTeardown(
+    gateway.subscribeOperationRuns((run) => {
+      if (
+        run.status !== 'failed' ||
+        run.operationId !== 'saveDocToDisk' ||
+        reportedSaveRuns.has(run.runId)
+      )
+        return;
+      reportedSaveRuns.add(run.runId);
+      forwardFeedbackHealth({
+        source: 'edit',
+        code: normalizeSaveFailureCode(run.error),
+        message: errorMessage(run.error, 'The scene could not be saved.'),
+      });
+    }),
+  );
   // Cross-realm M1 boundary: the Runtime owns Gateway/World/Registry and serves
   // their typed operation/projection surface over one transferred MessagePort.
   // A top-level local viewport has no owning window and installs no listener.
   const runtimeOwner = window.opener ?? (window.parent === window ? null : window.parent);
   const runtimeUiGraph = getActiveRuntimeUiGraph();
   if (
-    runtimeUiGraph !== null
-    && (runtimeIdentity.carrierKind === 'browser-page'
-      || runtimeIdentity.carrierKind === 'tauri-webview')
+    runtimeUiGraph !== null &&
+    (runtimeIdentity.carrierKind === 'browser-page' ||
+      runtimeIdentity.carrierKind === 'tauri-webview')
   ) {
     // Top-level popup/Tauri carriers do not share a durable WindowProxy shape.
     // Both therefore use the same generation-fenced structured channel; iframe
@@ -2053,10 +2525,12 @@ async function bootViewport(
       readExecutionReport: executionDiagnostics.report,
     });
     referenceCreationTransport = service;
-    registerTeardown(installBroadcastViewportRuntimeHost({
-      runtime: runtimeIdentity,
-      service,
-    }));
+    registerTeardown(
+      installBroadcastViewportRuntimeHost({
+        runtime: runtimeIdentity,
+        service,
+      }),
+    );
     // Detached popup/Tauri windows still host PanelShell in THIS window.
     // Broadcast serves other windows; the local client is what enables Play.
     if (shouldBindInProcessViewportRuntimeClient(runtimeIdentity.carrierKind)) {
@@ -2075,19 +2549,31 @@ async function bootViewport(
         localClient.dispose();
       });
     }
-  } else if (runtimeOwner !== null && runtimeUiGraph !== null && runtimeIdentity.carrierKind === 'iframe') {
-    const runtimeHostOrigin = readViewportRuntimeHostOrigin(window.location.search, window.location.origin);
-    registerTeardown(configureEditorPageNavigation({
-      openAsset: async (asset) => {
-        runtimeOwner.postMessage({
-          type: VIEWPORT_RUNTIME_OPEN_ASSET,
-          runtime: runtimeIdentity,
-          asset,
-        }, runtimeHostOrigin);
-      },
-      getActiveAsset: () => null,
-      subscribe: () => () => {},
-    }));
+  } else if (
+    runtimeOwner !== null &&
+    runtimeUiGraph !== null &&
+    runtimeIdentity.carrierKind === 'iframe'
+  ) {
+    const runtimeHostOrigin = readViewportRuntimeHostOrigin(
+      window.location.search,
+      window.location.origin,
+    );
+    registerTeardown(
+      configureEditorPageNavigation({
+        openAsset: async (asset) => {
+          runtimeOwner.postMessage(
+            {
+              type: VIEWPORT_RUNTIME_OPEN_ASSET,
+              runtime: runtimeIdentity,
+              asset,
+            },
+            runtimeHostOrigin,
+          );
+        },
+        getActiveAsset: () => null,
+        subscribe: () => () => {},
+      }),
+    );
     const service = createViewportRuntimeTransportService({
       runtime: runtimeIdentity,
       referenceCreationScope,
@@ -2110,49 +2596,88 @@ async function bootViewport(
         gizmoPivot: getGizmoPivot(),
       }),
       readExecutionReport: executionDiagnostics.report,
+      notifyShellProjectionInvalidated: ({ projection, revision }) => {
+        traceHierarchyVisibility('carrier.message.out', {
+          via: 'iframe-postMessage',
+          type: VIEWPORT_RUNTIME_PROJECTION_INVALIDATED,
+          projection,
+          revision,
+          targetOrigin: runtimeHostOrigin,
+        });
+        runtimeOwner.postMessage(
+          {
+            type: VIEWPORT_RUNTIME_PROJECTION_INVALIDATED,
+            runtime: runtimeIdentity,
+            projection,
+            revision,
+          },
+          runtimeHostOrigin,
+        );
+      },
     });
     referenceCreationTransport = service;
     registerTeardown(service.dispose);
-    registerTeardown(installViewportRuntimeConnectionHost({
-      target: window as unknown as ViewportRuntimeMessageTarget,
-      expectedSource: runtimeOwner as unknown as ViewportRuntimeMessageSource,
-      expectedOrigin: runtimeHostOrigin,
-      runtime: runtimeIdentity,
-      service,
-      onPreviewExecutorLeaseConnect: bindVfxPreviewExecutorLease,
-      onReject: (reason) => console.warn(`[editor] ${reason}`),
-    }));
+    registerTeardown(
+      installViewportRuntimeConnectionHost({
+        target: window as unknown as ViewportRuntimeMessageTarget,
+        expectedSource: runtimeOwner as unknown as ViewportRuntimeMessageSource,
+        expectedOrigin: runtimeHostOrigin,
+        runtime: runtimeIdentity,
+        service,
+        onPreviewExecutorLeaseConnect: bindVfxPreviewExecutorLease,
+        onReject: (reason) => console.warn(`[editor] ${reason}`),
+      }),
+    );
     const projectedAssetRuns = new Set<string>();
-    registerTeardown(gateway.subscribeOperationRuns((run) => {
-      runtimeOwner.postMessage({
-        type: VIEWPORT_RUNTIME_PROJECTION_INVALIDATED,
-        runtime: runtimeIdentity,
-        projection: 'operations',
-        revision: gateway.operationRunSnapshot().revision,
-      }, runtimeHostOrigin);
-      if (run.status !== 'succeeded'
-        || run.operationId !== 'saveAssetSourceOverride'
-        || projectedAssetRuns.has(run.runId)) return;
-      const guid = (run.input as { readonly guid?: unknown } | undefined)?.guid;
-      if (typeof guid !== 'string') return;
-      projectedAssetRuns.add(run.runId);
-      runtimeOwner.postMessage({
-        type: VIEWPORT_RUNTIME_PROJECTION_INVALIDATED,
-        runtime: runtimeIdentity,
-        projection: 'assets',
-        revision: run.sequence,
-        guid,
-      }, runtimeHostOrigin);
-    }));
-    registerTeardown(gateway.subscribeOperationCapabilities((snapshot) => {
-      runtimeOwner.postMessage({
-        type: VIEWPORT_RUNTIME_PROJECTION_INVALIDATED,
-        runtime: runtimeIdentity,
-        projection: 'capabilities',
-        revision: snapshot.revision,
-      }, runtimeHostOrigin);
-    }));
-  } else if (runtimeUiGraph !== null && shouldBindInProcessViewportRuntimeClient(runtimeIdentity.carrierKind)) {
+    registerTeardown(
+      gateway.subscribeOperationRuns((run) => {
+        runtimeOwner.postMessage(
+          {
+            type: VIEWPORT_RUNTIME_PROJECTION_INVALIDATED,
+            runtime: runtimeIdentity,
+            projection: 'operations',
+            revision: gateway.operationRunSnapshot().revision,
+          },
+          runtimeHostOrigin,
+        );
+        if (
+          run.status !== 'succeeded' ||
+          run.operationId !== 'saveAssetSourceOverride' ||
+          projectedAssetRuns.has(run.runId)
+        )
+          return;
+        const guid = (run.input as { readonly guid?: unknown } | undefined)?.guid;
+        if (typeof guid !== 'string') return;
+        projectedAssetRuns.add(run.runId);
+        runtimeOwner.postMessage(
+          {
+            type: VIEWPORT_RUNTIME_PROJECTION_INVALIDATED,
+            runtime: runtimeIdentity,
+            projection: 'assets',
+            revision: run.sequence,
+            guid,
+          },
+          runtimeHostOrigin,
+        );
+      }),
+    );
+    registerTeardown(
+      gateway.subscribeOperationCapabilities((snapshot) => {
+        runtimeOwner.postMessage(
+          {
+            type: VIEWPORT_RUNTIME_PROJECTION_INVALIDATED,
+            runtime: runtimeIdentity,
+            projection: 'capabilities',
+            revision: snapshot.revision,
+          },
+          runtimeHostOrigin,
+        );
+      }),
+    );
+  } else if (
+    runtimeUiGraph !== null &&
+    shouldBindInProcessViewportRuntimeClient(runtimeIdentity.carrierKind)
+  ) {
     // Studio's current editor is a single realm: the shell and this Runtime
     // share one window, so there is no iframe MessagePort handshake to bind the
     // panel-side viewport client. Reuse the exact canonical service locally so
@@ -2190,6 +2715,7 @@ async function bootViewport(
       localClient,
       gameSession.runtimeBinding?.catalogRoots,
     );
+    void refreshViewportRuntimeHierarchySnapshot().catch(() => undefined);
     const uninstallPreviewExecutorLease = installInProcessPreviewExecutorLeaseHost(
       bindVfxPreviewExecutorLease,
     );
@@ -2225,7 +2751,9 @@ async function bootViewport(
         health.getIdentity,
       );
       registerTeardown(registerLiveGameplayBridge(bridge));
-      const host = globalThis as typeof globalThis & { __forgeax_editor_gameplay?: unknown };
+      const host = globalThis as typeof globalThis & {
+        __forgeax_editor_gameplay?: unknown;
+      };
       host.__forgeax_editor_gameplay = bridge;
       registerTeardown(() => {
         if (host.__forgeax_editor_gameplay === bridge) delete host.__forgeax_editor_gameplay;
@@ -2246,6 +2774,14 @@ async function bootViewport(
   registerTeardown(installAssetCatalogRefresh());
   registerTeardown(installErrorOverlay(container));
   emitBoot('boot ✓ ready');
+  studioBootTrace('viewport.boot.ready', {
+    slug: gameSession.slug,
+    remotePlayEligible: Boolean(
+      gameSession.slug &&
+        gameSession.slug !== 'default' &&
+        gameSession.runtimeBinding !== undefined,
+    ),
+  });
 
   // game input-chain liveness breadcrumb (was :919). createApp already wired the
   // DOM->InputBackend->InputSnapshot chain; verify + report, do NOT re-attach.
@@ -2255,7 +2791,11 @@ async function bootViewport(
     requestAnimationFrame(() => {
       const hasSnapshot = liveWorld.hasResource(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (hasBackend && hasSnapshot) emitBoot('input ▸ game input chain live');
-      else emitBoot(`input ▸ game input chain incomplete (backend=${hasBackend} snapshot=${hasSnapshot})`, 'warn');
+      else
+        emitBoot(
+          `input ▸ game input chain incomplete (backend=${hasBackend} snapshot=${hasSnapshot})`,
+          'warn',
+        );
     });
   }
 

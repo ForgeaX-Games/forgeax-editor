@@ -18,6 +18,8 @@ export { anchorFromElement } from './asset-picker-placement';
 
 export interface AssetPickerProps {
   assetType: string;
+  /** When set, list catalog rows by `kind` instead of `compatibleWith` asset type. */
+  acceptKinds?: ReadonlySet<string>;
   currentGuid?: string | null;
   /** Anchor rect from the invoking asset-ref control; defaults to a viewport fallback. */
   anchor?: AssetPickerAnchor | null;
@@ -84,6 +86,7 @@ function PickerRow({
 
 export function AssetPicker({
   assetType,
+  acceptKinds,
   currentGuid,
   anchor,
   onPick,
@@ -100,9 +103,12 @@ export function AssetPicker({
   const [rows, setRows] = useState<Row[]>([]);
   useEffect(() => {
     let cancelled = false;
-    void readRuntimeAssetCatalog(assetType).then((catalog) => {
+    void readRuntimeAssetCatalog(acceptKinds === undefined ? assetType : undefined).then((catalog) => {
       if (cancelled) return;
-      const out = catalog.map((entry) => ({
+      const compatible = acceptKinds === undefined
+        ? catalog
+        : catalog.filter((entry) => acceptKinds.has(entry.kind));
+      const out = compatible.map((entry) => ({
         guid: entry.guid,
         kind: entry.kind,
         name: catalogEntryName(entry),
@@ -112,7 +118,7 @@ export function AssetPicker({
       setRows(out);
     }).catch(() => { if (!cancelled) setRows([]); });
     return () => { cancelled = true; };
-  }, [assetType]);
+  }, [assetType, acceptKinds]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

@@ -27,9 +27,8 @@ import {
 import type { SceneAsset } from '@forgeax/engine-types';
 import { Materials } from '@forgeax/engine-render';
 import {
-  defineParticleEffectSourceV2,
-  PARTICLE_CODE_DEFAULT_MODULE_ID,
-} from '@forgeax/engine-vfx';
+  defineParticleEffectSourceV3,
+  PARTICLE_CODE_DEFAULT_MODULE_ID } from '@forgeax/engine-vfx';
 import { classifyUiAuthoring } from '@forgeax/engine-ui/authoring';
 import { encodeMaterialPackRefs } from '../io/material-pack-refs';
 import {
@@ -39,14 +38,16 @@ import {
 } from '../io/asset-io-primitives';
 
 export { readPack, writePack, deleteFile, deleteAsset, generateAssetGuid,
-  readMetaSubAsset, writeMetaSubAsset, renameMetaSubAsset } from '../io/asset-io-primitives';
+  readMetaSubAsset, writeMetaSubAsset, renameMetaSubAsset,
+} from '../io/asset-io-primitives';
 export type { MetaSubAsset } from '../io/asset-io-primitives';
 
 type PackAssetEntry = PackFile['assets'][number];
 
 /** Build the opaque resource change consumed by the platform resource port.
  * Pack-ops owns the pack representation; it does not perform a second write. */
-export function createPackResourceChange(path: string, content: string): {
+export function createPackResourceChange(path: string, content: string,
+): {
   readonly kind: 'put';
   readonly resourceId: string;
   readonly bytes: Uint8Array;
@@ -63,8 +64,7 @@ export function createPackResourceChange(path: string, content: string): {
 function _ioFailHint(op: string, path: string | undefined, e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e ?? 'unknown');
   return path
-    ? `${op}("${path}") failed: ${msg}`
-    : `${op} failed: ${msg}`;
+    ? `${op}("${path}") failed: ${msg}` : `${op} failed: ${msg}`;
 }
 
 const replacedAssetCache = new Map<string, AuthoredAssetWrite | null>();
@@ -75,21 +75,26 @@ function scheduleUiAssetWrite(
   asset: AuthoredAssetWrite,
 ): ApplyResult {
   const cacheKey = `${targetPack}#${asset.guid.toLowerCase()}#${crypto.randomUUID()}`;
-  const completion = ctx.assetIO.upsertAssetInPack({ packPath: targetPack, asset })
+  const completion = ctx.assetIO
+    .upsertAssetInPack({ packPath: targetPack, asset })
     .then(async ({ ok, previous }) => {
-      if (!ok) throw new Error(`Could not write ${asset.kind} asset ${asset.guid} to ${targetPack}.`);
+      if (!ok)
+        throw new Error(`Could not write ${asset.kind} asset ${asset.guid} to ${targetPack}.`);
       replacedAssetCache.set(cacheKey, previous as AuthoredAssetWrite | null);
       await awaitPostAssetWriteCatalogSync(asset.guid);
       broadcastAssetsChanged();
     });
-  trackPendingAssetWrite(
-    asset.guid,
-    completion,
-    (error) => console.warn(`[editor-core] write ${asset.kind} asset commit failed:`, error),
+  trackPendingAssetWrite(asset.guid, completion, (error) =>
+    console.warn(`[editor-core] write ${asset.kind} asset commit failed:`, error),
   );
   return {
     ok: true,
-    inverse: { kind: 'restoreWrittenAsset', packPath: targetPack, guid: asset.guid, cacheKey } as unknown as EditorOp,
+    inverse: {
+      kind: 'restoreWrittenAsset',
+      packPath: targetPack,
+      guid: asset.guid,
+      cacheKey,
+    } as unknown as EditorOp,
     created: [],
   };
 }
@@ -99,8 +104,8 @@ function scheduleUiAssetWrite(
 /** Find assets in `pack` that reference `removingGuid` in their refs[]. */
 function findDanglingRefs(pack: PackFile, removingGuid: string): string[] {
   return pack.assets
-    .filter(a => a.guid !== removingGuid && a.refs.includes(removingGuid))
-    .map(a => a.name ?? a.guid);
+    .filter((a) => a.guid !== removingGuid && a.refs.includes(removingGuid))
+    .map((a) => a.name ?? a.guid);
 }
 
 // ── CRUD API ─────────────────────────────────────────────────────────────────
@@ -130,7 +135,7 @@ export async function removeAssetFromPack(
   const pack = await readPack(packPath);
   if (!pack) return { ok: false, danglingRefs: [] };
   const dangling = findDanglingRefs(pack, guid);
-  pack.assets = pack.assets.filter(a => a.guid !== guid);
+  pack.assets = pack.assets.filter((a) => a.guid !== guid);
   const ok = await writePack(packPath, pack);
   return { ok, danglingRefs: dangling };
 }
@@ -143,7 +148,7 @@ export async function renameAssetInPack(
 ): Promise<boolean> {
   const pack = await readPack(packPath);
   if (!pack) return false;
-  const entry = pack.assets.find(a => a.guid === guid);
+  const entry = pack.assets.find((a) => a.guid === guid);
   if (!entry) return false;
   entry.name = newName;
   return writePack(packPath, pack);
@@ -156,7 +161,7 @@ export async function duplicateAssetInPack(
 ): Promise<{ ok: boolean; newGuid: string }> {
   const pack = await readPack(packPath);
   if (!pack) return { ok: false, newGuid: '' };
-  const source = pack.assets.find(a => a.guid === guid);
+  const source = pack.assets.find((a) => a.guid === guid);
   if (!source) return { ok: false, newGuid: '' };
   const newGuid = generateAssetGuid();
   pack.assets.push({
@@ -178,15 +183,19 @@ export async function moveAsset(
 ): Promise<boolean> {
   const sourcePack = await readPack(sourcePackPath);
   if (!sourcePack) return false;
-  const entry = sourcePack.assets.find(a => a.guid === guid);
+  const entry = sourcePack.assets.find((a) => a.guid === guid);
   if (!entry) return false;
 
   let targetPack = await readPack(targetPackPath);
   if (!targetPack) {
-    targetPack = { schemaVersion: sourcePack.schemaVersion, kind: 'internal-text-package', assets: [] };
+    targetPack = {
+      schemaVersion: sourcePack.schemaVersion,
+      kind: 'internal-text-package',
+      assets: [],
+    };
   }
 
-  sourcePack.assets = sourcePack.assets.filter(a => a.guid !== guid);
+  sourcePack.assets = sourcePack.assets.filter((a) => a.guid !== guid);
   targetPack.assets.push(entry);
 
   const [s1, s2] = await Promise.all([
@@ -265,7 +274,7 @@ export async function renameSourceFileOnDisk(fromPath: string, toPath: string): 
     try {
       const r = await fetch(`/api/files?path=${encodeURIComponent(metaTo)}`);
       if (r.ok) {
-        const json = await r.json() as { content?: string };
+        const json = (await r.json()) as { content?: string };
         if (json.content) {
           const meta = JSON.parse(json.content) as Record<string, unknown>;
           meta.source = newBasename;
@@ -307,10 +316,23 @@ registerApplier('session', 'createDirectory', (op) => {
   // — network drop, disk full) both emit through assetsError so a subscribed
   // panel can toast. Without this, a failed write is a silent console.warn
   // and the panel keeps showing the pre-op state with no user feedback.
-  void createDirectory(fullPath).then(ok => {
-    if (ok) broadcastAssetsChanged('directory-only');
-    else broadcastAssetsError({ op: 'createDirectory', path: targetPath, hint: `createDirectory("${targetPath}") failed on server` });
-  }).catch(e => broadcastAssetsError({ op: 'createDirectory', path: targetPath, hint: _ioFailHint('createDirectory', targetPath, e) }));
+  void createDirectory(fullPath)
+    .then((ok) => {
+      if (ok) broadcastAssetsChanged('directory-only');
+      else
+        broadcastAssetsError({
+          op: 'createDirectory',
+          path: targetPath,
+          hint: `createDirectory("${targetPath}") failed on server`,
+        });
+    })
+    .catch((e) =>
+      broadcastAssetsError({
+        op: 'createDirectory',
+        path: targetPath,
+        hint: _ioFailHint('createDirectory', targetPath, e),
+      }),
+    );
   return { ok: true };
 });
 
@@ -326,10 +348,23 @@ registerApplier('session', 'deleteDirectory', (op) => {
     return { ok: false, error: { code: 'INVALID_ARGS', hint: `deleteDirectory: ${jail.hint}` } };
   }
   const fullPath = resolveGamePath(path);
-  void deleteDirectory(fullPath).then(ok => {
-    if (ok) broadcastAssetsChanged('directory-only');
-    else broadcastAssetsError({ op: 'deleteDirectory', path, hint: `deleteDirectory("${path}") failed on server` });
-  }).catch(e => broadcastAssetsError({ op: 'deleteDirectory', path, hint: _ioFailHint('deleteDirectory', path, e) }));
+  void deleteDirectory(fullPath)
+    .then((ok) => {
+      if (ok) broadcastAssetsChanged('directory-only');
+      else
+        broadcastAssetsError({
+          op: 'deleteDirectory',
+          path,
+          hint: `deleteDirectory("${path}") failed on server`,
+        });
+    })
+    .catch((e) =>
+      broadcastAssetsError({
+        op: 'deleteDirectory',
+        path,
+        hint: _ioFailHint('deleteDirectory', path, e),
+      }),
+    );
   return { ok: true };
 });
 
@@ -349,10 +384,23 @@ registerApplier('session', 'renameDirectory', (op) => {
   const fullPath = resolveGamePath(path);
   const parentDir = fullPath.slice(0, fullPath.lastIndexOf('/'));
   const newFullPath = `${parentDir}/${check.name}`;
-  void renameOnDisk(fullPath, newFullPath).then(ok => {
-    if (ok) broadcastAssetsChanged('directory-only');
-    else broadcastAssetsError({ op: 'renameDirectory', path, hint: `renameDirectory("${path}" -> "${check.name}") failed on server` });
-  }).catch(e => broadcastAssetsError({ op: 'renameDirectory', path, hint: _ioFailHint('renameDirectory', path, e) }));
+  void renameOnDisk(fullPath, newFullPath)
+    .then((ok) => {
+      if (ok) broadcastAssetsChanged('directory-only');
+      else
+        broadcastAssetsError({
+          op: 'renameDirectory',
+          path,
+          hint: `renameDirectory("${path}" -> "${check.name}") failed on server`,
+        });
+    })
+    .catch((e) =>
+      broadcastAssetsError({
+        op: 'renameDirectory',
+        path,
+        hint: _ioFailHint('renameDirectory', path, e),
+      }),
+    );
   return { ok: true };
 });
 
@@ -369,10 +417,23 @@ registerApplier('session', 'renameSourceFile', (op) => {
   const fullPath = resolveGamePath(path);
   const parentDir = fullPath.slice(0, fullPath.lastIndexOf('/'));
   const newFullPath = `${parentDir}/${check.name}`;
-  void renameSourceFileOnDisk(fullPath, newFullPath).then(ok => {
-    if (ok) broadcastAssetsChanged();
-    else broadcastAssetsError({ op: 'renameSourceFile', path, hint: `renameSourceFile("${path}" -> "${check.name}") failed on server` });
-  }).catch(e => broadcastAssetsError({ op: 'renameSourceFile', path, hint: _ioFailHint('renameSourceFile', path, e) }));
+  void renameSourceFileOnDisk(fullPath, newFullPath)
+    .then((ok) => {
+      if (ok) broadcastAssetsChanged();
+      else
+        broadcastAssetsError({
+          op: 'renameSourceFile',
+          path,
+          hint: `renameSourceFile("${path}" -> "${check.name}") failed on server`,
+        });
+    })
+    .catch((e) =>
+      broadcastAssetsError({
+        op: 'renameSourceFile',
+        path,
+        hint: _ioFailHint('renameSourceFile', path, e),
+      }),
+    );
   return { ok: true };
 });
 
@@ -411,10 +472,23 @@ registerApplier('session', 'moveDirectory', (op) => {
   }
   const fullPath = resolveGamePath(path);
   const newFullPath = resolveGamePath(`${resolved.base}/${resolved.basename}`);
-  void renameOnDisk(fullPath, newFullPath).then(ok => {
-    if (ok) broadcastAssetsChanged('directory-only');
-    else broadcastAssetsError({ op: 'moveDirectory', path, hint: `moveDirectory("${path}" -> "${resolved.base}/") failed on server` });
-  }).catch(e => broadcastAssetsError({ op: 'moveDirectory', path, hint: _ioFailHint('moveDirectory', path, e) }));
+  void renameOnDisk(fullPath, newFullPath)
+    .then((ok) => {
+      if (ok) broadcastAssetsChanged('directory-only');
+      else
+        broadcastAssetsError({
+          op: 'moveDirectory',
+          path,
+          hint: `moveDirectory("${path}" -> "${resolved.base}/") failed on server`,
+        });
+    })
+    .catch((e) =>
+      broadcastAssetsError({
+        op: 'moveDirectory',
+        path,
+        hint: _ioFailHint('moveDirectory', path, e),
+      }),
+    );
   return { ok: true };
 });
 
@@ -426,10 +500,23 @@ registerApplier('session', 'moveSourceFile', (op) => {
   }
   const fullPath = resolveGamePath(path);
   const newFullPath = resolveGamePath(`${resolved.base}/${resolved.basename}`);
-  void renameSourceFileOnDisk(fullPath, newFullPath).then(ok => {
-    if (ok) broadcastAssetsChanged();
-    else broadcastAssetsError({ op: 'moveSourceFile', path, hint: `moveSourceFile("${path}" -> "${resolved.base}/") failed on server` });
-  }).catch(e => broadcastAssetsError({ op: 'moveSourceFile', path, hint: _ioFailHint('moveSourceFile', path, e) }));
+  void renameSourceFileOnDisk(fullPath, newFullPath)
+    .then((ok) => {
+      if (ok) broadcastAssetsChanged();
+      else
+        broadcastAssetsError({
+          op: 'moveSourceFile',
+          path,
+          hint: `moveSourceFile("${path}" -> "${resolved.base}/") failed on server`,
+        });
+    })
+    .catch((e) =>
+      broadcastAssetsError({
+        op: 'moveSourceFile',
+        path,
+        hint: _ioFailHint('moveSourceFile', path, e),
+      }),
+    );
   return { ok: true };
 });
 
@@ -459,11 +546,20 @@ function _cacheKey(packPath: string, guid: string): string {
 }
 
 export function applyDestroyAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
-  const { _resolvedPackPath, guid: rawGuid, newGuidCacheKey } = cmd as {
-    _resolvedPackPath?: string; guid: string; newGuidCacheKey?: string;
+  const {
+    _resolvedPackPath,
+    guid: rawGuid,
+    newGuidCacheKey,
+  } = cmd as {
+    _resolvedPackPath?: string;
+    guid: string;
+    newGuidCacheKey?: string;
   };
   if (typeof _resolvedPackPath !== 'string' || _resolvedPackPath.length === 0) {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'destroyAsset requires a Gateway-derived storage path' } };
+    return {
+      ok: false,
+      error: { code: 'INVALID_ARGS', hint: 'destroyAsset requires a Gateway-derived storage path' },
+    };
   }
   // async-guid resolution: when this destroyAsset is the INVERSE of a
   // duplicateAsset (undo of a duplicate), the guid to destroy is the one the
@@ -487,25 +583,41 @@ export function applyDestroyAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResul
     untrackAuthoredInlineAsset(guid);
     broadcastAssetsChanged('pack-changed', 'local-op', { kind: 'deleted', guid });
   });
-  trackPendingAssetWrite(
-    guid,
-    completion,
-    (e) => console.warn('[editor-core] destroyAsset IO failed; entry not cached for undo:', e),
+  trackPendingAssetWrite(guid, completion, (e) =>
+    console.warn('[editor-core] destroyAsset IO failed; entry not cached for undo:', e),
   );
-  return { ok: true, inverse: { kind: 'restoreAsset', _resolvedPackPath, guid, cacheKey: key } as unknown as EditorOp, created: [] };
+  return {
+    ok: true,
+    inverse: {
+      kind: 'restoreAsset',
+      _resolvedPackPath,
+      guid,
+      cacheKey: key,
+    } as unknown as EditorOp,
+    created: [],
+  };
 }
 
 export function applyRestoreAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
-  const { _resolvedPackPath, guid, cacheKey } = cmd as { _resolvedPackPath: string; guid: string; cacheKey?: string };
+  const { _resolvedPackPath, guid, cacheKey } = cmd as {
+    _resolvedPackPath: string;
+    guid: string;
+    cacheKey?: string;
+  };
   const key = cacheKey ?? _cacheKey(_resolvedPackPath, guid);
   const entry = deletedEntryCache.get(key);
   if (entry) {
-    void ctx.assetIO.writePackEntry(_resolvedPackPath, entry as never)
+    void ctx.assetIO
+      .writePackEntry(_resolvedPackPath, entry as never)
       .then(() => broadcastAssetsChanged())
       .catch((e) => console.warn('[editor-core] restoreAsset IO failed:', e));
     deletedEntryCache.delete(key);
   }
-  return { ok: true, inverse: { kind: 'destroyAsset', _resolvedPackPath, guid } as unknown as EditorOp, created: [] };
+  return {
+    ok: true,
+    inverse: { kind: 'destroyAsset', _resolvedPackPath, guid } as unknown as EditorOp,
+    created: [],
+  };
 }
 
 // Seed the two document appliers (symmetric inverse pair). Registered into the
@@ -532,40 +644,42 @@ function defaultPayloadFor(
 ): Record<string, unknown> {
   switch (kind) {
     case 'scene': {
-      const scene: SceneAsset = { kind: 'scene', entities: [] };
+      const scene: SceneAsset = { kind: 'scene', entities: {} };
       return scene as unknown as Record<string, unknown>;
     }
     case 'material':
       throw new Error(
         'material assets must be created via the createMaterial op, not createAsset — ' +
-        'createMaterial uses Materials.standard() (engine canonical builder) and is the SSOT for material authoring',
+          'createMaterial uses Materials.standard() (engine canonical builder) and is the SSOT for material authoring',
       );
     case 'material-instance':
       throw new Error(
         'material-instance assets must be created via the createMaterialInstance op, not createAsset — ' +
-        'createMaterialInstance requires a parentGuid and builds the editor MI payload schema',
+          'createMaterialInstance requires a parentGuid and builds the editor MI payload schema',
       );
     case 'input-map':
       throw new Error(
         'input-map assets must be created via the createInputMap op, not createAsset — ' +
-        'createInputMap builds the editor InputMap payload schema',
+          'createInputMap builds the editor InputMap payload schema',
       );
     case 'particle-effect': {
       if (particleMaterialGuid === undefined) {
         throw new Error('particle-effect creation requires its generated material GUID');
       }
-      const source = defineParticleEffectSourceV2({
-        schemaVersion: 2,
-        emitters: [{
-          id: 'default',
-          capacity: 256,
-          backend: { required: 'gpu' },
-          space: 'local',
-          schedule: { rate: 8, bursts: [] },
-          bounds: { kind: 'sphere', center: [0, 1, 0], radius: 3 },
-          program: { module: PARTICLE_CODE_DEFAULT_MODULE_ID },
-          renderers: [{ kind: 'billboard', material: particleMaterialGuid, blend: 'alpha' }],
-        }],
+      const source = defineParticleEffectSourceV3({
+        schemaVersion: 3,
+        emitters: [
+          {
+            id: 'default',
+            capacity: 256,
+            backend: { required: 'gpu' },
+            space: 'local',
+            schedule: { rate: 8, bursts: [] },
+            bounds: { kind: 'sphere', center: [0, 1, 0], radius: 3 },
+            program: { module: PARTICLE_CODE_DEFAULT_MODULE_ID },
+            renderers: [{ kind: 'billboard', material: particleMaterialGuid, blend: 'alpha' }],
+          },
+        ],
       });
       return source as unknown as Record<string, unknown>;
     }
@@ -574,16 +688,36 @@ function defaultPayloadFor(
 
 export function applyCreateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
   const { packPath, guid, assetKind, name, refs } = cmd as {
-    packPath: string; guid: string; assetKind: CreatableAssetKind; name: string; refs?: string[];
+    packPath: string;
+    guid: string;
+    assetKind: CreatableAssetKind;
+    name: string;
+    refs?: string[];
   };
   const execution = assetKind === 'particle-effect' ? 'cooked' : undefined;
 
-  const extraAssets: Array<{ guid: string; kind: string; name: string; payload: unknown; refs?: string[] }> = [];
+  const extraAssets: Array<{
+    guid: string;
+    kind: string;
+    name: string;
+    payload: unknown;
+    refs?: string[];
+  }> = [];
   const particleMaterialGuid = assetKind === 'particle-effect' ? generateAssetGuid() : undefined;
   if (assetKind === 'particle-effect') {
-    if (particleMaterialGuid === undefined) throw new Error('particle-effect material GUID was not generated');
-    const matPayload = Materials.standard({ baseColor: [1, 1, 1, 1] }) as unknown as Record<string, unknown>;
-    extraAssets.push({ guid: particleMaterialGuid, kind: 'material', name: `${name}_Mat`, payload: matPayload, refs: [] });
+    if (particleMaterialGuid === undefined)
+      throw new Error('particle-effect material GUID was not generated');
+    const matPayload = Materials.standard({ baseColor: [1, 1, 1, 1] }) as unknown as Record<
+      string,
+      unknown
+    >;
+    extraAssets.push({
+      guid: particleMaterialGuid,
+      kind: 'material',
+      name: `${name}_Mat`,
+      payload: matPayload,
+      refs: [],
+    });
   }
   const payload = defaultPayloadFor(assetKind, particleMaterialGuid);
   // The native VFX cooker derives refs from the authored output material/mesh.
@@ -595,14 +729,19 @@ export function applyCreateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult
   // bound by EditGateway to the request-correlated OperationRun, so dispatch
   // acceptance cannot be mistaken for a committed pack write.
   const needsCook = execution === 'cooked';
-  const completion = ctx.assetIO.createAssetInPack({
-    packPath,
-    asset: { guid, kind: assetKind, name, payload, refs: assetRefs, execution },
-    extraAssets: extraAssets.length > 0 ? extraAssets : undefined,
-  })
+  const completion = ctx.assetIO
+    .createAssetInPack({
+      packPath,
+      asset: { guid, kind: assetKind, name, payload, refs: assetRefs, execution },
+      extraAssets: extraAssets.length > 0 ? extraAssets : undefined,
+    })
     .then(async (r) => {
       if (!r.ok) {
-        broadcastAssetsError({ op: 'createAsset', path: packPath, hint: `createAsset write failed (${r.reason}): ${r.hint}` });
+        broadcastAssetsError({
+          op: 'createAsset',
+          path: packPath,
+          hint: `createAsset write failed (${r.reason}): ${r.hint}`,
+        });
         return {
           ok: false as const,
           error: {
@@ -651,7 +790,12 @@ export function applyCreateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult
       broadcastAssetsError({ op: 'createAsset', path: packPath, hint });
       return {
         ok: false as const,
-        error: { code: 'asset-write-failed', hint, retryable: true, recoveryActions: ['run.retry'] },
+        error: {
+          code: 'asset-write-failed',
+          hint,
+          retryable: true,
+          recoveryActions: ['run.retry'],
+        },
       };
     });
   trackPendingAssetWrite(
@@ -689,32 +833,98 @@ registerApplier('document', 'createAsset', applyCreateAsset as unknown as Applie
 // basePath, so it defaults to the active game's scene.pack.json (the same target
 // disk-io.ts writes the scene to).
 export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
-  const { guid, name, baseColor, metallic, roughness, baseColorTexture, alphaCutoff, packPath, refs } = cmd as {
-    guid: string; name: string; baseColor: [number, number, number, number];
-    metallic?: number; roughness?: number; baseColorTexture?: string; alphaCutoff?: number; packPath?: string; refs?: string[];
+  const {
+    guid,
+    name,
+    baseColor,
+    metallic,
+    roughness,
+    baseColorTexture,
+    alphaCutoff,
+    packPath,
+    refs,
+  } = cmd as {
+    guid: string;
+    name: string;
+    baseColor: [number, number, number, number];
+    metallic?: number;
+    roughness?: number;
+    baseColorTexture?: string;
+    alphaCutoff?: number;
+    packPath?: string;
+    refs?: string[];
   };
   // Fail Fast (§5): reject a malformed op before it writes a broken pack entry.
   if (typeof guid !== 'string' || guid.length === 0) {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial requires a non-empty `guid` (mint via crypto.randomUUID(); the caller reuses it for bindAssetRef)' } };
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_ARGS',
+        hint: 'createMaterial requires a non-empty `guid` (mint via crypto.randomUUID(); the caller reuses it for bindAssetRef)',
+      },
+    };
   }
   if (typeof name !== 'string' || name.length === 0) {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial requires a non-empty `name`' } };
+    return {
+      ok: false,
+      error: { code: 'INVALID_ARGS', hint: 'createMaterial requires a non-empty `name`' },
+    };
   }
-  if (!Array.isArray(baseColor) || baseColor.length !== 4 || !baseColor.every((c) => typeof c === 'number')) {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial requires sRGB `baseColor` as [r,g,b,a] (four numbers, 0..1; alpha is linear)' } };
+  if (
+    !Array.isArray(baseColor) ||
+    baseColor.length !== 4 ||
+    !baseColor.every((c) => typeof c === 'number')
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_ARGS',
+        hint: 'createMaterial requires sRGB `baseColor` as [r,g,b,a] (four numbers, 0..1; alpha is linear)',
+      },
+    };
   }
   if (metallic !== undefined && typeof metallic !== 'number') {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial `metallic` must be a number (0..1) if given' } };
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_ARGS',
+        hint: 'createMaterial `metallic` must be a number (0..1) if given',
+      },
+    };
   }
   if (roughness !== undefined && typeof roughness !== 'number') {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial `roughness` must be a number (0..1) if given' } };
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_ARGS',
+        hint: 'createMaterial `roughness` must be a number (0..1) if given',
+      },
+    };
   }
-  if (alphaCutoff !== undefined && (typeof alphaCutoff !== 'number' || alphaCutoff < 0 || alphaCutoff > 1)) {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial `alphaCutoff` must be a number in [0, 1] if given (UE-Masked equivalent: baseColorTexture alpha below the cutoff is discarded)' } };
+  if (
+    alphaCutoff !== undefined &&
+    (typeof alphaCutoff !== 'number' || alphaCutoff < 0 || alphaCutoff > 1)
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_ARGS',
+        hint: 'createMaterial `alphaCutoff` must be a number in [0, 1] if given (UE-Masked equivalent: baseColorTexture alpha below the cutoff is discarded)',
+      },
+    };
   }
   if (baseColorTexture !== undefined) {
-    if (typeof baseColorTexture !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(baseColorTexture)) {
-      return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial `baseColorTexture` must be a texture asset GUID (RFC 4122), not a path or display name' } };
+    if (
+      typeof baseColorTexture !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(baseColorTexture)
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: 'INVALID_ARGS',
+          hint: 'createMaterial `baseColorTexture` must be a texture asset GUID (RFC 4122), not a path or display name',
+        },
+      };
     }
     // Fail Fast on a phantom texture ref: a material whose baseColorTexture GUID
     // is not catalogued can NEVER resolve at render — it silently shades with
@@ -724,9 +934,17 @@ export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
     // unit envs pass a partial ctx without it — isAssetCatalogued also returns
     // undefined when the facade has no registry (validation unavailable), and
     // we reject only on a KNOWN miss.
-    const catalogProbe = ctx.engine as { isAssetCatalogued?: (guid: string) => boolean | undefined } | undefined;
+    const catalogProbe = ctx.engine as
+      | { isAssetCatalogued?: (guid: string) => boolean | undefined }
+      | undefined;
     if (catalogProbe?.isAssetCatalogued?.(baseColorTexture) === false) {
-      return { ok: false, error: { code: 'INVALID_ARGS', hint: `createMaterial baseColorTexture ${baseColorTexture} is not in the live asset catalog — the texture may have been deleted or its import failed; re-import it before authoring the material` } };
+      return {
+        ok: false,
+        error: {
+          code: 'INVALID_ARGS',
+          hint: `createMaterial baseColorTexture ${baseColorTexture} is not in the live asset catalog — the texture may have been deleted or its import failed; re-import it before authoring the material`,
+        },
+      };
     }
   }
   // Materials have their own pack writer. Appending them to the scene pack violates
@@ -735,17 +953,24 @@ export function applyCreateMaterial(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
   // Caller paths stay game-relative; only the host resolver knows the disk root.
   let targetPack: string;
   try {
-    targetPack = typeof packPath === 'string' && packPath.length > 0
-      ? resolveGamePathOnce(packPath)
-      : resolveGamePath('assets/materials.pack.json');
+    targetPack =
+      typeof packPath === 'string' && packPath.length > 0
+        ? resolveGamePathOnce(packPath)
+        : resolveGamePath('assets/materials.pack.json');
   } catch {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'createMaterial requires an active game path resolver; select a game before authoring a material' } };
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_ARGS',
+        hint: 'createMaterial requires an active game path resolver; select a game before authoring a material',
+      },
+    };
   }
   const clamped = clampMaterialPackPath(targetPack);
   if (clamped.redirected) {
     console.warn(
       `[editor-core] createMaterial: packPath "${targetPack}" is outside assets/; ` +
-      `redirecting to "${clamped.packPath}"`,
+        `redirecting to "${clamped.packPath}"`,
     );
   }
   targetPack = clamped.packPath;
@@ -791,32 +1016,52 @@ registerApplier('document', 'createMaterial', applyCreateMaterial as unknown as 
 
 export function applyWriteUi(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
   const { guid, name, html, css, sourcePath, packPath } = cmd as {
-    guid: string; name: string; html: string; css: string; sourcePath?: string; packPath?: string;
+    guid: string;
+    name: string;
+    html: string;
+    css: string;
+    sourcePath?: string;
+    packPath?: string;
   };
   if (typeof guid !== 'string' || guid.length === 0) {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'writeUi requires a non-empty caller-minted `guid`' } };
+    return {
+      ok: false,
+      error: { code: 'INVALID_ARGS', hint: 'writeUi requires a non-empty caller-minted `guid`' },
+    };
   }
   if (typeof name !== 'string' || name.length === 0) {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'writeUi requires a non-empty `name`' } };
+    return {
+      ok: false,
+      error: { code: 'INVALID_ARGS', hint: 'writeUi requires a non-empty `name`' },
+    };
   }
   if (typeof html !== 'string' || html.length === 0 || typeof css !== 'string') {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'writeUi requires non-empty `html` and string `css` fields' } };
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_ARGS',
+        hint: 'writeUi requires non-empty `html` and string `css` fields',
+      },
+    };
   }
-  const diagnosticPath = typeof sourcePath === 'string' && sourcePath.length > 0
-    ? sourcePath
-    : `${name}.ui.html`;
+  const diagnosticPath =
+    typeof sourcePath === 'string' && sourcePath.length > 0 ? sourcePath : `${name}.ui.html`;
   const classification = classifyUiAuthoring({ sourcePath: diagnosticPath, html, css });
   if (classification.blocking) {
     const issue = classification.diagnostics.find((entry) => entry.severity === 'error');
     const location = issue?.sourceRange;
-    return { ok: false, error: {
-      code: 'INVALID_ARGS',
-      hint: issue === undefined
-        ? 'writeUi rejected invalid UI authoring input'
-        : `${issue.code} at ${issue.sourcePath}:${location?.line ?? 1}:${location?.column ?? 1}: ${issue.hint}`,
-      ...(issue?.expected === undefined ? {} : { expected: issue.expected }),
-      ...(issue?.actual === undefined ? {} : { current: issue.actual }),
-    } };
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_ARGS',
+        hint:
+          issue === undefined
+            ? 'writeUi rejected invalid UI authoring input'
+            : `${issue.code} at ${issue.sourcePath}:${location?.line ?? 1}:${location?.column ?? 1}: ${issue.hint}`,
+        ...(issue?.expected === undefined ? {} : { expected: issue.expected }),
+        ...(issue?.actual === undefined ? {} : { current: issue.actual }),
+      },
+    };
   }
   let targetPack: string;
   try {
@@ -824,7 +1069,13 @@ export function applyWriteUi(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
       typeof packPath === 'string' && packPath.length > 0 ? packPath : 'assets/ui.pack.json',
     );
   } catch {
-    return { ok: false, error: { code: 'INVALID_ARGS', hint: 'writeUi requires an active game path resolver; select a game before authoring UI' } };
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_ARGS',
+        hint: 'writeUi requires an active game path resolver; select a game before authoring UI',
+      },
+    };
   }
   return scheduleUiAssetWrite(ctx, targetPack, {
     guid,
@@ -841,9 +1092,10 @@ export function applyRestoreWrittenAsset(ctx: DocApplierCtx, cmd: EditorOp): App
   const { packPath, guid, cacheKey } = cmd as { packPath: string; guid: string; cacheKey: string };
   const previous = replacedAssetCache.get(cacheKey);
   if (previous !== undefined) {
-    const mutation = previous === null
-      ? ctx.assetIO.deletePackEntry(packPath, guid).then(() => true)
-      : ctx.assetIO.writePackEntry(packPath, previous as never);
+    const mutation =
+      previous === null
+        ? ctx.assetIO.deletePackEntry(packPath, guid).then(() => true)
+        : ctx.assetIO.writePackEntry(packPath, previous as never);
     void mutation
       .then(() => broadcastAssetsChanged())
       .catch((error) => console.warn('[editor-core] restoreWrittenAsset IO failed:', error));
@@ -852,7 +1104,11 @@ export function applyRestoreWrittenAsset(ctx: DocApplierCtx, cmd: EditorOp): App
   return { ok: true, inverse: cmd, created: [] };
 }
 
-registerApplier('document', 'restoreWrittenAsset', applyRestoreWrittenAsset as unknown as ApplierFn);
+registerApplier(
+  'document',
+  'restoreWrittenAsset',
+  applyRestoreWrittenAsset as unknown as ApplierFn,
+);
 
 // ── Document appliers: renameAsset / duplicateAsset (G-4) ─────────────────────
 // Two MORE DOCUMENT-domain ops (undoable) added by the keyboard-router/context-menu
@@ -889,21 +1145,32 @@ export function applyRenameAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult
   // Fire the async rename; stash the replaced (old) name so the inverse can
   // restore it synchronously. A .catch guards against an unhandled rejection —
   // the op already landed in undo/ledger (D-1: the gateway is the only door).
-  void ctx.assetIO.renamePackEntry(packPath, guid, newName).then((r) => {
-    if (!r.ok) {
-      console.warn('[editor-core] renameAsset IO failed; pack entry was not renamed:', { packPath, guid, newName });
-      return;
-    }
-    if (r.oldName !== null) renamedNameCache.set(key, r.oldName);
-    broadcastAssetsChanged('pack-changed', 'local-op', { kind: 'renamed', guid, name: newName });
-  }).catch((e) => console.warn('[editor-core] renameAsset IO failed; old name not cached for undo:', e));
+  void ctx.assetIO
+    .renamePackEntry(packPath, guid, newName)
+    .then((r) => {
+      if (!r.ok) {
+        console.warn('[editor-core] renameAsset IO failed; pack entry was not renamed:', {
+          packPath,
+          guid,
+          newName,
+        });
+        return;
+      }
+      if (r.oldName !== null) renamedNameCache.set(key, r.oldName);
+      broadcastAssetsChanged('pack-changed', 'local-op', { kind: 'renamed', guid, name: newName });
+    })
+    .catch((e) =>
+      console.warn('[editor-core] renameAsset IO failed; old name not cached for undo:', e),
+    );
   // The inverse renames back. Its newName is resolved from renamedNameCache via
   // renameCacheKey; if the cache misses (IO not landed), it falls back to any
   // oldName the op happened to carry (UI knows the current name; AI may not).
   return {
     ok: true,
     inverse: {
-      kind: 'renameAsset', packPath, guid,
+      kind: 'renameAsset',
+      packPath,
+      guid,
       newName: (cmd as { oldName?: string }).oldName ?? newName,
       renameCacheKey: key,
     } as unknown as EditorOp,
@@ -920,10 +1187,15 @@ export function applyRenameAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult
 export function applyDuplicateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyResult {
   const { packPath, guid } = cmd as { packPath: string; guid: string };
   const key = _cacheKey(packPath, guid);
-  void ctx.assetIO.cloneAssetInPack(packPath, guid).then((r) => {
-    if (r.ok && r.newGuid) duplicatedGuidCache.set(key, r.newGuid);
-    broadcastAssetsChanged();
-  }).catch((e) => console.warn('[editor-core] duplicateAsset IO failed; new guid not cached for undo:', e));
+  void ctx.assetIO
+    .cloneAssetInPack(packPath, guid)
+    .then((r) => {
+      if (r.ok && r.newGuid) duplicatedGuidCache.set(key, r.newGuid);
+      broadcastAssetsChanged();
+    })
+    .catch((e) =>
+      console.warn('[editor-core] duplicateAsset IO failed; new guid not cached for undo:', e),
+    );
   // Inverse destroys the produced clone. The clone's guid is not known
   // synchronously, so the inverse carries newGuidCacheKey; applyDestroyAsset reads
   // the real guid back from duplicatedGuidCache. The `guid` field is a best-effort
@@ -931,7 +1203,10 @@ export function applyDuplicateAsset(ctx: DocApplierCtx, cmd: EditorOp): ApplyRes
   return {
     ok: true,
     inverse: {
-      kind: 'destroyAsset', _resolvedPackPath: packPath, guid, newGuidCacheKey: key,
+      kind: 'destroyAsset',
+      _resolvedPackPath: packPath,
+      guid,
+      newGuidCacheKey: key,
     } as unknown as EditorOp,
     created: [],
   };

@@ -67,6 +67,46 @@ describe('createAuthoredAssetCatalogBarrier', () => {
     expect(registry.packIndexCache?.get(key)?.packageUrl).toBe(packageUrl);
   });
 
+  it('waits for the bound transport row instead of fetching an unscoped replica URL', async () => {
+    const guid = crypto.randomUUID();
+    const key = guid.toLowerCase();
+    const rawUrl = `/__forgeax-ddc/${guid}.pack.json`;
+    const scopedUrl = `/__pack/scopes/test/1/asset${rawUrl}`;
+    const requested: string[] = [];
+    const registry = new AssetRegistry(makeShaderRegistry());
+    registry.runtimeBinding = {
+      schemaVersion: 'runtime-asset-binding-v1', gameId: 'test',
+      scopeId: 'test', generation: 1, status: 'ready',
+      catalogUrl: '/__pack/scopes/test/1/catalog.json',
+      importUrlBase: '/__pack/scopes/test/1/import',
+      packageUrlBase: '/__pack/scopes/test/1/asset',
+    };
+    registry.catalogSnapshot = () => ({
+      version: 1, stale: false, diagnostics: [],
+      entries: [{ guid, kind: 'material', packageUrl: rawUrl, sourcePath: 'assets/import.glb', lifecycle: 'current' }],
+    });
+    let refreshCount = 0;
+    registry.refreshCatalog = async () => {
+      refreshCount += 1;
+      if (refreshCount === 1) return false;
+      registry.packIndexCache = new Map([[key, { kind: 'material', packageUrl: scopedUrl }]]);
+      return true;
+    };
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requested.push(String(input));
+      return String(input) === scopedUrl
+        ? new Response(JSON.stringify({ assets: [{ guid }] }))
+        : new Response('global-runtime-scope-route-disabled', { status: 404 });
+    }) as typeof fetch;
+    registry.loadByGuid = (async () => ({ ok: true, value: { kind: 'material' } as MaterialAsset })) as unknown as typeof registry.loadByGuid;
+    await expect(createAuthoredAssetCatalogBarrier(registry, {
+      deadlineMs: 2000, rowPollMs: 5, bodyPollMs: 5,
+    })(guid)).resolves.toBeUndefined();
+    expect(requested).toEqual([scopedUrl]);
+    expect(refreshCount).toBeGreaterThanOrEqual(2);
+    expect(registry.packIndexCache?.get(key)?.packageUrl).toBe(scopedUrl);
+  });
+
   it('ignores a stale imported catalog row when the pack body 404s', async () => {
     const guid = crypto.randomUUID();
     const key = guid.toLowerCase();
@@ -99,12 +139,9 @@ describe('createAuthoredAssetCatalogBarrier', () => {
         lifecycle: 'current',
       }],
     });
-    registry.reconcileCatalog = async () => {
-      useGoodRow = true;
-      return { ok: true, value: registry.catalogSnapshot()! };
-    };
     registry.refreshCatalog = async () => {
-      throw new Error("Scoped replicas must refresh through reconcileCatalog");
+      useGoodRow = true;
+      return true;
     };
     registry.loadByGuid = (async () => ({ ok: true, value: { kind: 'material' } as MaterialAsset })) as unknown as typeof registry.loadByGuid;
 

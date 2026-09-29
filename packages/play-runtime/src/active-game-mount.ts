@@ -5,8 +5,7 @@ import {
   mkdirSync,
   realpathSync,
   symlinkSync,
-  unlinkSync,
-} from 'node:fs';
+  unlinkSync } from 'node:fs';
 
 export type ActiveGameMountRequest = {
   farmRoot: string;
@@ -28,8 +27,8 @@ function isMissing(error: unknown): boolean {
 function removeGeneratedMount(path: string): void {
   try {
     const entry = lstatSync(path);
-    if (!entry.isSymbolicLink()) {
-      throw new Error(`refusing to remove non-symlink active game mount: ${path}`);
+  if (!entry.isSymbolicLink()) {
+    throw new Error(`refusing to remove non-symlink active game mount: ${path}`);
     }
     unlinkSync(path);
   } catch (error) {

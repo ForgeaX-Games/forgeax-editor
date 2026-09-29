@@ -1,3 +1,4 @@
+import type { SceneWithLegacyMounts } from '../scene/legacy-scene-mounts';
 // persistence-disk-io — M2 (w4) headless fake-deps safety net for the HIGH
 // SIDE-EFFECT persistence cluster (disk load / save / scene-load / beacon).
 //
@@ -128,7 +129,7 @@ describe('createDiskIo — factory shape + deps boundary (AC-02)', () => {
 });
 describe('attachPublicationFences — refreshes authored mount provenance', () => {
   it('replaces a stale live mount fence with the current complete publication tuple', () => {
-    const guid = '019ffdb4-1000-7000-8000-000000000008';
+    const guid = 'b05d3430-4c47-558d-9201-f2a8e54f8771';
     const publication = {
       schemaVersion: 'asset-publication/1',
       sourcePath: 'assets/procedural-showcase.pack.ts',
@@ -153,7 +154,7 @@ describe('attachPublicationFences — refreshes authored mount provenance', () =
     } as unknown as AssetRegistry;
     const scene = {
       kind: 'scene' as const,
-      entities: [],
+      entities: {},
       mounts: [{
         localId: 0 as never,
         source: guid,
@@ -173,7 +174,7 @@ describe('attachPublicationFences — refreshes authored mount provenance', () =
 
     const saved = attachPublicationFences(scene, registry);
 
-    expect(saved.mounts?.[0]?.publicationFence).toEqual({
+    expect((saved as SceneWithLegacyMounts).mounts?.[0]?.publicationFence).toEqual({
       schemaVersion: 'scene-publication-fence/1',
       sourcePath: publication.sourcePath,
       sourceRevision: publication.sourceRevision,
@@ -264,7 +265,7 @@ describe('attachPublicationFences — refreshes authored mount provenance', () =
 		} as unknown as AssetRegistry;
 		const scene = {
 			kind: "scene" as const,
-			entities: [],
+			entities: {},
 			mounts: [
 				{
 					localId: 0 as never,
@@ -286,7 +287,7 @@ describe('attachPublicationFences — refreshes authored mount provenance', () =
 
 		const saved = attachPublicationFences(scene, registry);
 
-		expect(saved.mounts?.[0]?.publicationFence).toMatchObject({
+		expect((saved as SceneWithLegacyMounts).mounts?.[0]?.publicationFence).toMatchObject({
 			sourceRevision: "source-revision-current",
 			publicationGeneration: 8,
 			outputDigest: "sha256:publication-current",
@@ -347,7 +348,7 @@ describe('attachPublicationFences — refreshes authored mount provenance', () =
 		} as unknown as AssetRegistry;
 		const scene = {
 			kind: "scene" as const,
-			entities: [],
+			entities: {},
 			mounts: [
 				{
 					localId: 0 as never,
@@ -360,7 +361,7 @@ describe('attachPublicationFences — refreshes authored mount provenance', () =
 
 		const saved = attachPublicationFences(scene, registry, world);
 
-		expect(saved.mounts?.[0]?.publicationFence).toMatchObject({
+		expect((saved as SceneWithLegacyMounts).mounts?.[0]?.publicationFence).toMatchObject({
 			sourcePath: publication.sourcePath,
 			sourceRevision: publication.sourceRevision,
 			publicationGeneration: publication.generation,
@@ -419,12 +420,12 @@ describe('instantiateSceneRefUnderWorld — normalized mounts remain saveable', 
       assets: Array<{
         kind?: string;
         refs?: string[];
-        payload?: { mounts?: Array<{ source: number }> };
+        payload?: { entities?: Record<string, { instance?: { source: number } }> };
       }>;
     };
     const sceneEntry = pack.assets.find((asset) => asset.kind === 'scene');
     expect(sceneEntry?.refs).toEqual([childGuid]);
-    expect(sceneEntry?.payload?.mounts?.map((mount) => mount.source)).toEqual([0]);
+    expect(Object.values(sceneEntry?.payload?.entities ?? {}).flatMap((entity) => entity.instance ? [entity.instance.source] : [])).toEqual([0]);
   });
 });
 
@@ -582,8 +583,8 @@ describe('worldToPack — preserves tracked scene roots when live root discovery
     expect(serialized).not.toBeNull();
     const parsed = JSON.parse(serialized!);
     const scene = parsed.assets.find((asset: { kind?: string }) => asset.kind === 'scene');
-    expect(scene.payload.entities).toHaveLength(1);
-    expect(scene.payload.entities[0].components.Transform.pos).toEqual([1, 2, 3]);
+    expect(Object.values(scene.payload.entities)).toHaveLength(1);
+    expect(Object.values(scene.payload.entities as Record<string, { components: { Transform: { pos: number[] } } }>)[0]!.components.Transform.pos).toEqual([1, 2, 3]);
   });
 });
 
@@ -1117,24 +1118,17 @@ describe('loadSceneByGuid — staged replacement preserves nested descendants', 
     const sceneGuid = '44444444-4444-4444-8444-444444444444';
     const childScene = {
       kind: 'scene' as const,
-      entities: [
-        { localId: 0 as never, components: { Name: { value: 'NestedRoot' }, Transform: { pos: [0, 0, 0] } } },
-        {
-          localId: 1 as never,
-          components: {
-            Name: { value: 'NestedNamedChild' },
-            Transform: { pos: [1, 0, 0] },
-            ChildOf: { parent: 0 },
-          },
-        },
-      ],
+      entities: {
+        root: { components: { Name: { value: 'NestedRoot' }, Transform: { pos: [0, 0, 0] } } },
+        child: { components: { Name: { value: 'NestedNamedChild' }, Transform: { pos: [1, 0, 0] }, ChildOf: { parent: 'root' } } },
+      },
     };
     const scene = {
       kind: 'scene' as const,
-      entities: [
-        { localId: 0 as never, components: { Name: { value: 'NewRoot' }, Transform: { pos: [0, 0, 0] } } },
-      ],
-      mounts: [{ localId: 1 as never, source: childGuid, memberFirst: 2 as never, memberCount: 2, parent: 0 as never }],
+      entities: {
+        root: { components: { Name: { value: 'NewRoot' }, Transform: { pos: [0, 0, 0] } } },
+        nested: { components: { ChildOf: { parent: 'root' } }, instance: { source: childGuid } },
+      },
     };
     expect(registry.catalog(childGuid, childScene).ok).toBe(true);
     expect(registry.catalog(sceneGuid, scene).ok).toBe(true);

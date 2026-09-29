@@ -1,5 +1,6 @@
 import {
 	assetIO,
+	sourceAuthoringOperationManifest,
 	broadcastAssetsChanged,
 	type CommandError,
 	createAuthoredAssetCatalogBarrier,
@@ -9,7 +10,7 @@ import {
 	type SourceAuthoringOperationDescriptor,
 	type SourceAuthoringRuntimeResult,
 } from "@forgeax/editor-core";
-import { SOURCE_AUTHORING_OPERATION_DESCRIPTORS } from "@forgeax/engine-pack/source";
+import { PACK_AUTHORING_OPERATION_DESCRIPTORS } from "@forgeax/engine-pack/source";
 import type { SourceAuthoringProducerPreflight } from "./source-authoring-runtime";
 
 interface SourceAuthoringOperationResult {
@@ -49,17 +50,6 @@ export interface SourceAuthoringTransportDependencies {
 	) => Promise<void>;
 }
 
-const engineKindByEditorKind: Readonly<Record<string, string>> = {
-	"asset-source.create": "create-scriptable-pack",
-	"asset-source.add-output": "add-output",
-	"asset-source.add-external-asset": "add-external-asset",
-	"asset-source.rename": "rename-display",
-	"asset-source.remove-output": "remove-output",
-	"asset-source.clone": "clone-scriptable-pack",
-	"asset-source.rebuild": "rebuild",
-	"asset-source.cold-cook": "cold-cook",
-};
-
 function transportError(hint: string): SourceAuthoringRuntimeResult {
 	return {
 		ok: false,
@@ -84,6 +74,9 @@ function normalizeError(error: unknown, operation: EditorOp): CommandError {
 		error !== null && typeof error === "object"
 			? (error as Record<string, unknown>)
 			: {};
+	const revisionConflict = value.code === "pack-source-revision-conflict";
+	const detail = value.detail !== null && typeof value.detail === "object"
+		? value.detail as Record<string, unknown> : {};
 	return {
 		code: (typeof value.code === "string"
 			? value.code
@@ -101,13 +94,15 @@ function normalizeError(error: unknown, operation: EditorOp): CommandError {
 		...(requestIdOf(operation) === undefined
 			? {}
 			: { requestId: requestIdOf(operation) }),
-		retryable: value.retryable === true,
+		retryable: value.retryable === true || revisionConflict,
 		recoveryActions: Array.isArray(value.recoveryActions)
 			? value.recoveryActions.filter(
 					(entry): entry is string => typeof entry === "string",
 				)
 			: ["asset.preflight"],
-		...(value.expected === undefined ? {} : { expected: value.expected }),
+		...(revisionConflict && typeof detail.expectedRevision === "string"
+			? { expected: detail.expectedRevision }
+			: value.expected === undefined ? {} : { expected: value.expected }),
 		...(value.actual === undefined ? {} : { actual: value.actual }),
 		details: value.detail ?? value.details,
 	};
@@ -134,15 +129,14 @@ function parseProducerPreflight(value: unknown): SourceAuthoringProducerPrefligh
 	const result = value as Record<string, unknown>;
 	if (
 		typeof result.sourcePath !== "string" ||
-		typeof result.revision !== "string" ||
-		!Object.hasOwn(result, "meta")
+		typeof result.revision !== "string"
 	) {
 		throw new Error("Source authoring producer returned an incomplete preflight value.");
 	}
 	return {
 		sourcePath: result.sourcePath,
 		revision: result.revision,
-		meta: result.meta,
+		meta: { subAssets: Array.isArray(result.assets) ? result.assets : [] },
 	};
 }
 
@@ -257,14 +251,8 @@ export function createSourceAuthoringTransport(
 		...(deps.scopeId ? { "x-forgeax-scope-id": deps.scopeId } : {}),
 		...(deps.generation !== undefined ? { "x-forgeax-generation": String(deps.generation) } : {}),
 	};
-	const operations = SOURCE_AUTHORING_OPERATION_DESCRIPTORS.map(
-		(descriptor) => ({
-			id: descriptor.id,
-			domain: descriptor.domain,
-			title: descriptor.title,
-			argsSchema: descriptor.argsSchema,
-		}),
-	);
+	const operations = sourceAuthoringOperationManifest().filter((descriptor) =>
+    PACK_AUTHORING_OPERATION_DESCRIPTORS.some((owner) => owner.id === descriptor.id));
 	return {
 		operations,
 		async preflightSource({ sourcePath, requestId }) {
@@ -274,7 +262,7 @@ export function createSourceAuthoringTransport(
 				response = await deps.fetch(deps.endpoint ?? "/api/assets/source/execute", {
 					method: "POST",
 					headers,
-					body: JSON.stringify({ kind: "preflight", sourcePath, requestId }),
+					body: JSON.stringify({ operation: "asset.inspect", subject: sourcePath, requestId }),
 				});
 			} catch (error) {
 				throw new Error(error instanceof Error ? error.message : String(error));
@@ -294,7 +282,7 @@ export function createSourceAuthoringTransport(
 		},
 		async execute(operation) {
 			const editorKind = operation.kind as string;
-			const descriptor = SOURCE_AUTHORING_OPERATION_DESCRIPTORS.find(
+			const descriptor = PACK_AUTHORING_OPERATION_DESCRIPTORS.find(
 				(candidate) => candidate.id === editorKind,
 			);
 			if (descriptor === undefined) {
@@ -353,9 +341,7 @@ export function createSourceAuthoringTransport(
 					headers,
 					body: JSON.stringify({
 						...args,
-						kind: engineKindByEditorKind[
-							editorKind as keyof typeof engineKindByEditorKind
-						],
+						operation: editorKind,
 					}),
 				});
 			} catch (error) {
@@ -378,7 +364,8 @@ export function createSourceAuthoringTransport(
 				body.value !== null &&
 				typeof body.value === "object"
 			) {
-				const value = body.value as SourceAuthoringOperationResult;
+				const responseValue = body.value as SourceAuthoringOperationResult & { assets?: readonly unknown[] };
+        const value = { ...responseValue, meta: { subAssets: responseValue.assets ?? [] } };
 				const cookGuid =
 					subjectRow?.guid ?? ownerGuid ?? outputGuids(value.meta)[0];
 				if (cookGuid === undefined) {

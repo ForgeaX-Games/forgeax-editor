@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { World } from '@forgeax/engine-ecs';
 import type { Plugin } from '@forgeax/engine-plugin';
 import {
+  activatesBeforeScene,
   gamePluginImportUrl,
   getPlayPluginFailure,
   loadGamePluginModules,
@@ -12,6 +13,11 @@ import {
   ensureGamePluginsLoaded,
   GAMEPLAY_PRODUCER_CONTRACT,
   GAMEPLAY_PRODUCER_CONTRACT_VERSION,
+  isNativeCordisPlugin,
+  listForgeEnginePluginModulePaths,
+  normalizePlayGameEntry,
+  resolveGamePluginModuleDescriptors,
+  resolvePhysicsBackendFromForgePlugins,
 } from '../index';
 
 describe('asset-resident game plugin loader contract', () => {
@@ -31,6 +37,45 @@ describe('asset-resident game plugin loader contract', () => {
       hint: 'Play plugin sample/assets/broken.plugin.ts failed to load: module syntax error',
     });
     expect(getPlayPluginFailure({ errors: [] })).toBeNull();
+  });
+
+  test('resolvePhysicsBackendFromForgePlugins reads rapier engine plugins', () => {
+    expect(resolvePhysicsBackendFromForgePlugins([
+      { name: '@forgeax/engine/physics/rapier3d', realm: 'engine' },
+    ])).toBe('rapier-3d');
+    expect(resolvePhysicsBackendFromForgePlugins(undefined)).toBeUndefined();
+  });
+
+  test('listForgeEnginePluginModulePaths prefers forge.json 2.0 composer over *.plugin.ts glob', () => {
+    const paths = listForgeEnginePluginModulePaths([
+      { name: '@forgeax/engine/physics/rapier3d', realm: 'engine' },
+      { name: './assets/plugin.ts', realm: 'engine' },
+    ]);
+    expect(paths).toEqual(['assets/plugin.ts']);
+    const modules = resolveGamePluginModuleDescriptors(
+      paths,
+      ['assets/player/player.plugin.ts'],
+      'my-game',
+      '/preview/g/my-game',
+    );
+    expect(modules).toEqual([{ clientPath: 'assets/plugin.ts', url: '/preview/g/my-game/assets/plugin.ts' }]);
+  });
+
+  test('normalizePlayGameEntry accepts bootstrap fn and default Cordis plugins', () => {
+    const bootstrap = () => {};
+    expect(normalizePlayGameEntry({ bootstrap })).toBe(bootstrap);
+    const plugin: Plugin = { name: 'game-3d', inject: ['world', 'gameHost'], apply: () => undefined };
+    expect(normalizePlayGameEntry({ default: plugin })).toBe(plugin);
+    expect(isNativeCordisPlugin(plugin)).toBe(true);
+    expect(isNativeCordisPlugin(bootstrap)).toBe(false);
+  });
+
+  test('admits only opted-in component plugins before scene materialization', () => {
+    const componentPlugin: Plugin & { readonly beforeScene: true } = { name: 'rotator', inject: ['world'], beforeScene: true, apply: () => undefined };
+    const scenePlugin: Plugin = { name: 'player', inject: ['world', 'gameHost'], apply: () => undefined };
+    expect(activatesBeforeScene(componentPlugin)).toBe(true);
+    expect(activatesBeforeScene(scenePlugin)).toBe(false);
+    expect(activatesBeforeScene({ name: 'unspecified', inject: ['world'], apply: () => undefined })).toBe(false);
   });
 
   test('exports game plugin loader and lifecycle functions', () => {

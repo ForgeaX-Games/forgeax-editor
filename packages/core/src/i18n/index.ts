@@ -5,9 +5,9 @@
  *
  * English is the source of truth (`locales/en.json`); `zh.json` is the overlay.
  * The locale is read from the SAME localStorage key the interface uses
- * (`forgeax.locale`) so the editor shell (vendored interface) and the editor
- * panels stay on one language. Because the interface shell and the panels live
- * in the same frame, we sync live via:
+ * (`forgeax.locale`) so the editor shell (the published Interface package) and
+ * the editor panels stay on one language. Because the interface shell and the
+ * panels live in the same frame, we sync live via:
  *   - a `forgeax:locale-changed` window CustomEvent (same-frame; the interface
  *     core dispatches it on setLocale with `detail: locale` — even when
  *     persist:false for system-detected first-run locale), and

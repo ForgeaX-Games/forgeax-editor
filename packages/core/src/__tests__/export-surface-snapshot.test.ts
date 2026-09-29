@@ -95,10 +95,9 @@ function createProgram(): { program: ts.Program; checker: ts.TypeChecker } {
       declaration: true, // declarationMap depends on declaration being true
       declarationMap: false, // suppress .d.ts.map output
       types: options.types, // preserve explicit types (bun)
-      // Bun's isolated workspace install links package-local type dependencies;
-      // compiler-API programs start from this test file, so make that lookup
-      // explicit instead of relying on a hoisted node_modules layout.
-      typeRoots: [path.resolve(PKG_ROOT, '..', 'node_modules', '@types')],
+      // Resolve types from the package config and its ancestors, just like tsc,
+      // without fixing the compiler API to an isolated or hoisted install layout.
+      configFilePath: tsconfigPath,
     },
   });
 
@@ -276,7 +275,12 @@ describe('AC-01 export-surface snapshot', () => {
     // imperative active-asset subscription the panelActions contributions module
     // (a non-React AppExtension.activate) rides to keep asset-editor context keys
     // in sync; its React sibling useActiveEditorAsset was already published → 84.
-    expect(entries.length).toBe(84);
+    // Script-generated scene promotion publishes one canonical save helper → 85.
+    // hierarchy-viewport-visibility (2026-09-17) publishes 4 visibility-revision
+    // symbols (subscribeVisibilityRevision / getVisibilityRevision /
+    // getLastVisibilityCommandEntityIds / getLastVisibilityCommandState) so viewport
+    // chrome can reconcile after eye toggles without polling the full doc → 85 + 4 = 89.
+    expect(entries.length).toBe(89);
 
     // Every entry must be non-empty.
     for (const e of entries) {

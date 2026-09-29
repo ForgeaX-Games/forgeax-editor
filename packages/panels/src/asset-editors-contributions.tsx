@@ -12,7 +12,7 @@
 // over a live React closure (Material Instance Save Sibling/Child, Input Map
 // + Action / Import / Export) call a module-level handler ref the panel refreshes
 // each render.
-import type { AppExtension, AppHost } from '@forgeax/interface/core/app-shell/types';
+import type { AppExtension, AppHost } from '@forgeax/app-shell/application';
 import {
   getActiveEditorAsset,
   getInputMapStaging,

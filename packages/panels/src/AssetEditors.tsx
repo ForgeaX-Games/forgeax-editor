@@ -15,7 +15,8 @@ import {
 import { PREVIEW_COMPONENTS } from './asset-inspector';
 import { InspectorSection } from './asset-inspector/InspectorSection';
 import InputMapEditor from './asset-inspector/InputMapEditor';
-import { AssetPicker, anchorFromElement, type AssetPickerAnchor } from './AssetPicker';
+import { AssetPicker, type AssetPickerAnchor } from './AssetPicker';
+import { AssetRefControl } from './AssetRefControl';
 import { getMaterialInstancePreview } from './mi-preview-slot';
 import { getMeshPreview } from './mesh-preview-slot';
 import { getTexturePreview } from './texture-preview-slot';
@@ -255,11 +256,6 @@ export function MeshSlotsPanel(): ReactElement {
       descriptor.sourceKey === meshRow.sourceKey
       && descriptor.semantic === 'mesh-material-slot-defaults'
     )) === true;
-  const materialName = (guid: string | undefined): string => {
-    if (guid === undefined) return 'Engine default material';
-    const row = catalog.find((entry) => entry.guid.toLowerCase() === guid.toLowerCase());
-    return row?.name?.trim() || guid;
-  };
   const saveSlot = async (index: number, materialGuid?: string | null): Promise<void> => {
     const slot = slots[index];
     if (!asset || slot === undefined) return;
@@ -271,6 +267,7 @@ export function MeshSlotsPanel(): ReactElement {
         slotName: typeof slot.slotName === 'string' && slot.slotName.length > 0 ? slot.slotName : `Slot ${index}`,
         ...(typeof slot.sourceKey === 'string' && slot.sourceKey.length > 0 ? { slotSourceKey: slot.sourceKey } : {}),
         ...(materialGuid === undefined ? {} : { materialGuid }),
+        catalogSnapshot: catalog,
       });
     } catch (cause) {
       setError(cause instanceof MeshAuthoringError ? cause : new MeshAuthoringError({
@@ -300,37 +297,21 @@ export function MeshSlotsPanel(): ReactElement {
             ) : slots.map((slot, index) => {
               const slotName = typeof slot.slotName === 'string' && slot.slotName.length > 0 ? slot.slotName : `Slot ${index}`;
               const guid = formatAssetGuid(slot.defaultMaterial);
-              const bound = guid !== undefined;
-              const matName = materialName(guid);
               const sectionCount = submeshes.filter((submesh) => submesh.materialSlot === index).length;
               const busy = savingSlot === index;
               return (
                 <div className="f-row mesh-slot-row" data-testid={`mesh-slot-${index}`} key={index}>
                   <span className="f-name" title={slotName}>{slotName}</span>
-                  <span className="f-val">
-                    <span
-                      className="asset-f"
-                      role="button"
-                      tabIndex={writable ? 0 : -1}
-                      aria-disabled={!writable || savingSlot !== null}
-                      data-testid={`mesh-slot-material-${index}`}
-                      title={writable ? 'Click to assign a material' : 'Imported source metadata is read-only'}
-                      onClick={(event) => {
-                        if (!writable || savingSlot !== null) return;
-                        const rect = anchorFromElement(event.currentTarget);
-                        if (rect) setPickerSlot({ index, anchor: rect });
-                      }}
-                      onKeyDown={(e) => {
-                        if ((e.key === 'Enter' || e.key === ' ') && writable && savingSlot === null) {
-                          e.preventDefault();
-                          const rect = anchorFromElement(e.currentTarget);
-                          if (rect) setPickerSlot({ index, anchor: rect });
-                        }
-                      }}
-                    >
-                      <span className={`ab${bound ? '' : ' empty'}`} />
-                      <span className={`an${bound ? '' : ' empty'}`} title={matName}>{busy ? 'Saving…' : matName}</span>
-                    </span>
+                  <span className="f-val mesh-slot-val">
+                    <AssetRefControl
+                      assetType="MaterialAsset"
+                      guid={guid ?? null}
+                      testId={`mesh-slot-material-${index}`}
+                      readOnly={!writable || savingSlot !== null}
+                      onBrowse={(anchor) => setPickerSlot({ index, anchor })}
+                      onBind={(nextGuid) => { void saveSlot(index, nextGuid); }}
+                      onClear={() => { void saveSlot(index); }}
+                    />
                     {writable && (
                       <span className="mesh-slot-actions">
                         <button
@@ -353,6 +334,7 @@ export function MeshSlotsPanel(): ReactElement {
                     )}
                     <span className="mesh-slot-sections">
                       {typeof slot.sourceKey === 'string' && slot.sourceKey.length > 0 ? `${slot.sourceKey} · ` : ''}
+                      {busy ? 'Saving… · ' : ''}
                       {`${sectionCount} section${sectionCount === 1 ? '' : 's'}`}
                     </span>
                   </span>

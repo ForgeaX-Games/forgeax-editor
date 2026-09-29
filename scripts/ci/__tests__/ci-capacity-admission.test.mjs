@@ -177,15 +177,9 @@ test('matrix admission expands actual GitHub names and preserves the declared ca
     'submodule-pin',
     'b2-self-boot',
     'typecheck',
-    'smoke-play shard (scriptable)',
-    'smoke-play shard (broad-core)',
-    'smoke-play shard (template)',
-    'smoke-play shard (broad-play)',
-    'smoke-play shard (broad-assets)',
-    'smoke-play shard (vfx)',
-    'smoke-play shard (editor)',
-    'smoke-play shard (create)',
-    'smoke-play shard (repro)',
+    'smoke-play bundle (core)',
+    'smoke-play bundle (breadth)',
+    'smoke-play bundle (editor)',
     'smoke-play',
   ];
   const admission = admitWorkflowTopology(graph, {
@@ -196,20 +190,24 @@ test('matrix admission expands actual GitHub names and preserves the declared ca
   });
 
   assert.deepEqual(admission.acceptedJobNames, names);
-  assert.equal(admission.needsEdges.length, 25);
+  assert.equal(admission.needsEdges.length, 13);
   assert.deepEqual(
-    admission.acceptedJobs.filter((candidate) => candidate.sourceName === 'smoke-play shard (${{ matrix.shard }})')
-      .map((candidate) => [candidate.name, candidate.matrixValues.shard, candidate.strategy.maxParallel]),
+    admission.needsEdges
+      .filter((edge) => edge.to.startsWith('smoke-play bundle'))
+      .map(({from, to}) => [from, to]),
     [
-      ['smoke-play shard (scriptable)', 'scriptable', 2],
-      ['smoke-play shard (broad-core)', 'broad-core', 2],
-      ['smoke-play shard (template)', 'template', 2],
-      ['smoke-play shard (broad-play)', 'broad-play', 2],
-      ['smoke-play shard (broad-assets)', 'broad-assets', 2],
-      ['smoke-play shard (vfx)', 'vfx', 2],
-      ['smoke-play shard (editor)', 'editor', 2],
-      ['smoke-play shard (create)', 'create', 2],
-      ['smoke-play shard (repro)', 'repro', 2],
+      ['prerequisite-release', 'smoke-play bundle (core)'],
+      ['prerequisite-release', 'smoke-play bundle (breadth)'],
+      ['prerequisite-release', 'smoke-play bundle (editor)'],
+    ],
+  );
+  assert.deepEqual(
+    admission.acceptedJobs.filter((candidate) => candidate.sourceName === 'smoke-play bundle (${{ matrix.bundle }})')
+      .map((candidate) => [candidate.name, candidate.matrixValues.bundle, candidate.strategy.maxParallel]),
+    [
+      ['smoke-play bundle (core)', 'core', 3],
+      ['smoke-play bundle (breadth)', 'breadth', 3],
+      ['smoke-play bundle (editor)', 'editor', 3],
     ],
   );
 

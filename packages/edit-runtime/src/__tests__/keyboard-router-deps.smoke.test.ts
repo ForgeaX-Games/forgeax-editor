@@ -1,5 +1,15 @@
+import { createEditorKeyboardExtension } from '../editor-keyboard-extension';
 import { afterEach, describe, expect, it } from 'bun:test';
-import { buildKeyboardRouterDeps, createEditorKeyboardExtension } from '../keyboard-router-deps';
+import {
+  bindViewportRuntimeClient,
+  gateway,
+  getSelectionList } from '@forgeax/editor-core';
+import {
+  TRANSPORT_PROTOCOL_VERSION,
+  VIEWPORT_RUNTIME_CONTRACT_VERSION,
+  type ViewportRuntimeIdentity,
+} from '@forgeax/editor-product';
+import { buildKeyboardRouterDeps } from '../keyboard-router-deps';
 import { setViewportQuadrant } from '../viewport/viewport-quadrant';
 
 const EXPECTED_KEYS = [
@@ -51,6 +61,40 @@ describe('buildKeyboardRouterDeps — remaining legacy router bridge', () => {
     expect(deps.getEntitySelection()).toEqual([]);
     expect(deps.getAssetSelection()).toEqual([]);
     expect(['entity', 'asset', 'folder', null]).toContain(deps.getLastSelectionDomain());
+  });
+
+  it('prefers live viewport selection over a stale empty runtime snapshot', () => {
+    const runtime: ViewportRuntimeIdentity = {
+      version: VIEWPORT_RUNTIME_CONTRACT_VERSION,
+      runtimeId: 'edit-runtime',
+      runtimeGeneration: 1,
+      carrierId: 'frame-1',
+      carrierKind: 'iframe',
+    };
+    const dispose = bindViewportRuntimeClient(
+      runtime,
+      {
+        request: async (request) => ({
+          jsonrpc: '2.0',
+          version: TRANSPORT_PROTOCOL_VERSION,
+          id: request.id,
+          correlationId: request.correlationId,
+          result: {},
+        }),
+        dispose: () => {},
+      });
+    try {
+      const deps = buildKeyboardRouterDeps();
+      const spawned = { kind: 'spawnEntity', name: 'Pick Target' } as const;
+      gateway.dispatch(spawned as never, 'human');
+      const id = (spawned as typeof spawned & { _id?: number })._id;
+      expect(id).toBeNumber();
+      gateway.dispatch({ kind: 'setSelection', id: id! } as never, 'human');
+      expect(getSelectionList().size).toBe(1);
+      expect(deps.getEntitySelection()).toEqual([id!]);
+    } finally {
+      dispose();
+    }
   });
 
   it('keeps command-registry entity actions behind the gateway bridge', () => {

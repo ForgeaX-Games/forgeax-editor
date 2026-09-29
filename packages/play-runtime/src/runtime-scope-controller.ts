@@ -1,12 +1,31 @@
 import { recoverAssetSource } from '../../../scripts/host/asset-source-recovery';
-import { projectRuntimeDiagnostic, resolveRuntimeDiagnosticAliases, type RuntimeDiagnosticAlias } from '../../../scripts/host/runtime-diagnostic';
+import {
+  projectRuntimeDiagnostic,
+  resolveRuntimeDiagnosticAliases,
+  type RuntimeDiagnosticAlias,
+} from '../../../scripts/host/runtime-diagnostic';
 import { handleProjectValidation } from '../../../scripts/host/project-validation';
 import { createSourceAuthoringHandler } from '../../../scripts/host/source-authoring';
 import { resolve } from 'node:path';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import type { RuntimeAssetBinding, RuntimeCatalogRoot } from '@forgeax/engine-types';
 import { runtimeScopePath } from '@forgeax/engine-types';
-import type { PluginPack } from '@forgeax/engine-vite-plugin-pack';
+
+/**
+ * Runtime-control surface owned by the Pack producer. Keep this local to the
+ * Play host: the public Vite plugin type is a transport/plugin shape, while
+ * this controller only needs the two lifecycle methods used to bind a game.
+ */
+export interface RuntimeScopePack {
+  /** Optional plugin identity retained for structural test hosts. */
+  readonly name?: string;
+  readonly runtimeBinding: () => RuntimeAssetBinding | undefined;
+  readonly rebind?: (
+    binding: RuntimeAssetBinding,
+    roots: readonly string[],
+    projectDdcRoot?: string,
+  ) => Promise<RuntimeAssetBinding>;
+}
 
 interface RuntimeScopeCommand {
   readonly gameId: string;
@@ -21,13 +40,11 @@ export interface RuntimeScopeMountTransition {
 }
 
 export interface RuntimeScopeControllerOptions {
-  readonly pack: PluginPack;
+  readonly pack: RuntimeScopePack;
   readonly base: string;
   readonly secret?: string;
   readonly initial?: RuntimeScopeCommand;
-  readonly prepareGameMount?: (
-    gameDir: string,
-    gameId: string,
+  readonly prepareGameMount?: (gameDir: string, gameId: string,
   ) => void | RuntimeScopeMountTransition | Promise<void | RuntimeScopeMountTransition>;
   readonly resolveRoots: (gameDir: string, gameId: string) => readonly string[];
   readonly resolveProjectDdcRoot: (gameDir: string, gameId: string) => string;
@@ -98,7 +115,8 @@ function readBody(req: IncomingRequest): Promise<string> {
 }
 
 function parseCommand(raw: unknown): RuntimeScopeCommand {
-  if (raw === null || typeof raw !== 'object') throw new Error('runtime scope command must be an object');
+  if (raw === null || typeof raw !== 'object')
+    throw new Error('runtime scope command must be an object');
   const candidate = raw as Record<string, unknown>;
   const gameId = typeof candidate.gameId === 'string' ? candidate.gameId.trim() : '';
   const scopeId = typeof candidate.scopeId === 'string' ? candidate.scopeId.trim() : '';
@@ -106,12 +124,13 @@ function parseCommand(raw: unknown): RuntimeScopeCommand {
   const generation = candidate.generation;
   if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(gameId)) throw new Error('invalid gameId');
   if (scopeId.length === 0 || scopeId.length > 256) throw new Error('invalid scopeId');
+  if (typeof generation !== 'number' || !Number.isSafeInteger(generation) || generation < 1)
+    throw new Error('invalid generation');
   if (
-    typeof generation !== 'number' ||
-    !Number.isSafeInteger(generation) ||
-    generation < 1
-  ) throw new Error('invalid generation');
-  if (gameDir.length === 0 || !existsSync(resolve(gameDir)) || !statSync(resolve(gameDir)).isDirectory()) {
+    gameDir.length === 0 ||
+    !existsSync(resolve(gameDir)) ||
+    !statSync(resolve(gameDir)).isDirectory()
+  ) {
     throw new Error('gameDir must resolve to an existing directory');
   }
   return {
@@ -129,12 +148,7 @@ function respond(res: ServerResponse, statusCode: number, body: unknown): void {
 }
 
 function commandIdentity(command: RuntimeScopeCommand): string {
-  return JSON.stringify([
-    command.gameId,
-    command.scopeId,
-    command.generation,
-    command.gameDir,
-  ]);
+  return JSON.stringify([command.gameId, command.scopeId, command.generation, command.gameDir]);
 }
 
 function isReadyBinding(binding: RuntimeAssetBinding): boolean {
@@ -149,7 +163,36 @@ function errorCode(error: unknown): string {
   return 'runtime-scope-bind-failed';
 }
 
-function redactedBindError(error: unknown, gameRoot?: string, diagnostic?: Record<string, unknown>): {
+function runtimeScopeSidecarTrace(stage: string, detail: Record<string, unknown>): void {
+  if (!/^(1|true|yes|on)$/i.test(process.env.FORGEAX_RUNTIME_SCOPE_TRACE?.trim() ?? '')) return;
+  console.info(`[runtime-scope-trace] sidecar.${stage} ${JSON.stringify(detail)}`);
+}
+
+function bindingDiagSummary(binding: RuntimeAssetBinding): Record<string, unknown> {
+  const codes = (binding.diagnostics ?? [])
+    .map((entry) =>
+      entry !== null &&
+      typeof entry === 'object' &&
+      typeof (entry as { code?: unknown }).code === 'string'
+        ? (entry as { code: string }).code
+        : null,
+    )
+    .filter((code): code is string => code !== null);
+  return {
+    gameId: binding.gameId,
+    scopeId: binding.scopeId,
+    generation: binding.generation,
+    status: binding.status,
+    authority: binding.authority ?? null,
+    diagnosticCodes: codes.length > 0 ? codes : undefined,
+  };
+}
+
+function redactedBindError(
+  error: unknown,
+  gameRoot?: string,
+  diagnostic?: Record<string, unknown>,
+): {
   readonly error: 'runtime-scope-bind-failed';
   readonly code: string;
   readonly detail: string;
@@ -174,8 +217,15 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
   let initialBind: Promise<RuntimeAssetBinding | undefined> | undefined;
   let lastBindError: unknown;
   const failureDiagnostics = new WeakMap<object, Record<string, unknown>>();
-  const diagnosticFor = (error: unknown) => error !== null && typeof error === 'object' ? failureDiagnostics.get(error) : undefined;
-  let committed: { readonly identity: string; readonly binding: RuntimeAssetBinding; readonly gameDir: string } | undefined;
+  const diagnosticFor = (error: unknown) =>
+    error !== null && typeof error === 'object' ? failureDiagnostics.get(error) : undefined;
+  let committed:
+    | {
+        readonly identity: string;
+        readonly binding: RuntimeAssetBinding;
+        readonly gameDir: string;
+      }
+    | undefined;
   let lastAttempt: RuntimeScopeCommand | undefined;
   const inFlight = new Map<string, Promise<RuntimeAssetBinding>>();
   // A committed mount owns identity, not the producer's immutable publication.
@@ -184,13 +234,26 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
     const live = options.pack.runtimeBinding();
     const accepted = committed?.binding;
     if (accepted === undefined) return live;
-    return live !== undefined && live.gameId === accepted.gameId
-      && live.scopeId === accepted.scopeId && live.generation === accepted.generation
-      ? live : accepted;
+    return live !== undefined &&
+      live.gameId === accepted.gameId &&
+      live.scopeId === accepted.scopeId &&
+      live.generation === accepted.generation
+      ? live
+      : accepted;
   };
-  const rebind = (command: RuntimeScopeCommand, sourcePath?: string): Promise<RuntimeAssetBinding | Awaited<ReturnType<typeof recoverAssetSource>> & { readonly binding: RuntimeAssetBinding; readonly ok: true }> => {
+  const rebind = (
+    command: RuntimeScopeCommand,
+    sourcePath?: string,
+  ): Promise<
+    | RuntimeAssetBinding
+    | (Awaited<ReturnType<typeof recoverAssetSource>> & {
+        readonly binding: RuntimeAssetBinding;
+        readonly ok: true;
+      })
+  > => {
     const identity = commandIdentity(command);
-    if (sourcePath === undefined && committed?.identity === identity) return Promise.resolve(currentBinding()!);
+    if (sourcePath === undefined && committed?.identity === identity)
+      return Promise.resolve(currentBinding()!);
     const existing = inFlight.get(identity);
     if (sourcePath === undefined && existing !== undefined) return existing;
 
@@ -199,15 +262,27 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
       const currentGeneration = options.pack.runtimeBinding()?.generation;
       if (currentGeneration !== undefined && command.generation <= currentGeneration) {
         throw Object.assign(
-          new Error(`runtime generation ${command.generation} is not newer than ${currentGeneration}`),
+          new Error(
+            `runtime generation ${command.generation} is not newer than ${currentGeneration}`,
+          ),
           { code: 'runtime-generation-stale' },
         );
       }
       let recovered: Awaited<ReturnType<typeof recoverAssetSource>> | undefined;
       if (sourcePath !== undefined) {
         const known = [committed, lastAttempt];
-        if (!known.some((scope) => scope?.gameDir === command.gameDir && ('gameId' in scope ? scope.gameId : scope.binding.gameId) === command.gameId)) {
-          throw Object.assign(new Error('asset-recovery-scope-mismatch'), { code: 'asset-recovery-scope-mismatch', hint: 'Bind this game before recovering its source.', metadataRebuilt: false });
+        if (
+          !known.some(
+            (scope) =>
+              scope?.gameDir === command.gameDir &&
+              ('gameId' in scope ? scope.gameId : scope.binding.gameId) === command.gameId,
+          )
+        ) {
+          throw Object.assign(new Error('asset-recovery-scope-mismatch'), {
+            code: 'asset-recovery-scope-mismatch',
+            hint: 'Bind this game before recovering its source.',
+            metadataRebuilt: false,
+          });
         }
         recovered = await recoverAssetSource(command.gameDir, sourcePath);
         // A successful sidecar write changes authored inputs. Even if Pack
@@ -224,32 +299,51 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
         diagnosticAliases = resolveRuntimeDiagnosticAliases(command.gameDir, roots);
         const projectDdcRoot = options.resolveProjectDdcRoot(command.gameDir, command.gameId);
         const catalogRoots = options.resolveCatalogRoots(command.gameDir, command.gameId);
+        if (options.pack.rebind === undefined) {
+          throw Object.assign(new Error('runtime pack does not expose the rebind control seam'), {
+            code: 'runtime-pack-rebind-unavailable',
+          });
+        }
         const binding = await options.pack.rebind(
           makeBinding(command, options.base, catalogRoots),
           roots,
           projectDdcRoot,
         );
         if (
-          binding.gameId !== command.gameId
-          || binding.scopeId !== command.scopeId
-          || binding.generation !== command.generation
+          binding.gameId !== command.gameId ||
+          binding.scopeId !== command.scopeId ||
+          binding.generation !== command.generation
         ) {
           throw Object.assign(
             new Error('runtime rebind returned a binding for a different game generation'),
             { code: 'runtime-binding-mismatch' },
           );
         }
-        const blocking = binding.diagnostics?.find((diagnostic) => diagnostic.severity === 'blocking');
-        if (recovered !== undefined && (binding.status !== 'ready' || binding.authority === 'degraded' || blocking !== undefined)) {
+        const blocking = binding.diagnostics?.find(
+          (diagnostic) => diagnostic.severity === 'blocking',
+        );
+        if (
+          recovered !== undefined &&
+          (binding.status !== 'ready' || binding.authority === 'degraded' || blocking !== undefined)
+        ) {
           throw Object.assign(new Error('runtime-asset-recovery-not-ready'), {
             code: blocking?.code ?? 'runtime-asset-recovery-not-ready',
-            expected: blocking?.expected ?? 'a ready authoritative catalog without blocking diagnostics',
-            hint: blocking?.hint ?? 'Metadata was rebuilt, but the catalog is still degraded; repair its remaining diagnostics before using this runtime.',
-            detail: { status: binding.status, authority: binding.authority, diagnostics: binding.diagnostics ?? [] },
+            expected:
+              blocking?.expected ?? 'a ready authoritative catalog without blocking diagnostics',
+            hint:
+              blocking?.hint ??
+              'Metadata was rebuilt, but the catalog is still degraded; repair its remaining diagnostics before using this runtime.',
+            detail: {
+              status: binding.status,
+              authority: binding.authority,
+              diagnostics: binding.diagnostics ?? [],
+            },
           });
         }
         if (!isReadyBinding(binding)) {
-          throw new Error(`runtime generation ${command.generation} did not become ready (${binding.status})`);
+          throw new Error(
+            `runtime generation ${command.generation} did not become ready (${binding.status})`,
+          );
         }
         await mountTransition?.commit();
         committed = { identity, gameDir: command.gameDir, binding };
@@ -257,7 +351,11 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
         return recovered === undefined ? binding : { ok: true as const, ...recovered, binding };
       } catch (error) {
         const captureDiagnostic = (failure: unknown) => {
-          if (failure !== null && typeof failure === 'object') failureDiagnostics.set(failure, projectRuntimeDiagnostic(failure, command.gameDir, diagnosticAliases));
+          if (failure !== null && typeof failure === 'object')
+            failureDiagnostics.set(
+              failure,
+              projectRuntimeDiagnostic(failure, command.gameDir, diagnosticAliases),
+            );
         };
         captureDiagnostic(error);
         lastBindError = error;
@@ -269,23 +367,34 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
               [error, rollbackError],
               'runtime game mount rollback failed after bind failure',
             ),
-            { code: 'runtime-mount-rollback-failed', ...(recovered === undefined ? {} : { metadataRebuilt: true }) },
+            {
+              code: 'runtime-mount-rollback-failed',
+              ...(recovered === undefined ? {} : { metadataRebuilt: true }),
+            },
           );
         }
         if (recovered !== undefined) {
-          const failure = Object.assign(new Error(errorCode(error)), { code: errorCode(error), cause: error, metadataRebuilt: true });
+          const failure = Object.assign(new Error(errorCode(error)), {
+            code: errorCode(error),
+            cause: error,
+            metadataRebuilt: true,
+          });
           captureDiagnostic(failure);
           throw failure;
         }
         throw error;
       }
     });
-    serial = run.then(() => undefined, () => undefined);
-    if (sourcePath === undefined) inFlight.set(identity, run as Promise<RuntimeAssetBinding>);
-    if (sourcePath === undefined) void run.then(
-      () => inFlight.delete(identity),
-      () => inFlight.delete(identity),
+    serial = run.then(
+      () => undefined,
+      () => undefined,
     );
+    if (sourcePath === undefined) inFlight.set(identity, run as Promise<RuntimeAssetBinding>);
+    if (sourcePath === undefined)
+      void run.then(
+        () => inFlight.delete(identity),
+        () => inFlight.delete(identity),
+      );
     return run;
   };
 
@@ -294,31 +403,60 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
     configureServer(server: ViteServerLike) {
       server.middlewares.use(async (req, res, next) => {
         const url = (req.url ?? '').split('?')[0];
-        const validationRequest = url === '/api/validation/project' || url === basePath(options.base, '/api/validation/project');
-        if ((validationRequest || url === '/api/assets/source/execute' || url === basePath(options.base, '/api/assets/source/execute')) && req.method === 'POST') {
+        const validationRequest =
+          url === '/api/validation/project' ||
+          url === basePath(options.base, '/api/validation/project');
+        if (
+          (validationRequest ||
+            url === '/api/assets/source/execute' ||
+            url === basePath(options.base, '/api/assets/source/execute')) &&
+          req.method === 'POST'
+        ) {
           // Queue with binding transitions; a stale viewport must never operate
           // on the directory of the next game, even during an async body read.
           const body = await readBody(req);
           const operation = serial.then(async () => {
             const scope = committed;
-            if (!scope || readHeader(req, 'x-forgeax-game-id') !== scope.binding.gameId
-              || readHeader(req, 'x-forgeax-scope-id') !== scope.binding.scopeId
-              || readHeader(req, 'x-forgeax-generation') !== String(scope.binding.generation)) {
-              respond(res, 409, { ok: false, error: {
-                code: validationRequest ? 'project-validation-scope-stale' : 'source-authoring-scope-stale', retryable: false,
-                hint: 'Reopen the current game before accessing its project sources.',
-              } });
+            if (
+              !scope ||
+              readHeader(req, 'x-forgeax-game-id') !== scope.binding.gameId ||
+              readHeader(req, 'x-forgeax-scope-id') !== scope.binding.scopeId ||
+              readHeader(req, 'x-forgeax-generation') !== String(scope.binding.generation)
+            ) {
+              respond(res, 409, {
+                ok: false,
+                error: {
+                  code: validationRequest
+                    ? 'project-validation-scope-stale'
+                    : 'source-authoring-scope-stale',
+                  retryable: false,
+                  hint: 'Reopen the current game before accessing its project sources.',
+                },
+              });
               return;
             }
-            const request = new Request('http://editor-host' + url, { method: 'POST', body });
+            const request = new Request('http://editor-host' + url, {
+              method: 'POST',
+              body,
+            });
             const response = validationRequest
               ? await handleProjectValidation(scope.gameDir, request)
               : await createSourceAuthoringHandler(scope.gameDir)(request);
             respond(res, response.status, await response.json());
           });
           serial = operation.catch(() => undefined);
-          try { await operation; } catch {
-            respond(res, 500, { ok: false, error: { code: validationRequest ? 'project-validation-unavailable' : 'source-authoring-host-failed', retryable: false } });
+          try {
+            await operation;
+          } catch {
+            respond(res, 500, {
+              ok: false,
+              error: {
+                code: validationRequest
+                  ? 'project-validation-unavailable'
+                  : 'source-authoring-host-failed',
+                retryable: false,
+              },
+            });
           }
           return;
         }
@@ -332,16 +470,41 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
           }
           await serial;
           const binding = currentBinding();
-          const failedIdentity = lastAttempt === undefined ? {} : {
-            gameId: lastAttempt.gameId, scopeId: lastAttempt.scopeId, generation: lastAttempt.generation,
-          };
+          const failedIdentity =
+            lastAttempt === undefined
+              ? {}
+              : {
+                  gameId: lastAttempt.gameId,
+                  scopeId: lastAttempt.scopeId,
+                  generation: lastAttempt.generation,
+                };
           if (binding === undefined) {
-            respond(res, 503, { ...(lastBindError === undefined ? { error: 'runtime-scope-unbound' } : redactedBindError(lastBindError, lastAttempt?.gameDir ?? options.initial?.gameDir, diagnosticFor(lastBindError))), ...failedIdentity, status: lastBindError === undefined ? 'unbound' : 'unavailable' });
+            respond(res, 503, {
+              ...(lastBindError === undefined
+                ? { error: 'runtime-scope-unbound' }
+                : redactedBindError(
+                    lastBindError,
+                    lastAttempt?.gameDir ?? options.initial?.gameDir,
+                    diagnosticFor(lastBindError),
+                  )),
+              ...failedIdentity,
+              status: lastBindError === undefined ? 'unbound' : 'unavailable',
+            });
           } else if (
-            lastBindError !== undefined
-            && (committed === undefined || binding.status === 'transitioning' || binding.status === 'unavailable')
+            lastBindError !== undefined &&
+            (committed === undefined ||
+              binding.status === 'transitioning' ||
+              binding.status === 'unavailable')
           ) {
-            respond(res, 503, { ...redactedBindError(lastBindError, lastAttempt?.gameDir ?? options.initial?.gameDir, diagnosticFor(lastBindError)), ...failedIdentity, status: committed === undefined ? 'unavailable' : binding.status });
+            respond(res, 503, {
+              ...redactedBindError(
+                lastBindError,
+                lastAttempt?.gameDir ?? options.initial?.gameDir,
+                diagnosticFor(lastBindError),
+              ),
+              ...failedIdentity,
+              status: committed === undefined ? 'unavailable' : binding.status,
+            });
           } else {
             respond(res, 200, binding);
           }
@@ -357,7 +520,10 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
           respond(res, 405, { error: 'method-not-allowed' });
           return;
         }
-        if (options.secret === undefined || readHeader(req, 'x-forgeax-runtime-secret') !== options.secret) {
+        if (
+          options.secret === undefined ||
+          readHeader(req, 'x-forgeax-runtime-secret') !== options.secret
+        ) {
           respond(res, 403, { error: 'runtime-scope-control-forbidden' });
           return;
         }
@@ -366,13 +532,21 @@ export function createRuntimeScopeController(options: RuntimeScopeControllerOpti
           const body = JSON.parse(await readBody(req));
           command = parseCommand(body);
           if (recovery && (typeof body.sourcePath !== 'string' || body.sourcePath.length === 0)) {
-            throw Object.assign(new Error('asset-recovery-path-invalid'), { code: 'asset-recovery-path-invalid' });
+            throw Object.assign(new Error('asset-recovery-path-invalid'), {
+              code: 'asset-recovery-path-invalid',
+            });
           }
           respond(res, 200, await rebind(command, recovery ? body.sourcePath : undefined));
         } catch (error) {
           respond(res, 409, {
             ...redactedBindError(error, command?.gameDir, diagnosticFor(error)),
-            ...(recovery ? { error: 'runtime-asset-recovery-failed', metadataRebuilt: (error as { metadataRebuilt?: boolean } | null)?.metadataRebuilt === true } : {}),
+            ...(recovery
+              ? {
+                  error: 'runtime-asset-recovery-failed',
+                  metadataRebuilt:
+                    (error as { metadataRebuilt?: boolean } | null)?.metadataRebuilt === true,
+                }
+              : {}),
           });
         }
       });

@@ -187,7 +187,7 @@ describe('chrome performance trace summary', () => {
         dur: 51000,
         pid: 1,
         tid: 2,
-        args: { data: { functionName: 'tick', url: 'http://127.0.0.1:9999/@fs/Users/you/projects/ForgeaX-Games/forgeax-editor/packages/interface/src/lib/surface.ts', lineNumber: 134, columnNumber: 16 } },
+        args: { data: { functionName: 'tick', url: 'http://127.0.0.1:9999/@fs/Users/you/projects/ForgeaX-Games/forgeax-editor/packages/edit-runtime/src/viewport/viewport.ts', lineNumber: 134, columnNumber: 16 } },
       },
     ]);
 
@@ -200,7 +200,7 @@ describe('chrome performance trace summary', () => {
         p50Ms: 51,
         p95Ms: 51,
         overBudget: { '16.7ms': 1, '33.3ms': 1, '50ms': 1 },
-        sources: [{ url: 'packages/interface/src/lib/surface.ts', lineNumber: 134, columnNumber: 16 }],
+        sources: [{ url: 'packages/edit-runtime/src/viewport/viewport.ts', lineNumber: 134, columnNumber: 16 }],
       },
       {
         name: 'tick',
@@ -233,14 +233,14 @@ describe('chrome performance trace summary', () => {
         dur: 30000,
         pid: 1,
         tid: 2,
-        args: { data: { functionName: 'tick', url: 'http://localhost:15290/@fs/Users/you/projects/ForgeaX-Games/forgeax-editor/packages/interface/src/lib/surface.ts', lineNumber: 134, columnNumber: 16 } },
+        args: { data: { functionName: 'tick', url: 'http://localhost:15290/@fs/Users/you/projects/ForgeaX-Games/forgeax-editor/packages/edit-runtime/src/viewport/viewport.ts', lineNumber: 134, columnNumber: 16 } },
       },
       { name: 'Display::FrameDisplayed', ts: 100000, pid: 9, tid: 90 },
     ]);
 
     const functionCalls = summary.render.displayedFrame.slowestIntervals[0]?.hotspots.filter((event) => event.name === 'FunctionCall');
     expect(functionCalls?.map((event) => event.sources?.[0]?.url)).toEqual([
-      'packages/interface/src/lib/surface.ts',
+      'packages/edit-runtime/src/viewport/viewport.ts',
       'packages/engine/packages/app/dist/index.mjs',
     ]);
   });

@@ -4,15 +4,18 @@ import {
   entParent,
   entComponentsPresent,
   gateway,
+  getEditorPanelAuthoritySnapshot,
   listComponentSchemas,
   readEntityVisibility,
   resolveVisibility,
+  usesCarrierHierarchyProjection,
   Visibility,
   worldComponentNames,
   worldEntityHandles,
   type EditorWorldProjection,
   type EntityHandle,
   type RuntimeUiGraph,
+  type ViewportRuntimeHierarchySnapshot,
 } from '@forgeax/editor-core';
 import { ChildOf, Children, Name } from '@forgeax/engine-scene';
 import { componentId } from '@forgeax/engine-ecs/internal';
@@ -71,28 +74,58 @@ export interface HierarchyRuntimeProjection {
   readonly editorWorld?: EditorWorldProjection;
 }
 
+const HIERARCHY_MOBILITY = new Set<HierarchyEntitySummary['mobility']>(['', 'static', 'movable', 'stationary',
+]);
+
+function hierarchyMobilityFromCarrier(value: string): HierarchyEntitySummary['mobility'] {
+  return HIERARCHY_MOBILITY.has(value as HierarchyEntitySummary['mobility'])
+    ? (value as HierarchyEntitySummary['mobility'])
+    : '';
+}
+
+/** Normalize the shell wire snapshot into the panel runtime projection type. */
+export function hierarchyRuntimeProjectionFromCarrier(
+  snapshot: ViewportRuntimeHierarchySnapshot,
+): HierarchyRuntimeProjection {
+  return {
+    structure: {
+      structureEpoch: snapshot.structure.structureEpoch,
+      ...(snapshot.structure.projectionRevision === undefined
+        ? {}
+        : { projectionRevision: snapshot.structure.projectionRevision }),
+      rows: snapshot.structure.rows.map((row) => ({
+        id: row.id as EntityHandle,
+        name: row.name,
+        typeId: row.typeId,
+        ...(row.hidden === undefined ? {} : { hidden: row.hidden }),
+        ...(row.ancestorHidden === undefined ? {} : { ancestorHidden: row.ancestorHidden }),
+        mobility: hierarchyMobilityFromCarrier(row.mobility),
+        childIds: row.childIds as readonly EntityHandle[],
+      })),
+    },
+    selectionIds: snapshot.selectionIds as readonly EntityHandle[],
+    ...(snapshot.editorWorld === undefined
+      ? {}
+      : { editorWorld: snapshot.editorWorld as EditorWorldProjection }),
+  };
+}
+
 export interface HierarchyRuntimeAccess {
   readonly usesRemoteProjection: boolean;
+  /** When true, rows must not read gateway.activeWorld for structure/visibility. */
+  readonly hierarchyReadsFromCarrier: boolean;
   readonly readOnly: boolean;
 }
 
+/** Paired hierarchy access derived from {@link getEditorPanelAuthoritySnapshot}. */
 export function resolveHierarchyRuntimeAccess(input: {
-  /** Whether this panel is in the host that owns the live RuntimeUiGraph. */
-  readonly hasLocalRuntimeGraph: boolean;
-  readonly hasRemoteProjection: boolean;
   readonly gatewayMode: 'edit' | 'play';
 }): HierarchyRuntimeAccess {
-  // A shell can retain a bootstrap/dummy Gateway World even after the
-  // replaceable Runtime carrier is ready. World presence therefore cannot
-  // decide authority; the local RuntimeUiGraph is the host-owned signal.
-  const usesRemoteProjection = !input.hasLocalRuntimeGraph && input.hasRemoteProjection;
+  const hierarchyReadsFromCarrier = usesCarrierHierarchyProjection(getEditorPanelAuthoritySnapshot(),
+  );
   return {
-    usesRemoteProjection,
-    // Remote projection is a DATA-SOURCE switch, not a write gate: mutation
-    // ops route to the carrier through dispatchActiveEditorOperation (the
-    // projection-client seam), so a projection-only shell — which the
-    // standalone editor's panel host always is — stays editable. Only Play
-    // is read-only.
+    usesRemoteProjection: hierarchyReadsFromCarrier,
+    hierarchyReadsFromCarrier,
     readOnly: input.gatewayMode === 'play',
   };
 }
@@ -106,7 +139,8 @@ export interface HierarchyStructureSelector {
   stats(): { readonly projectionRebuilds: number };
   resolveSelection(id: EntityHandle):
     | { readonly ok: true; readonly id: EntityHandle }
-    | { readonly ok: false; readonly code: 'stale-entity-selection'; readonly retryable: true };
+    | { readonly ok: false; readonly code: 'stale-entity-selection'; readonly retryable: true;
+      };
 }
 
 type StructureReader = (world: unknown) => HierarchyStructureProjection;
@@ -125,12 +159,57 @@ type HierarchyProjectionCacheEntry = {
 // A WeakMap keeps the cache scoped to the live World realm.
 const HIERARCHY_PROJECTION_CACHE = new WeakMap<object, HierarchyProjectionCacheEntry>();
 
+let hierarchySceneReloadGeneration = 0;
+const hierarchySceneReloadListeners = new Set<() => void>();
+
+/** Drop cached hierarchy reads for a live World after a whole-document swap. */
+export function clearHierarchyStructureProjectionCache(world?: unknown): void {
+  if (world !== undefined && world !== null && typeof world === 'object') {
+    HIERARCHY_PROJECTION_CACHE.delete(world);
+  }
+}
+
+/** Scene reload counter — bumps synchronously on gateway.onSceneReload. */
+export function notifyHierarchySceneReload(world?: unknown): void {
+  clearHierarchyStructureProjectionCache(world);
+  hierarchySceneReloadGeneration += 1;
+  for (const listener of hierarchySceneReloadListeners) listener();
+}
+
+export function subscribeHierarchySceneReload(listener: () => void): () => void {
+  hierarchySceneReloadListeners.add(listener);
+  return () => hierarchySceneReloadListeners.delete(listener);
+}
+
+export function getHierarchySceneReloadGeneration(): number {
+  return hierarchySceneReloadGeneration;
+}
+
+export function readHierarchyWorldStructureEpoch(world: unknown): number | undefined {
+  if (world === undefined || world === null || typeof world !== 'object') return undefined;
+  const read = (world as { getStructureEpoch?: () => number }).getStructureEpoch;
+  return typeof read === 'function' ? read.call(world) : undefined;
+}
+
+/** True when a runtime projection can be trusted for the live edit world. */
+export function hierarchyProjectionMatchesWorld(
+  projection: HierarchyStructureProjection | undefined,
+  world: unknown,
+  worldEntityCount: number,
+): boolean {
+  if (projection === undefined) return false;
+  const epoch = readHierarchyWorldStructureEpoch(world);
+  if (epoch !== undefined && projection.structureEpoch !== epoch) return false;
+  return projection.rows.length === worldEntityCount;
+}
+
 const HIERARCHY_COMPONENTS = [Name, Visibility, ChildOf, Children] as const;
 
 function componentMutationEpochs(world: object): readonly number[] | undefined {
   const readEpoch = (world as { _getComponentMutationEpoch?: unknown })._getComponentMutationEpoch;
   if (typeof readEpoch !== 'function') return undefined;
-  return HIERARCHY_COMPONENTS.map((component) => Number(readEpoch.call(world, componentId(component))));
+  return HIERARCHY_COMPONENTS.map((component) => Number(readEpoch.call(world, componentId(component))),
+  );
 }
 
 function sameHierarchyRows(
@@ -161,7 +240,8 @@ function sameHierarchyRows(
  * The previous presence-only fallback labelled every RigidBody as movable,
  * which made a static physics ground misleading in the human hierarchy.
  */
-export function hierarchyMobility(components: Record<string, unknown>): HierarchyEntitySummary['mobility'] {
+export function hierarchyMobility(components: Record<string, unknown>,
+): HierarchyEntitySummary['mobility'] {
   const explicit = Object.values(components)
     .map((component) => {
       if (typeof component !== 'object' || component === null) return undefined;
@@ -234,7 +314,8 @@ function readWorldStructure(world: unknown): HierarchyStructureProjection {
   return projection;
 }
 
-export function createHierarchyStructureSelector(graph: RuntimeUiGraph, reader: StructureReader = readWorldStructure): HierarchyStructureSelector {
+export function createHierarchyStructureSelector(graph: RuntimeUiGraph, reader: StructureReader = readWorldStructure,
+): HierarchyStructureSelector {
   let projection: HierarchyStructureProjection | undefined;
   let projectionRebuilds = 0;
   let mounted = 0;
@@ -252,7 +333,9 @@ export function createHierarchyStructureSelector(graph: RuntimeUiGraph, reader: 
           id: { kind: 'primitive' }, name: { kind: 'primitive' }, typeId: { kind: 'primitive' }, hidden: { kind: 'primitive' },
           ancestorHidden: { kind: 'primitive' },
           mobility: { kind: 'primitive' }, childIds: { kind: 'array', item: { kind: 'primitive' } },
-        } } },
+        },
+          },
+        },
       },
     },
     read: (world) => {
@@ -310,7 +393,8 @@ export function createHierarchyStructureSelector(graph: RuntimeUiGraph, reader: 
 // `Entity` is the id=0 marker component the engine puts on EVERY entity, so it
 // must sit at the floor too — otherwise it beats a real component alphabetically
 // (e.g. Entity < Skylight) and every node reads "entity".
-const LOW_TIER_COMPONENTS: ReadonlySet<string> = new Set(['Entity', 'Transform', 'Visibility', 'ChildOf', 'Name']);
+const LOW_TIER_COMPONENTS: ReadonlySet<string> = new Set(['Entity', 'Transform', 'Visibility', 'ChildOf', 'Name',
+]);
 
 // The relationship component the engine mirrors onto a parent entity. Its
 // presence is the "this node is a group" signal; ranked above infra but below
@@ -327,7 +411,8 @@ export const HIERARCHY_ENTITY_TYPE_ID = 'entity';
 // Table order IS the representative-pick priority: a Light+RigidBody entity
 // shows "light" because light precedes the (generic) rigidbody. The structural
 // fallbacks (group/entity) are decided outside this table.
-const CATEGORY_RULES: readonly { readonly test: RegExp; readonly category: HierarchyTypeCategory }[] = [
+const CATEGORY_RULES: readonly { readonly test: RegExp; readonly category: HierarchyTypeCategory;
+}[] = [
   { test: /Camera/, category: 'camera' },
   { test: /Light/, category: 'light' },
   { test: /Character|Controller/, category: 'character' },
@@ -420,7 +505,9 @@ function nextSnapshot(next: HierarchySnapshot): void {
 
 export function subscribeHierarchyPanelState(listener: () => void): () => void {
   listeners.add(listener);
-  return () => { listeners.delete(listener); };
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 export function getHierarchyPanelSnapshot(): HierarchySnapshot {
@@ -597,7 +684,9 @@ export function getHierarchyEntityType(
   world: NonNullable<typeof gateway.activeWorld>,
   entity: EntityHandle,
 ): { id: string; label: string } {
-  const intent = componentNames.filter((name) => name !== CHILDREN_COMPONENT && !LOW_TIER_COMPONENTS.has(name));
+  const intent = componentNames.filter(
+    (name) => name !== CHILDREN_COMPONENT && !LOW_TIER_COMPONENTS.has(name),
+  );
   if (intent.length > 0) {
     const id = intent.reduce((best, name) => (compareComponentNames(name, best) < 0 ? name : best));
     return { id, label: id };
@@ -622,10 +711,11 @@ export function entityMatchesHierarchyView(
 ): boolean {
   const q = snapshot.searchQuery.trim().toLowerCase();
   const type = getHierarchyEntityType(componentNames, world, id);
-  const passesSearch = !q
-    || entName(world, id).toLowerCase().includes(q)
-    || type.label.toLowerCase().includes(q)
-    || componentNames.some((component) => component.toLowerCase().includes(q));
+  const passesSearch =
+    !q ||
+    entName(world, id).toLowerCase().includes(q) ||
+    type.label.toLowerCase().includes(q) ||
+    componentNames.some((component) => component.toLowerCase().includes(q));
   if (!passesSearch) return false;
   // Filters are component names (multi-membership): an entity matches if it
   // carries ANY selected component. Structural group/folder rows are never
@@ -641,7 +731,9 @@ export function getHierarchyVisibleMatches(): EntityHandle[] {
   // One structural name index for the whole world (zero Error), reused for every
   // candidate instead of an entComponents probe per entity.
   const index = worldComponentNames(world);
-  return worldEntityHandles(world).filter((id) => entityMatchesHierarchyView(world, id, index.get(id) ?? []));
+  return worldEntityHandles(world).filter((id) =>
+    entityMatchesHierarchyView(world, id, index.get(id) ?? []),
+  );
 }
 
 export function hasHierarchyViewFilter(): boolean {
@@ -652,4 +744,15 @@ export function getHierarchyParentEntities(): EntityHandle[] {
   const world = gateway.activeWorld;
   if (!world) return [];
   return worldEntityHandles(world).filter((id) => childrenOf(world, id).length > 0);
+}
+
+// EVAL-TIME side effect (same discipline as store/doc-version.ts): scene reload
+// must bump hierarchySceneReloadGeneration synchronously inside replaceDoc's
+// onSceneReload chain — not from a React useEffect — or the first post-switch
+// render keeps stale roots / an empty virtualizer range.
+if (typeof gateway.onSceneReload === 'function') {
+  gateway.onSceneReload(() => {
+    notifyHierarchySceneReload(gateway.activeWorld);
+    expandHierarchySceneFolder();
+  });
 }

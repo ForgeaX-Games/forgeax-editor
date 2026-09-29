@@ -195,7 +195,7 @@ export function finalOutputManifest(outDir, allowedNondeterministicFields) {
   };
 }
 
-function runBuild({ gameDir, outputDir, cacheRoot, projectDdcRoot, root, env }) {
+function runBuild({ gameDir, outputDir, cacheRoot, disposableProjectRoot, root, env }) {
   const command = process.execPath;
   const args = [join(root, 'scripts/fx.ts'), 'build', '--game', gameDir, '--out', outputDir];
   const result = spawnSync(command, args, {
@@ -207,7 +207,7 @@ function runBuild({ gameDir, outputDir, cacheRoot, projectDdcRoot, root, env }) 
       // Packaging parity is a disposable build-only consumer. Keep its
       // publication state beside the temporary output, never in the live
       // game's canonical .forgeax/ddc/v2 root that the following smoke uses.
-      FORGEAX_DDC_PROJECT_ROOT: projectDdcRoot,
+      FORGEAX_DDC_PROJECT_ROOT: disposableProjectRoot,
     },
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
@@ -328,7 +328,7 @@ export async function runPackagingParity({ gameDir, root = resolve(dirname(fileU
   for (const mode of DEFAULT_PACKAGING_MODES) {
     const modeRoot = join(workRoot, mode);
     const outputDir = join(modeRoot, 'dist');
-    const projectDdcRoot = join(modeRoot, 'project-ddc');
+    const disposableProjectRoot = join(modeRoot, 'project-ddc');
     const cacheRoot = mode === 'cache-unwritable'
       ? prepareUnwritableRoot(modeCacheRoot(workRoot, mode))
       : modeCacheRoot(workRoot, mode);
@@ -339,7 +339,7 @@ export async function runPackagingParity({ gameDir, root = resolve(dirname(fileU
         gameDir: absoluteGameDir,
         outputDir: warmupOutput,
         cacheRoot,
-        projectDdcRoot,
+        disposableProjectRoot,
         root,
         env: {},
       });
@@ -353,7 +353,7 @@ export async function runPackagingParity({ gameDir, root = resolve(dirname(fileU
       gameDir: absoluteGameDir,
       outputDir,
       cacheRoot,
-      projectDdcRoot,
+      disposableProjectRoot,
       root,
       env: {},
     });
@@ -364,7 +364,7 @@ export async function runPackagingParity({ gameDir, root = resolve(dirname(fileU
         gameDir: absoluteGameDir,
         outputDir,
         cacheRoot: fallbackRoot,
-        projectDdcRoot,
+        disposableProjectRoot,
         root,
         env: {},
       });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
-import { ChildOf, Transform } from '@forgeax/engine-scene';
+import { ChildOf, Transform, propagateTransforms } from '@forgeax/engine-scene';
 import { MeshFilter, MeshRenderer, Materials, Visibility, VisibilityStateValue } from '@forgeax/engine-render';
 import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { EngineFacade } from '@forgeax/editor-core';
@@ -73,6 +73,7 @@ function sceneWithMesh(submeshCount = 1): { world: World; entity: EntityHandle }
 describe('createSelectionStencilOutlinePool', () => {
   it('creates and removes writer/shell ghosts without mutating the scene world', () => {
     const { world, entity } = sceneWithMesh();
+    propagateTransforms(world).unwrap();
     const fake = fakeEditorFacade();
     let selected = new Set<EntityHandle>([entity]);
     const pool = createSelectionStencilOutlinePool({
@@ -105,6 +106,7 @@ describe('createSelectionStencilOutlinePool', () => {
 
   it('clears drag-time ghosts without discarding reusable materials', () => {
     const { world, entity } = sceneWithMesh();
+    propagateTransforms(world).unwrap();
     const fake = fakeEditorFacade();
     const pool = createSelectionStencilOutlinePool({
       sceneWorld: () => world,
@@ -131,6 +133,7 @@ describe('createSelectionStencilOutlinePool', () => {
 
   it('copies the material slot for every submesh', () => {
     const { world, entity } = sceneWithMesh(2);
+    propagateTransforms(world).unwrap();
     const fake = fakeEditorFacade();
     const pool = createSelectionStencilOutlinePool({
       sceneWorld: () => world,
@@ -164,6 +167,7 @@ describe('createSelectionStencilOutlinePool', () => {
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [material] } },
     ).unwrap();
+    propagateTransforms(world).unwrap();
     const fake = fakeEditorFacade();
     const pool = createSelectionStencilOutlinePool({
       sceneWorld: () => world,
@@ -188,6 +192,7 @@ describe('createSelectionStencilOutlinePool', () => {
       { component: MeshRenderer, data: { materials: [material] } },
       { component: Visibility, data: { state: VisibilityStateValue.hidden } },
     ).unwrap();
+    propagateTransforms(world).unwrap();
     const fake = fakeEditorFacade();
     const pool = createSelectionStencilOutlinePool({
       sceneWorld: () => world,
@@ -200,6 +205,30 @@ describe('createSelectionStencilOutlinePool', () => {
 
     pool.update();
     expect(fake.spawned.size).toBe(0);
+    pool.dispose();
+  });
+
+  it('drops ghosts after hide and respawns on show (stale outline / tint regression)', () => {
+    const { world, entity } = sceneWithMesh();
+    const fake = fakeEditorFacade();
+    const pool = createSelectionStencilOutlinePool({
+      sceneWorld: () => world,
+      editorEngine: fake.facade,
+      getSelectionList: () => new Set<EntityHandle>([entity]),
+      getRenderableHandles: () => [entity],
+      isAuxVisible: () => true,
+      isEditMode: () => true,
+    });
+
+    pool.update();
+    expect(fake.spawned.size).toBe(2);
+    world.addComponent(entity, { component: Visibility, data: { state: VisibilityStateValue.hidden } });
+    pool.update();
+    expect(fake.spawned.size).toBe(0);
+    expect(fake.despawned.size).toBe(2);
+    world.set(entity, Visibility, { state: VisibilityStateValue.visible });
+    pool.update();
+    expect(fake.spawned.size).toBe(2);
     pool.dispose();
   });
 
@@ -216,6 +245,7 @@ describe('createSelectionStencilOutlinePool', () => {
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [material] } },
     ).unwrap();
+    propagateTransforms(world).unwrap();
     const fake = fakeEditorFacade();
     const pool = createSelectionStencilOutlinePool({
       sceneWorld: () => world,
@@ -237,8 +267,9 @@ describe('createSelectionStencilOutlinePool', () => {
     // kernel does not run in a bare World, so the test authors the resolved
     // world column directly.
     world.set(entity, Transform, {
-      world: [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 2, 3, 1],
+      pos: [1, 2, 3], quat: [0, Math.SQRT1_2, 0, Math.SQRT1_2],
     });
+    propagateTransforms(world).unwrap();
     const fake = fakeEditorFacade();
     const pool = createSelectionStencilOutlinePool({
       sceneWorld: () => world,

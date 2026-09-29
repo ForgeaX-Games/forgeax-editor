@@ -96,6 +96,21 @@ describe('material-staging', () => {
     expect(getMaterialStaging(GUID)?.staging.values.metallic).toBe(0.5);
   });
 
+  it('seeds saved/staging from catalogFlatValues when pack values are sparse', () => {
+    openMaterialStaging({
+      guid: GUID,
+      packPath: 'assets/m.pack.json',
+      name: 'Mat_A',
+      payload: { values: {} },
+      catalogFlatValues: { baseColor: [0.8, 0.8, 0.8, 1], metallic: 0.1 },
+    });
+    expect(getMaterialStaging(GUID)?.saved.values.baseColor).toEqual([0.8, 0.8, 0.8, 1]);
+    patchMaterialStagingParam(GUID, { baseColor: [1, 0, 0, 1] });
+    resetMaterialStagingParam(GUID, 'baseColor', [1, 1, 1, 1]);
+    expect(getMaterialStaging(GUID)?.staging.values.baseColor).toEqual([0.8, 0.8, 0.8, 1]);
+    expect(isMaterialStagingDirty(GUID)).toBe(false);
+  });
+
   it('hydrates a clean existing entry when a richer payload arrives later', () => {
     openMaterialStaging({
       guid: GUID,

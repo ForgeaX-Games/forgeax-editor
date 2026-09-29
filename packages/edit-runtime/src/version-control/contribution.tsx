@@ -4,12 +4,12 @@ import {
   queryViewportRuntimeProjection,
   type VersionControlSnapshot,
 } from '@forgeax/editor-core';
-import type { StatusItemContribution } from '@forgeax/interface/core/panels';
-import type { AppExtension } from '@forgeax/interface/core/app-shell/types';
+import type { StatusItemContribution } from '@forgeax/app-shell/application';
+import type { AppExtension } from '@forgeax/app-shell/application';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { StripPopover } from '@forgeax/interface/components/StatusBar/StripPopover';
 import { createVersionControlMenuModel } from './menu-model';
 import { VersionControlDialogs, type VersionControlOperationDescriptor } from './dialogs';
+import { VersionControlPopover } from './version-control-popover';
 import './contribution.css';
 
 const unavailable = (generation: number): VersionControlSnapshot => ({
@@ -106,12 +106,7 @@ function VersionControlChip() {
 
   const model = useMemo(() => createVersionControlMenuModel(snapshot), [snapshot]);
   return (
-    <StripPopover
-      icon="GitBranch"
-      label="Version control"
-      tooltip="Version control"
-      title={<><span aria-hidden="true">◆</span> Version control</>}
-    >
+    <VersionControlPopover>
       <VersionControlDialogs
         snapshot={snapshot}
         operations={operations}
@@ -136,7 +131,7 @@ function VersionControlChip() {
         }}
       />
       <span className="fx-version-control-sr-only">{model.reason}</span>
-    </StripPopover>
+    </VersionControlPopover>
   );
 }
 

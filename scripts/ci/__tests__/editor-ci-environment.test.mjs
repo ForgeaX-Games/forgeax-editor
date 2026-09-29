@@ -20,8 +20,8 @@ test('environment fingerprint includes the runner and toolchain contract', () =>
     osRelease: 'Ubuntu 22.04.5 LTS',
     platform: 'linux 6.1',
     arch: 'x64',
-    bun: '1.3.14',
-    bunRevision: '1.3.14+revision-a',
+    bun: '1.4.0',
+    bunRevision: '1.4.0+revision-a',
     bunSource: 'trusted-runner-preinstalled',
     bunSha256: 'a'.repeat(64),
     node: '22.13.0',
@@ -38,7 +38,7 @@ test('environment fingerprint includes the runner and toolchain contract', () =>
   const same = { ...base };
   const differentRunner = { ...base, runner: 'runner-b' };
   const differentBun = { ...base, bun: '1.3.15' };
-  const differentBunRevision = { ...base, bunRevision: '1.3.14+revision-b' };
+  const differentBunRevision = { ...base, bunRevision: '1.4.0+revision-b' };
   const differentBunSource = { ...base, bunSource: 'setup-bun-download' };
   const differentBunSha256 = { ...base, bunSha256: 'b'.repeat(64) };
   const differentRust = { ...base, configuredRust: '1.94' };
@@ -58,7 +58,7 @@ test('environment fingerprint includes the runner and toolchain contract', () =>
 
 test('Bun version mismatch is a structured environment failure', () => {
   assert.throws(
-    () => assertBunVersion('1.3.15', '1.3.14'),
+    () => assertBunVersion('1.3.15', '1.4.0'),
     (error) => error.code === 'ci-environment-bun-mismatch',
   );
 });
@@ -73,9 +73,9 @@ test('strict runner contract rejects a non-Linux or non-X64 CI host', () => {
 test('environment check accepts the pinned Bun contract', () => {
   const result = runEnvironmentCheck({
     env: {
-      CI_BUN_VERSION: '1.3.14',
-      BUN_VERSION: '1.3.14',
-      CI_BUN_REVISION: '1.3.14+revision-a',
+      CI_BUN_VERSION: '1.4.0',
+      BUN_VERSION: '1.4.0',
+      CI_BUN_REVISION: '1.4.0+revision-a',
       CI_BUN_SOURCE_TYPE: 'trusted-runner-preinstalled',
       CI_BUN_BINARY_SHA256: 'a'.repeat(64),
       CI_RUNNER_POOL: 'standard',
@@ -89,8 +89,8 @@ test('environment check accepts the pinned Bun contract', () => {
       GITHUB_EVENT_NAME: 'push',
     },
   });
-  assert.equal(result.record.bun, '1.3.14');
-  assert.equal(result.record.bunRevision, '1.3.14+revision-a');
+  assert.equal(result.record.bun, '1.4.0');
+  assert.equal(result.record.bunRevision, '1.4.0+revision-a');
   assert.equal(result.record.bunSource, 'trusted-runner-preinstalled');
   assert.equal(result.record.bunSha256, 'a'.repeat(64));
   assert.equal(result.record.pool, 'standard');
@@ -101,7 +101,7 @@ test('environment check accepts the pinned Bun contract', () => {
 
 test('CI workflow routes build pools through the pinned environment action', () => {
   const workflow = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8');
-  assert.match(workflow, /CI_BUN_VERSION:\s+1\.3\.14/);
+  assert.match(workflow, /CI_BUN_VERSION:\s+1\.4\.0/);
   assert.match(workflow, /CI_NODE_VERSION:\s+22\.13\.0/);
   assert.match(workflow, /CI_PNPM_VERSION:\s+11\.7\.0/);
   assert.match(workflow, /CI_RUST_TOOLCHAIN:\s+'1\.93'/);

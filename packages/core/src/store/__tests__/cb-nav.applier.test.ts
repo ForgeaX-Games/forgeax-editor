@@ -63,6 +63,13 @@ describe('AC-1.1: setCBPath normal navigate', () => {
     expect(gw.ledger.length).toBe(ledgerBefore + 1);
     expect((gw.ledger[gw.ledger.length - 1] as { kind: string; path: string }).path).toBe('a');
   });
+
+  it('stores a canonical path (no trailing slash or backslashes)', () => {
+    gw.dispatch({ kind: 'setCBPath', path: 'assets/models/' });
+    expect(getCBPath()).toBe('assets/models');
+    gw.dispatch({ kind: 'setCBPath', path: 'assets\\textures\\hero' });
+    expect(getCBPath()).toBe('assets/textures/hero');
+  });
 });
 
 // ── AC-1.2: dedup — duplicate dispatches ──────────────────────────────────

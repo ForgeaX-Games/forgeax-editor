@@ -47,12 +47,13 @@ describe('STD-01 preview runtime ownership', () => {
 
   it('keeps editor createApp call sites on the known owner boundary', () => {
     // MaterialPreviewViewport is the pre-existing MI/base-material preview
-    // debt, VfxPreviewViewport owns the VFX page preview, and play-assemble is
-    // the separate Play runtime path; none is a Mesh preview owner. Any new
-    // preview createApp call must land in a deliberate owner and update this
-    // guard.
+    // debt, VfxPreviewViewport owns the VFX page preview, TexturePreviewWorldService
+    // owns the texture page preview, and play-assemble is the separate Play runtime
+    // path. Any new preview createApp call must land in a deliberate owner and
+    // update this guard.
     const expected = new Set([
       'preview-world/preview-world-service.ts',
+      'preview-world/texture-preview-world-service.ts',
       'viewport/MaterialPreviewViewport.tsx',
       'viewport/VfxPreviewViewport.tsx',
       'viewport/ViewportComponent.tsx',

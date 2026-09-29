@@ -8,7 +8,7 @@ import type {
   PageController,
   PageControllerContext,
   PageClosePreparation,
-} from '@forgeax/interface/core/page-platform';
+} from '@forgeax/app-shell/application';
 import {
   closeMiStaging,
   commitMiStaging,

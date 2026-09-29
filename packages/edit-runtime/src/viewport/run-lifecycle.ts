@@ -157,7 +157,8 @@ export interface RunGateway {
 }
 
 export interface RemotePlayCarrier {
-  start(requestId?: string): Promise<{ ok: true } | { ok: false; error: { code: string; hint: string } }>;
+  start(requestId?: string,
+  ): Promise<{ ok: true } | { ok: false; error: { code: string; hint: string } }>;
   stop(): Promise<{ ok: true } | { ok: false; error: { code: string; hint: string } }>;
   pause(): void;
   resume(): void;
@@ -171,7 +172,9 @@ export interface RunLifecycleRunProjection {
   accepted(operationId: string): string;
   running(runId: string): void;
   succeeded(runId: string, result?: unknown): void;
-  failed(runId: string, error: { code: string; hint: string; retryable?: boolean; recoveryActions?: readonly string[] }): void;
+  failed(runId: string, error: { code: string; hint: string; retryable?: boolean; recoveryActions?: readonly string[];
+    },
+  ): void;
   cancelled(runId: string): void;
 }
 
@@ -284,7 +287,9 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       } catch (err) {
         console.warn(`[editor] ${label} detachBeforeStop() threw:`, err);
       }
-      try { assembly.clearGameProjection?.(); } catch (err) {
+      try {
+        assembly.clearGameProjection?.();
+      } catch (err) {
         console.warn(`[editor] ${label} clearGameProjection() threw:`, err);
       }
       try {
@@ -348,7 +353,10 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       deps.gateway.enterRemotePlay?.();
       deps.onRemotePlayStarted?.();
       if (playRunId !== null) {
-        deps.runProjection?.succeeded(playRunId, { phase: 'play', carrier: 'iframe' });
+        deps.runProjection?.succeeded(playRunId, {
+          phase: 'play',
+          carrier: 'iframe',
+        });
         playRunId = null;
       }
       return;
@@ -414,7 +422,12 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       deps.publisher?.unbind(failedAssembly.playWorld);
       if (deps.editWorld !== undefined) deps.publisher?.bind(deps.editWorld);
       resumeEditorIfLive();
-      reportPlayFailure(startR.error ?? { code: 'play-renderer-failed', hint: 'The Play renderer could not start.' });
+      reportPlayFailure(
+        startR.error ?? {
+          code: 'play-renderer-failed',
+          hint: 'The Play renderer could not start.',
+        },
+      );
       return;
     }
 
@@ -422,11 +435,13 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     // drain to the play world's Update schedule for the duration of this assembly.
     // Runtime UI refresh is owned by the FrameEnd publisher below.
     if (deps.onPlayFrame) {
-      (active.playWorld as World).addSystem(Update, {
-        name: 'editor-play-bridge-eval-drain',
-        queries: [],
-        fn: deps.onPlayFrame,
-      }).unwrap();
+      (active.playWorld as World)
+        .addSystem(Update, {
+          name: 'editor-play-bridge-eval-drain',
+          queries: [],
+          fn: deps.onPlayFrame,
+        })
+        .unwrap();
     }
 
     // D-3: switch the single active-world pointer to the play world (clears
@@ -463,7 +478,11 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       generation++;
       starting = false;
       rendererOwnerAdmission?.restoreOnce('stop');
-      try { deps.gateway.exitPlay(); } catch { /* best effort while canceling start */ }
+      try {
+        deps.gateway.exitPlay();
+      } catch {
+        /* best effort while canceling start */
+      }
       if (playRunId !== null) {
         deps.runProjection?.cancelled(playRunId);
         playRunId = null;
@@ -511,15 +530,27 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
       stopAssembly(assembly, 'run-lifecycle dispose');
       deps.publisher?.unbind(assembly.playWorld);
       if (deps.editWorld !== undefined) deps.publisher?.bind(deps.editWorld);
-      try { deps.gateway.exitPlay(); } catch { /* best effort during realm teardown */ }
+      try {
+        deps.gateway.exitPlay();
+      } catch {
+        /* best effort during realm teardown */
+      }
     } else if (wasStarting) {
-      try { deps.gateway.exitPlay(); } catch { /* best effort during realm teardown */ }
+      try {
+        deps.gateway.exitPlay();
+      } catch {
+        /* best effort during realm teardown */
+      }
       if (playRunId !== null) deps.runProjection?.cancelled(playRunId);
     }
     if (remoteActive && deps.remoteCarrier !== undefined) {
       remoteActive = false;
       void deps.remoteCarrier.stop();
-      try { deps.gateway.exitPlay(); } catch { /* best effort during realm teardown */ }
+      try {
+        deps.gateway.exitPlay();
+      } catch {
+        /* best effort during realm teardown */
+      }
     }
     rendererOwnerAdmission?.clearForDispose();
     playRunId = null;
@@ -534,15 +565,23 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
   function getPlayPauseHandle(): { pause(): void; resume(): void } | null {
     if (deps.remoteCarrier !== undefined && deps.remoteCarrier.state() !== 'edit') {
       return {
-        pause() { deps.remoteCarrier!.pause(); },
-        resume() { deps.remoteCarrier!.resume(); },
+        pause() {
+          deps.remoteCarrier!.pause();
+        },
+        resume() {
+          deps.remoteCarrier!.resume();
+        },
       };
     }
     if (!active) return null;
     const pa = active.playApp;
     return {
-      pause() { pa.pause(); },
-      resume() { pa.resume(); },
+      pause() {
+        pa.pause();
+      },
+      resume() {
+        pa.resume();
+      },
     };
   }
 
@@ -550,5 +589,12 @@ export function createRunLifecycle(deps: RunLifecycleDeps): RunLifecycle {
     return playRunId;
   }
 
-  return { playSimulation, stopSimulation, dispose, currentPlayWorld, getPlayPauseHandle, currentPlayRunId };
+  return {
+    playSimulation,
+    stopSimulation,
+    dispose,
+    currentPlayWorld,
+    getPlayPauseHandle,
+    currentPlayRunId,
+  };
 }

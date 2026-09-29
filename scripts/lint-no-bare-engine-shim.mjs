@@ -21,8 +21,7 @@
 //        stray packages/{core,panels,edit-runtime,
 //        play-runtime}/src/forgeax-engine.d.ts (defense-in-depth: catches a
 //        re-added per-package bare shim even though the shared file is canonical).
-// SKIPS  packages/interface (git submodule — studio's shared shell, its own
-//        repo's concern), and any other submodule this repo doesn't own.
+// SKIPS  published dependencies and submodules this repo doesn't own.
 // FLAGS  a `declare module '@forgeax/engine-…'` NOT immediately followed by `{`
 //        (i.e. bodyless — terminated by `;`), which erases the module to `any`.
 //
@@ -38,7 +37,7 @@ const EDITOR_ROOT = resolve(__dirname, '..');
 const PACKAGES_DIR = resolve(EDITOR_ROOT, 'packages');
 
 // Editor-proper packages only — mirrors lint-no-direct-api-fetch.mjs's scope.
-// packages/interface & platform-io are git submodules (other repos' concern).
+// Published Interface and the platform-io submodule belong to their own repos.
 const SCAN_PACKAGES = [
   'core',
   'content-browser',

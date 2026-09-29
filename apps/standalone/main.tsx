@@ -10,18 +10,19 @@
 import '@forgeax/interface/styles/global.css';
 import { StrictMode, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { App } from '@forgeax/interface/App';
-import { applyTheme } from '@forgeax/design/theme';
-import { changeLanguage, initI18n, type Locale } from '@forgeax/interface/i18n';
+import { ApplicationDetachedShell, ApplicationShell } from '@forgeax/interface/ApplicationShell';
+import { useTranslation } from '@forgeax/editor-core/i18n';
 // ADR 0025 M1: the shell is assembled through AppExtension manifests passed to
-// <App overrides={{ extensions }}/> — the panelRenderers escape-hatch prop was
+// the public application runtime — the panelRenderers escape-hatch prop was
 // removed in interface#112. panels-editor is interface's built-in factory for
 // the ep:* dock panels + surfaces; the custom extension below carries the
 // remaining fields (built-in Page layout seed + editor bridge hooks).
-import type { AppExtension } from '@forgeax/interface/core/app-shell/types';
+import {
+  dispatchAction,
+  registerAction,
+  type AppExtension,
+} from '@forgeax/app-shell/application';
 import { DEFAULT_EDITOR_DOCK_LAYOUT } from '@forgeax/editor/default-dock-layout';
-import { configureStudioDomainClients, useShellStore } from '@forgeax/interface/store';
-import { STORAGE_KEYS } from '@forgeax/interface/lib/storageKeys';
 import { AppKitError } from '@forgeax/editor/app-kit';
 import { EditorOverlayProvider } from '@forgeax/editor-ui/overlays';
 // The viewport carrier is isolated; preview-only surfaces and business panels
@@ -59,46 +60,43 @@ import {
 } from '@forgeax/editor-content-browser/delete-guard-entry';
 import { DeleteGuardDialog } from './DeleteGuardDialog';
 
-// keyboard-router convergence M4: the interface submodule's global-shortcuts
-// router is editor-agnostic (lint:agnostic forbids importing @forgeax/editor),
-// so we inject the editor-side callbacks it needs here — once, before React
-// mounts (useGlobalShortcuts reads them at effect time). This keeps a SINGLE
-// global keydown listener while routing the remaining Ctrl+D/G/viewport actions
-// through the one gateway door.
-import { registerKeyboardRouterDeps, type KeyboardRouterDeps } from '@forgeax/interface/lib/global-shortcuts';
-import { decodeSurfaceFromLocation } from '@forgeax/interface/lib/platform';
-import { DetachedSurface } from '@forgeax/interface/components/DetachedSurface';
-import { PanelRenderersProvider } from '@forgeax/interface/components/DockShell/panelRenderers';
-import { bootstrapAppHost } from '@forgeax/interface/appHostBootstrap';
-import { HostProvider } from '@forgeax/interface/core/app-shell';
-import { BrandProvider } from '@forgeax/interface/brand';
-import { ErrorBoundary } from '@forgeax/interface/components/ErrorBoundary';
-import { dispatchAction, registerAction } from '@forgeax/interface/lib/action-registry';
+// The application host owns the single keyboard observer. Editor contributes
+// its commands and raw viewport shortcuts through the extension lifecycle.
+import { decodeSurfaceFromLocation } from '@forgeax/app-shell/window';
+import {
+  configureStudioDomainClients,
+  createInterfaceApplicationOwner,
+  installApplicationOverlayRedirect,
+  startInterfaceApplication,
+} from '@forgeax/interface/application';
+import { StandaloneRuntimeRoot as OwnedStandaloneRuntimeRoot } from './StandaloneRuntimeRoot';
+import { createEditorMenuExtension } from '@forgeax/editor/menu-contributions';
 // keyboard-router deps builder is now shared (edit-runtime SSOT) so studio + this
 // standalone host produce the SAME dep object — no divergence (the old inline copy
 // here was silently missing from studio, killing its G/Esc keyboard path).
 import {
   buildKeyboardRouterDeps,
   createEditorKeyboardExtension,
+  type KeyboardRouterDepsShape,
 } from '@forgeax/editor-edit-runtime/keyboard-router-deps';
+import {
+  errorMessage,
+  forwardFeedbackHealth,
+  normalizeSaveFailureCode,
+} from '@forgeax/editor-edit-runtime';
 import { projectViewportRuntimeOps } from '@forgeax/editor-edit-runtime/gateway-action-projection';
 import { setPathResolver, trySaveActivePage } from '@forgeax/editor-core';
 import { isDockPanelVisible } from '@forgeax/app-shell/dock';
 import { installSettingsPanelRedirect, SETTINGS_PANEL_ID } from './settings-redirect';
 import { createStandaloneGameClient } from './game-service-client';
 
-// Keep the standalone shell's first paint and runtime theme/i18n bootstrap
-// aligned with the Studio entry. Standalone intentionally omits Studio-only
-// product surfaces, but it must not omit the shared visual foundation.
-applyTheme('dark');
-initI18n();
-const requestedLocale = new URLSearchParams(window.location.search).get('lang');
-if (requestedLocale === 'en' || requestedLocale === 'zh') {
-  changeLanguage(requestedLocale as Locale);
-}
+// index.html declares the initial dark theme before this module loads.
+// Application startup below owns locale initialization before extension setup.
+const localeParam = new URLSearchParams(window.location.search).get('lang');
+const requestedLocale = localeParam === 'en' || localeParam === 'zh' ? localeParam : undefined;
 
-// Contextual F2/Delete/Mod+A have moved to focused widget scopes. This bridge
-// remains only for shortcuts that have not yet migrated.
+// Contextual F2/Delete/Mod+A belong to focused widget scopes. The remaining
+// Editor shortcuts share their existing Gateway callbacks with menu commands.
 // TEMPORARY: FORGEAX_STANDALONE_FORCE_IFRAME forces iframe carrier for smoke
 // tests where GPU device-lost on page reload is not yet gracefully handled.
 // Remove once single-realm mode handles disposal on navigation; all hosts
@@ -107,8 +105,8 @@ declare const __FORGEAX_STANDALONE_FORCE_IFRAME__: boolean;
 const isIframeMode = new URLSearchParams(window.location.search).has('iframe')
   || __FORGEAX_STANDALONE_FORCE_IFRAME__;
 
-function makeKeyboardRouterDeps(): KeyboardRouterDeps {
-  const deps = buildKeyboardRouterDeps() as KeyboardRouterDeps;
+function makeKeyboardRouterDeps(): KeyboardRouterDepsShape {
+  const deps = buildKeyboardRouterDeps();
   if (!isIframeMode) {
     // In-process mode: gateway is live in this page — use it directly.
     return deps;
@@ -118,13 +116,37 @@ function makeKeyboardRouterDeps(): KeyboardRouterDeps {
     // iframe mode: the shell's editor-core singleton has no live doc; route
     // save through the action registry which is projected from the iframe Runtime.
     // Active resource pages save through their page controller first.
-    save: () => {
+    save: (): Promise<boolean> | undefined => {
       if (trySaveActivePage()) return;
-      void dispatchAction(
+      const request = dispatchAction(
         'saveDocToDisk',
         { requestId: `save-human-${crypto.randomUUID()}` },
         { source: 'human' },
       );
+      return Promise.resolve(request).then((result: unknown) => {
+        if (
+          result !== null
+          && typeof result === 'object'
+          && 'status' in result
+          && (result as { status?: unknown }).status === 'rejected'
+        ) {
+          forwardFeedbackHealth({
+            source: 'edit',
+            code: normalizeSaveFailureCode(result),
+            message: errorMessage(result, 'The scene could not be saved.'),
+          });
+          return false;
+        }
+        return true;
+      }).catch((error: unknown) => {
+        console.error('[editor] iframe save dispatch failed:', error);
+        forwardFeedbackHealth({
+          source: 'edit',
+          code: normalizeSaveFailureCode(error),
+          message: errorMessage(error, 'The scene could not be saved.'),
+        });
+        return false;
+      });
     },
   };
 }
@@ -140,7 +162,7 @@ declare const __FORGEAX_RUNTIME_BINDING__: import('@forgeax/engine-types').Runti
 // engine/game-root wiring consumes the newly-created files on the next boot.
 configureStudioDomainClients(createStandaloneGameClient(() => {
   window.setTimeout(() => window.location.reload(), 0);
-}));
+}) satisfies Parameters<typeof configureStudioDomainClients>[0]);
 
 // ── shell panel injection + isolated Runtime carrier (PanelRenderers v9) ──────
 // v9 (2026-07-08) reclassified PanelRenderers into structural category slots:
@@ -305,7 +327,7 @@ const standaloneEditorIntegrationExtension: AppExtension = {
     // the TopBar gear TOGGLES the ep:settings panel (open ↔ close) instead of
     // only ever re-opening it (the overlay store alone can't track a dock panel).
     const disposeRedirect = installSettingsPanelRedirect(
-      useShellStore,
+      installApplicationOverlayRedirect,
       ctx.bus,
       () => isDockPanelVisible(SETTINGS_PANEL_ID),
     );
@@ -319,11 +341,12 @@ const standaloneEditorIntegrationExtension: AppExtension = {
 /** Standalone shell assembly (ADR 0025 M1). No extension contributes a
  *  panels.chat descriptor, so the chat dock panel simply never exists here —
  *  the AC-09 "no chat/Forge in standalone" guarantee is now structural
- *  (formerly the hideChatAndForge prop). Module-scope const so <App>'s
- *  overrides prop stays referentially stable. */
+ *  (formerly the hideChatAndForge prop). Module-scope const so the product
+ *  runtime start function remains referentially stable. */
 const STANDALONE_OVERRIDES = {
   extensions: [
     createEditorKeyboardExtension(makeKeyboardRouterDeps()),
+    createEditorMenuExtension(),
     createEditorPanelsExtension({ SceneEditor: StandaloneSceneEditor }),
     createEditorPanelContributionsExtension(),
     createEditorPageExtension(renderEditorPanel),
@@ -331,6 +354,10 @@ const STANDALONE_OVERRIDES = {
     versionControlStatusBarExtension,
   ] as readonly AppExtension[],
 } as const;
+
+function startStandaloneApplication() {
+  return startInterfaceApplication(STANDALONE_OVERRIDES, { locale: requestedLocale });
+}
 
 function boot(): void {
   const rootEl = document.getElementById('root');
@@ -351,52 +378,27 @@ function boot(): void {
     return relativePath ? `${slug}/${relativePath}` : slug;
   });
 
-  // Pin the active game BEFORE React mounts so UI surfaces (GameSwitcher label,
-  // session scope) read the right slug. setPinnedSlug persists to localStorage.
-  // Clearing when no --game guarantees a stale pin from a prior run can't mislabel
-  // the shell. The engine boot itself gets the game via ViewportComponent props
-  // (StandaloneSceneEditor), not this pin.
-  try {
-    useShellStore.getState().setPinnedSlug(__FORGEAX_GAME_SLUG__ ?? null);
-  } catch {
-    /* store/localStorage unavailable — fine; empty-scene path still works */
-  }
-
-  // Studio's first-run onboarding (welcome→project wizard: language pick +
-  // connect-a-model) is a STUDIO product flow — the standalone editor has no
-  // Forge/chat/model to connect, and during the welcome/project phases App
-  // renders ONLY the onboarding wizard (the whole dock shell stays unmounted).
-  // Seed the persisted state machine to 'done' BEFORE mount so the standalone
-  // host always boots straight into the shell. Unconditional write = idempotent.
-  try {
-    localStorage.setItem(
-      STORAGE_KEYS.onboarding,
-      JSON.stringify({ v: 2, phase: 'done', done: { tour: true, firstChat: true } }),
-    );
-  } catch {
-    /* localStorage unavailable — worst case the wizard shows; not fatal */
-  }
-
-  // Inject the editor-side keyboard-router callbacks (interface submodule stays
-  // editor-agnostic). Must run before the App mounts so useGlobalShortcuts picks
-  // them up at effect time.
-  registerKeyboardRouterDeps(makeKeyboardRouterDeps());
-  // Render the interface App directly — no hand-rolled StandaloneShell.
-  // interface App.tsx already renders DockShell + SurfaceKeepAliveLayer +
-  // ContextMenu (plan-strategy D-1: diff-set empty). The extension set injects
-  // standalone's isolated Viewport Runtime + in-process editor panel slots;
-  // chat/Forge never mount because nothing contributes them (AC-09, structural).
+  // Own the product runtime root and render Interface's public ApplicationShell.
+  // The shell renders DockShell + SurfaceKeepAliveLayer + ContextMenu
+  // (plan-strategy D-1: diff-set empty). The extension set injects standalone's
+  // isolated Viewport Runtime + in-process editor panel slots; chat/Forge never
+  // mount because nothing contributes them (AC-09, structural).
   //
-  // EditorOverlayProvider (Prompt/Confirm/Toast) wraps <App> in the SAME React
-  // root so that module-level singleton dispatchers (e.g. prompt.ts `dispatcher`)
-  // share the exact same module instance as panels like ContentBrowser that
-  // consume them. Previously a separate createRoot caused Vite to resolve
-  // barrel vs subpath imports to distinct module instances, breaking prompts.
+  // EditorOverlayProvider (Prompt/Confirm/Toast) wraps the runtime root in the
+  // SAME React root so that module-level singleton dispatchers (e.g. prompt.ts
+  // `dispatcher`) share the exact same module instance as panels like
+  // ContentBrowser that consume them. Previously a separate createRoot caused
+  // Vite to resolve barrel vs subpath imports to distinct module instances,
+  // breaking prompts.
   try {
     createRoot(rootEl).render(
       <StrictMode>
         <EditorOverlayProvider>
-          <App overrides={STANDALONE_OVERRIDES} />
+          <StandaloneRuntimeRoot>
+            {(runtime) => (
+              <ApplicationShell runtime={runtime} onboarding={{ enabled: false }} />
+            )}
+          </StandaloneRuntimeRoot>
         </EditorOverlayProvider>
       </StrictMode>,
     );
@@ -437,25 +439,51 @@ function boot(): void {
 function bootDetachedSurface(): void {
   const surface = decodeSurfaceFromLocation();
   if (surface === null) return;
-  registerKeyboardRouterDeps(makeKeyboardRouterDeps());
   const appRoot = document.getElementById('app') ?? document.body;
-  void bootstrapAppHost(STANDALONE_OVERRIDES).then(({ host }) => {
-    createRoot(appRoot).render(
-      <StrictMode>
-        <ErrorBoundary scope="detached-surface">
-          <BrandProvider>
-            <HostProvider value={host}>
-              <PanelRenderersProvider value={host.panels}>
-                <EditorOverlayProvider>
-                  <DetachedSurface surface={surface} />
-                </EditorOverlayProvider>
-              </PanelRenderersProvider>
-            </HostProvider>
-          </BrandProvider>
-        </ErrorBoundary>
-      </StrictMode>,
-    );
-  });
+  createRoot(appRoot).render(
+    <StrictMode>
+      <StandaloneRuntimeRoot>
+        {(runtime) => (
+          <ApplicationDetachedShell
+            host={runtime.host}
+            surface={surface}
+            SurfaceProvider={EditorOverlayProvider}
+          />
+        )}
+      </StandaloneRuntimeRoot>
+    </StrictMode>,
+  );
+}
+
+function StandaloneRuntimeRoot({ children }: {
+  children: (runtime: Awaited<ReturnType<typeof startStandaloneApplication>>) => ReactNode;
+}): ReactNode {
+  const { t } = useTranslation();
+
+  return (
+    <OwnedStandaloneRuntimeRoot
+      createOwner={createInterfaceApplicationOwner}
+      start={startStandaloneApplication}
+      messages={{
+        title: t('standaloneRecovery.title'),
+        hint: t('standaloneRecovery.hint'),
+        retry: t('standaloneRecovery.retry'),
+        remount: t('standaloneRecovery.remount'),
+        reloadApplication: t('standaloneRecovery.reloadApplication'),
+      }}
+      shutdownMessages={{
+        title: t('standaloneRecovery.shutdownTitle'),
+        hint: t('standaloneRecovery.shutdownHint'),
+        retry: t('standaloneRecovery.retryShutdown'),
+      }}
+      reloadApplication={() => window.location.reload()}
+      revealError={() => {
+        (window as unknown as { __forgeaxBoot?: { done(): void } }).__forgeaxBoot?.done();
+      }}
+    >
+      {children}
+    </OwnedStandaloneRuntimeRoot>
+  );
 }
 
 if (decodeSurfaceFromLocation() !== null) bootDetachedSurface();

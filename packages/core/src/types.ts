@@ -184,7 +184,7 @@ export type BuiltinEditorOp =
     discardSourceChanges?: boolean;
     requestId: string;
   }
-  | { kind: 'createSceneFile'; id: string; duplicateCurrent: boolean; requestId: string; retryOfRequestId?: string }
+  | { kind: 'createSceneFile'; id: string; duplicateCurrent: boolean; requestId: string; retryOfRequestId?: string; /** When false, write + list only — do not switch the active scene (CB inline create). Default true. */ openAfterCreate?: boolean }
   | { kind: 'setDefaultScene'; sceneGuid: string; requestId: string; retryOfRequestId?: string }
   | { kind: 'deleteScene'; sceneGuid: string; requestId: string; retryOfRequestId?: string }
   | { kind: 'saveDocToDisk'; requestId?: string; retryOfRequestId?: string }
@@ -261,7 +261,7 @@ export type BuiltinEditorOp =
   // unregistered → dispatch returns UNKNOWN_OP (not silently swallowed). The
   // optional policy keeps direct runtime callers on the historical Last Saved
   // default; UI and AI callers should provide it explicitly.
-  | { kind: 'play'; dirtyPolicy?: PlayDirtyPolicy; requestId?: string }
+    | { kind: 'play'; dirtyPolicy?: PlayDirtyPolicy; requestId?: string }
   | { kind: 'stop' }
   | { kind: 'setDisplay'; display: 'scene' | 'game' }
   // scan pipeline ops (north-star §6/§8) — SESSION-domain, ledger-only, no undo
@@ -433,6 +433,10 @@ export interface CommandError extends CommandErrorContext {
     | 'play-cancelled-dirty'
     | 'play-cancelled'
     | 'play-unavailable'
+    // Play was requested before the viewport lifecycle finished booting.
+    | 'play-lifecycle-unavailable'
+    // Host session init failed; Play/capture remain unavailable until reload.
+    | 'host-session-unavailable'
     // Scene switching must not silently flush authored edits. Callers either
     // choose save/discard explicitly or branch on this structured refusal.
     | 'scene-switch-invalid'
@@ -540,6 +544,7 @@ export interface CommandError extends CommandErrorContext {
     | 'vfx-host-control-stale-generation'
     | 'vfx-host-control-runtime-unavailable'
     | 'vfx-host-control-player-unavailable'
+    | 'vfx-host-control-instance-rejected'
     // Asset-editor page navigation is a host-installed seam (the app-shell page
     // extension). A host without it must refuse openAssetEditor structurally,
     // never by leaking the seam's rejection as an unhandled promise.

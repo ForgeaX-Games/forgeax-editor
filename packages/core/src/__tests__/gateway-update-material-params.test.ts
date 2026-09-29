@@ -98,14 +98,17 @@ describe('updateMaterialParams — envelope AssetRef[] → wire string[] project
   });
 
   it('canonicalizes a game-relative pack path through the active host resolver', async () => {
-    setPathResolver((relativePath) => relativePath ? `sample/${relativePath}` : 'sample');
+    setPathResolver((relativePath) => (relativePath ? `sample/${relativePath}` : 'sample'));
     const { gateway } = setup();
-    const r = gateway.dispatch({
-      kind: 'updateMaterialParams',
-      packPath: 'assets/base-material.pack.json',
-      guid: MATERIAL_GUID,
-      paramPatch: { roughness: 0.4 },
-    } as unknown as EditorOp, 'ai');
+    const r = gateway.dispatch(
+      {
+        kind: 'updateMaterialParams',
+        packPath: 'assets/base-material.pack.json',
+        guid: MATERIAL_GUID,
+        paramPatch: { roughness: 0.4 },
+      } as unknown as EditorOp,
+      'ai',
+    );
     expect(r.ok).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(writtenPaths).toEqual(['sample/assets/base-material.pack.json']);
@@ -113,7 +116,9 @@ describe('updateMaterialParams — envelope AssetRef[] → wire string[] project
 
   it('projects a runtime serve-mount pack path into writable host storage', async () => {
     const slug = 'sample';
-    setPathResolver((relativePath) => relativePath ? `.forgeax/games/${slug}/${relativePath}` : `.forgeax/games/${slug}`);
+    setPathResolver((relativePath) =>
+      relativePath ? `.forgeax/games/${slug}/${relativePath}` : `.forgeax/games/${slug}`,
+    );
     const identity: ViewportRuntimeIdentity = {
       version: VIEWPORT_RUNTIME_CONTRACT_VERSION,
       runtimeId: 'edit-runtime',
@@ -131,11 +136,12 @@ describe('updateMaterialParams — envelope AssetRef[] → wire string[] project
     const { gateway } = setup();
     const registry = gateway.doc.registry!;
     const originalListCatalog = registry.listCatalog.bind(registry);
-    registry.listCatalog = (() => originalListCatalog().map((entry) => ({
-      ...entry,
-      packageUrl: `/preview/host-games/${slug}/assets/base-material.pack.json`,
-      sourcePath: `host-games/${slug}/assets/base-material.pack.json`,
-    }))) as typeof registry.listCatalog;
+    registry.listCatalog = (() =>
+      originalListCatalog().map((entry) => ({
+        ...entry,
+        packageUrl: `/preview/host-games/${slug}/assets/base-material.pack.json`,
+        sourcePath: `host-games/${slug}/assets/base-material.pack.json`,
+      }))) as typeof registry.listCatalog;
 
     const op = {
       kind: 'updateMaterialParams',
@@ -215,7 +221,9 @@ describe('updateMaterialParams — envelope AssetRef[] → wire string[] project
     // dispatch() returns DispatchResult ({ok:true}); the applier's inverse
     // lands on the undo stack.
     const undoStack = (gateway as unknown as { undoStack: { inverse: unknown }[] }).undoStack;
-    const inverse = undoStack[undoStack.length - 1]!.inverse as { textureGuids?: Record<string, string | null> };
+    const inverse = undoStack[undoStack.length - 1]!.inverse as {
+      textureGuids?: Record<string, string | null>;
+    };
     // invertTextureGuids resolves oldParamValues.baseColorTexture (=0) through
     // oldRefs[0] — only possible when _oldRefs are strings, not objects.
     expect(inverse.textureGuids).toEqual({ baseColorTexture: BOUND_TEXTURE_GUID });

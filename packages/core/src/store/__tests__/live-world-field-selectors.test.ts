@@ -32,6 +32,28 @@ describe('Inspector field selectors', () => {
     expect(mounted[4]?.getSnapshot()).toMatchObject({ value: [0, 0, 0, 1] });
   });
 
+  it('normalizes Transform vec3 Float32Array reads for array-shaped inspector fields', () => {
+    const world = { pos: new Float32Array([1, 2, 3]) };
+    const graph = createRuntimeUiGraph();
+    graph.bindWorld(world);
+    const mounted = createInspectorFieldSelector(graph, {
+      entity: 1,
+      component: 'Transform',
+      field: 'pos',
+      shape: shape('array'),
+      read: (w) => (w as typeof world).pos,
+    }).mount();
+    let notifications = 0;
+    mounted.subscribe(() => notifications++);
+    graph.publish();
+    expect(mounted.getSnapshot()).toMatchObject({ status: 'available', value: [1, 2, 3] });
+    notifications = 0;
+    world.pos[0] = 9;
+    graph.publish();
+    expect(mounted.getSnapshot()).toMatchObject({ status: 'available', value: [9, 2, 3] });
+    expect(notifications).toBe(1);
+  });
+
   it('observes in-place TypedArray/POD writes without copying unmounted fields', () => {
     const world = { bytes: new Uint8Array([1, 2]), pod: { x: 1, y: 2 } };
     const graph = createRuntimeUiGraph();

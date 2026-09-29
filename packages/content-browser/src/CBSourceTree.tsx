@@ -3,7 +3,7 @@
 // the component file focuses on state + wiring.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useKeybindingScope } from '@forgeax/interface/core/app-shell';
+import { useKeybindingScope } from '@forgeax/app-shell/application';
 import { useTranslation, type TFunction } from '@forgeax/editor-core/i18n';
 import { dispatchActiveEditorOperation } from '@forgeax/editor-core';
 import { ContentBrowserIcon } from './content-browser-icons';
@@ -15,6 +15,7 @@ import {
   type CBDragPayload,
   type CBDropTarget,
 } from './dnd';
+import { VIRTUAL_ROOT_PATH } from './virtual-root';
 import {
   isPathInSelectionChain,
   viewItemKey,
@@ -85,6 +86,69 @@ function CBSourceRow({
   );
 }
 
+/** UE-style virtual "All" root: navigable + droppable, but not draggable / renameable / menuable. */
+function CBVirtualAllRow({
+  depth,
+  label,
+  childCount,
+  expandable,
+  open,
+  selected,
+  inSelectionPath,
+  onClick,
+  onToggleExpand,
+  onFocusItem,
+  onMoveDrop,
+}: {
+  depth: number;
+  label: string;
+  childCount: number;
+  expandable: boolean;
+  open: boolean;
+  selected: boolean;
+  inSelectionPath: boolean;
+  onClick: () => void;
+  onToggleExpand: () => void;
+  onFocusItem: (item: CBViewItem) => void;
+  onMoveDrop?: (payload: CBDragPayload, target: CBDropTarget) => void;
+}): ReactNode {
+  const folder: CBFolder = {
+    type: 'folder',
+    path: VIRTUAL_ROOT_PATH,
+    name: label,
+    childCount,
+    isFavorite: false,
+  };
+  const dropTarget = useMemo<CBDropTarget>(() => ({ kind: 'tree-folder', path: VIRTUAL_ROOT_PATH }), []);
+  const { isOver, verdict, dropProps } = useFolderDropZone(dropTarget, onMoveDrop ?? NOOP_MOVE);
+  const dropClass = isOver && verdict ? (verdict.ok ? ' cb-drop-ok' : ' cb-drop-reject') : '';
+  const rejectTitle = isOver && verdict && !verdict.ok ? dropRejectFallback(verdict.reason) : undefined;
+  const chev = (
+    <span
+      className={`cb-source-chev${expandable ? '' : ' hidden'}`}
+      onClick={expandable ? (e) => { e.stopPropagation(); onToggleExpand(); } : undefined}
+    ><ContentBrowserIcon name="chevron-down" /></span>
+  );
+  return (
+    <button
+      type="button"
+      className={`no-motion-lift cb-source-row cb-source-virtual-root${inSelectionPath ? ' is-path' : ''}${selected ? ' is-sel' : ''}${expandable && !open ? ' collapsed' : ''}${dropClass}`}
+      style={{ paddingLeft: `${16 + depth * 14}px` }}
+      title={rejectTitle ?? label}
+      tabIndex={selected ? 0 : -1}
+      onFocus={() => onFocusItem(folder)}
+      {...dropProps}
+      onClick={onClick}
+      onDoubleClick={expandable ? (e) => { e.stopPropagation(); onToggleExpand(); } : undefined}
+      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
+    >
+      {chev}
+      <span className="cb-source-icon"><ContentBrowserIcon name={expandable && open ? 'folder-open' : 'folder'} /></span>
+      <span className="cb-source-name">{label}</span>
+    </button>
+  );
+}
+
 interface Nav {
   currentPath: string;
   navigate: (path: string) => void;
@@ -139,7 +203,7 @@ export interface CBSourceTreeProps {
   openFolderContextMenu: (pos: ContextMenuPos, folder: CBFolder) => void;
   /** viewItemKey (= path) of the tree row being inline-renamed, or null. */
   renamingKey: string | null;
-  renameValidate: (value: string) => string | null;
+  renameValidate: (value: string, item: CBViewItem) => string | null;
   onRenameCommit: (item: CBViewItem, value: string) => void;
   onRenameCancel: () => void;
   /** Internal move DnD: build a drag payload for a tree folder subject. */
@@ -235,7 +299,7 @@ function renderRows(
             {icon}
             <CBInlineRename
               initial={node.name}
-              validate={renameValidate}
+              validate={renameValidate ? (value) => renameValidate(value, folder) : undefined}
               onCommit={(value) => onRenameCommit(folder, value)}
               onCancel={onRenameCancel}
               ariaLabel={t('editor.contentBrowser.contextMenu.rename')}
@@ -291,6 +355,33 @@ export function CBSourceTree({
   const [favoritesGroupOpen, setFavoritesGroupOpen] = useState(true);
   const [projectOpen, setProjectOpen] = useState(true);
   const favoriteDirs = useMemo(() => collectFavoriteDirs(sourceTree), [sourceTree]);
+  const allLabel = t('editor.contentBrowser.sourceTree.all');
+  const virtualRootFolder: CBFolder = useMemo(() => ({
+    type: 'folder',
+    path: VIRTUAL_ROOT_PATH,
+    name: allLabel,
+    childCount: sourceTree.length,
+    isFavorite: false,
+  }), [allLabel, sourceTree.length]);
+  const allExpandable = sourceTree.length > 0;
+  const allOpen = allExpandable && collapsedSourceFolders[VIRTUAL_ROOT_PATH] !== true;
+  const allSelected = nav.currentPath === VIRTUAL_ROOT_PATH;
+  const allInPath = nav.currentPath !== VIRTUAL_ROOT_PATH && isPathInSelectionChain(nav.currentPath, VIRTUAL_ROOT_PATH);
+
+  const revealVirtualAll = useCallback(() => {
+    setProjectOpen(true);
+    if (!allExpandable) return;
+    setCollapsedSourceFolders(prev => prev[VIRTUAL_ROOT_PATH] === false ? prev : { ...prev, [VIRTUAL_ROOT_PATH]: false });
+  }, [allExpandable, setCollapsedSourceFolders]);
+
+  const selectVirtualAll = useCallback(() => {
+    setFavoritesOnly(false);
+    nav.navigate(VIRTUAL_ROOT_PATH);
+    setSelectedItem(virtualRootFolder);
+    setPreviewItem(virtualRootFolder);
+    selectTreePath(VIRTUAL_ROOT_PATH, 'dir');
+    revealVirtualAll();
+  }, [nav, revealVirtualAll, setFavoritesOnly, setPreviewItem, setSelectedItem, virtualRootFolder]);
 
   // A grid selection can originate below a collapsed root. Reveal the
   // selected subject's path chain so the two selection layers remain visible;
@@ -298,6 +389,11 @@ export function CBSourceTree({
   useEffect(() => {
     if (selectedPath === null) return;
     setProjectOpen(previous => previous ? previous : true);
+    if (selectedPath !== VIRTUAL_ROOT_PATH) {
+      setCollapsedSourceFolders(prev => (
+        prev[VIRTUAL_ROOT_PATH] === false ? prev : { ...prev, [VIRTUAL_ROOT_PATH]: false }
+      ));
+    }
     const expandablePaths = new Set<string>();
     const collectExpandable = (nodes: SourceTreeNode[]) => {
       for (const node of nodes) {
@@ -400,24 +496,45 @@ export function CBSourceTree({
           </button>
           {projectOpen && (
             <div className="cb-source-group-body">
-              {renderRows(sourceTree, 0, {
-                t,
-                collapsedSourceFolders,
-                setCollapsedSourceFolders,
-                setFavoritesOnly,
-                selectedPath,
-                setSelectedItem,
-                setPreviewItem,
-                onFocusItem,
-                nav,
-                openFolderContextMenu,
-                renamingKey,
-                renameValidate,
-                onRenameCommit,
-                onRenameCancel,
-                getDragPayload,
-                onMoveDrop,
-              })}
+              <div className="cb-source-node">
+                <CBVirtualAllRow
+                  depth={0}
+                  label={allLabel}
+                  childCount={sourceTree.length}
+                  expandable={allExpandable}
+                  open={allOpen}
+                  selected={allSelected}
+                  inSelectionPath={allInPath}
+                  onClick={selectVirtualAll}
+                  onToggleExpand={() => {
+                    if (!allExpandable) return;
+                    setCollapsedSourceFolders(prev => ({
+                      ...prev,
+                      [VIRTUAL_ROOT_PATH]: prev[VIRTUAL_ROOT_PATH] !== true,
+                    }));
+                  }}
+                  onFocusItem={onFocusItem}
+                  onMoveDrop={onMoveDrop}
+                />
+                {allOpen && renderRows(sourceTree, 1, {
+                  t,
+                  collapsedSourceFolders,
+                  setCollapsedSourceFolders,
+                  setFavoritesOnly,
+                  selectedPath,
+                  setSelectedItem,
+                  setPreviewItem,
+                  onFocusItem,
+                  nav,
+                  openFolderContextMenu,
+                  renamingKey,
+                  renameValidate,
+                  onRenameCommit,
+                  onRenameCancel,
+                  getDragPayload,
+                  onMoveDrop,
+                })}
+              </div>
             </div>
           )}
         </div>

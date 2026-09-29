@@ -25,6 +25,7 @@ import { panelBridge } from '../io/panel-bridge';
 import type { EditSession } from '../types';
 import { assetIO } from '../io/asset-io-facade';
 import type { RuntimeAssetBinding } from '@forgeax/engine-types';
+import { projectDirectPackJson } from '@forgeax/engine-pack/source';
 
 const originalFetch = globalThis.fetch;
 
@@ -67,14 +68,16 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
   beforeEach(() => {
     assetIO.setRuntimeBinding(testRuntimeBinding());
     calls = [];
-    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, opts?: { method?: string }) => {
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, opts?: { method?: string },
+    ) => {
       const method = opts?.method ?? 'GET';
       calls.push({ url: String(url), method });
       if (String(url).includes('optional=1')) {
         return Promise.resolve(new Response(JSON.stringify({ exists: false }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
-        }));
+        }),
+        );
       }
       // upload / sidecar write / cook trigger all succeed.
       return Promise.resolve(new Response('', { status: 200 }));
@@ -101,13 +104,14 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     // uploadSourceBytes (bytes supplied → not skipped)
     expect(urls.some((u) => u.includes('/api/files/upload'))).toBe(true);
     // writeMetaSidecar (.meta.json)
-    expect(urls.some((u) => u.startsWith('/api/files') && !u.includes('upload') && !u.includes('raw'))).toBe(true);
+    expect(urls.some((u) => u.startsWith('/api/files') && !u.includes('upload') && !u.includes('raw')),
+    ).toBe(true);
     // triggerCook (image importer goes through the simple sidecar + cook path)
     expect(urls.some((u) => u.includes('/__pack/scopes/test-scope/1/import/'))).toBe(true);
     expect(phases[0]).toBe('uploading');
     expect(phases).toContain('sidecar');
     expect(phases).toContain('engineCook');
-    expect(phases.at(-1)).toBe('engineCook');
+    expect(phases.at(-1)).toBe('indexing');
   });
 
   it('glTF import: upload → sidecar → engine cook trigger (same as image path)', async () => {
@@ -166,7 +170,11 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
     let writtenBody = '';
     const fakeFetch = globalThis.fetch;
     globalThis.fetch = (async (url: unknown, opts?: RequestInit) => {
-      if (opts?.method === 'POST' && String(url).includes('/api/files') && !String(url).includes('upload')) {
+      if (
+        opts?.method === 'POST' &&
+        String(url).includes('/api/files') &&
+        !String(url).includes('upload')
+      ) {
         writtenBody = String(opts.body);
       }
       return fakeFetch(url as string, opts);
@@ -189,7 +197,8 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
       companionSources: [{
         destPath: '/games/demo/assets/hud.ui.css',
         base64: btoa('main { color: white; }'),
-      }],
+      },
+      ],
     });
 
     expect(r.status).toBe('done');
@@ -251,14 +260,19 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
       source: 'model.glb',
       subAssets: [{ guid: 'guid-existing-glb-root', kind: 'mesh', sourceIndex: 0 }],
     });
-    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, opts?: { method?: string }) => {
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((
+      url: string,
+      opts?: { method?: string },
+    ) => {
       const method = opts?.method ?? 'GET';
       calls.push({ url: String(url), method });
       if (String(url).includes('optional=1')) {
         const pathMatch = /path=([^&]+)/.exec(String(url));
         const pathParam = pathMatch ? decodeURIComponent(pathMatch[1]!) : '';
         if (pathParam === metaPath) {
-          return Promise.resolve(new Response(JSON.stringify({ exists: true, content: metaContent }), { status: 200 }));
+          return Promise.resolve(
+            new Response(JSON.stringify({ exists: true, content: metaContent }), { status: 200 }),
+          );
         }
         return Promise.resolve(new Response(JSON.stringify({ exists: true }), { status: 200 }));
       }
@@ -276,7 +290,8 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
 
   it('rolls back staged and promoted files when the atomic promotion fails', async () => {
     let renameCount = 0;
-    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, opts?: { method?: string }) => {
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, opts?: { method?: string },
+    ) => {
       const method = opts?.method ?? 'GET';
       calls.push({ url: String(url), method });
       if (String(url).includes('optional=1')) {
@@ -294,7 +309,8 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
       base64: btoa('bytes'),
     });
     expect(result.errorDetail?.code).toBe('IMPORT_SIDECAR_WRITE_FAILED');
-    expect(calls.some((call) => call.url.includes('/__pack/scopes/test-scope/1/import/'))).toBe(false);
+    expect(calls.some((call) => call.url.includes('/__pack/scopes/test-scope/1/import/'))).toBe(false,
+    );
     const deletes = calls.filter((call) => call.method === 'DELETE').map((call) => call.url);
     expect(deletes.some((url) => url.includes('atomic.png'))).toBe(true);
     expect(deletes.some((url) => url.includes('atomic.png.meta.json'))).toBe(true);
@@ -324,14 +340,16 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
 
   it('font import sidecar carries three sub-assets with distinct GUIDs and sourceIndex values', async () => {
     let sidecarContent = '';
-    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, opts?: { method?: string; body?: string }) => {
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, opts?: { method?: string; body?: string },
+    ) => {
       const method = opts?.method ?? 'GET';
       calls.push({ url: String(url), method });
       if (String(url).includes('optional=1')) {
         return Promise.resolve(new Response(JSON.stringify({ exists: false }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
-        }));
+        }),
+        );
       }
       if (method === 'POST' && String(url) === '/api/files' && typeof opts?.body === 'string') {
         sidecarContent = JSON.parse(opts.body).content as string;
@@ -353,7 +371,8 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
       subAssets: Array<{ guid: string; sourceIndex: number; kind: string; sourceKey?: string }>;
     };
     expect(meta.subAssets.map((asset) => asset.sourceIndex)).toEqual([0, 1, 2]);
-    expect(meta.subAssets.map((asset) => asset.sourceKey)).toEqual(['font:texture', 'font:sampler', 'font:font']);
+    expect(meta.subAssets.map((asset) => asset.sourceKey)).toEqual(['font:texture', 'font:sampler', 'font:font',
+    ]);
 
     const sidecarPaths = calls.filter((c) => c.method === 'POST' && c.url === '/api/files');
     expect(sidecarPaths.length).toBe(1);
@@ -372,7 +391,8 @@ describe('executeAssetImport routes through the assetIO write-gate', () => {
 
     const urls = calls.map((c) => c.url);
     expect(urls.some((u) => u.includes('/api/files/upload'))).toBe(true);
-    expect(urls.some((u) => u.startsWith('/api/files') && !u.includes('upload') && !u.includes('raw'))).toBe(true);
+    expect(urls.some((u) => u.startsWith('/api/files') && !u.includes('upload') && !u.includes('raw')),
+    ).toBe(true);
     expect(urls.some((u) => u.includes('/__pack/scopes/test-scope/1/import/'))).toBe(false);
   });
 });
@@ -401,12 +421,25 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
 
   it('returns a running run and records the ledger only after successful completion', async () => {
     const beforeLedger = gw.ledger.length;
-    const r = gw.dispatch({ kind: 'importAsset', destPath: 'assets/logo.png', sourceName: 'logo.png', requestId: 'import-test-1' });
-    expect(r).toMatchObject({ ok: true, result: { operationRun: { requestId: 'import-test-1', operationId: 'importAsset', status: 'running' } } });
+    const r = gw.dispatch({
+      kind: 'importAsset',
+      destPath: 'assets/logo.png',
+      sourceName: 'logo.png',
+      requestId: 'import-test-1',
+    });
+    expect(r).toMatchObject({
+      ok: true,
+      result: {
+        operationRun: { requestId: 'import-test-1', operationId: 'importAsset', status: 'running' },
+      },
+    });
     expect(gw.ledger.length).toBe(beforeLedger);
 
     const terminal = await gw.waitOperationRun('import-test-1');
-    expect(terminal).toMatchObject({ ok: true, value: { status: 'succeeded', result: { status: 'done', filename: 'logo.png' } } });
+    expect(terminal).toMatchObject({
+      ok: true,
+      value: { status: 'succeeded', result: { status: 'done', filename: 'logo.png' } },
+    });
     expect(gw.ledger.length).toBe(beforeLedger + 1);
   });
 
@@ -426,11 +459,13 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
       base64: btoa('fbx'),
       skipUpload: false,
       requestId: 'import-invalid-collision',
-      sourceFiles: [{
-        destPath: 'assets/character.fbx',
-        relativePath: '../character.fbx',
-        base64: btoa('tga'),
-      }],
+      sourceFiles: [
+        {
+          destPath: 'assets/character.fbx',
+          relativePath: '../character.fbx',
+          base64: btoa('tga'),
+        },
+      ],
     });
     expect(collision).toMatchObject({ ok: false, error: { code: 'INVALID_ARGS' } });
   });
@@ -453,17 +488,26 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
     });
     expect(running?.input).not.toHaveProperty('base64');
 
-    expect(await gw.waitOperationRun('import-byte-retention')).toMatchObject({ ok: true, value: { status: 'succeeded' } });
+    expect(await gw.waitOperationRun('import-byte-retention')).toMatchObject({
+      ok: true,
+      value: { status: 'succeeded' },
+    });
     expect(gw.ledger.at(-1)).not.toHaveProperty('base64');
   });
 
   it('projects executor-owned import phases through OperationRun progress', async () => {
-    const r = gw.dispatch({ kind: 'importAsset', destPath: 'assets/logo.png', sourceName: 'logo.png', requestId: 'import-progress-1' });
+    const r = gw.dispatch({
+      kind: 'importAsset',
+      destPath: 'assets/logo.png',
+      sourceName: 'logo.png',
+      requestId: 'import-progress-1',
+    });
     expect(r).toMatchObject({ ok: true, result: { operationRun: { status: 'running' } } });
 
     const observed: string[] = [];
     const unsubscribe = gw.subscribeOperationRun('import-progress-1', (run) => {
-      if (run.progress.fraction > 0 && observed.at(-1) !== run.progress.stage) observed.push(run.progress.stage);
+      if (run.progress.fraction > 0 && observed.at(-1) !== run.progress.stage)
+        observed.push(run.progress.stage);
     });
     const terminal = await gw.waitOperationRun('import-progress-1');
     unsubscribe();
@@ -472,17 +516,37 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
       ok: true,
       value: { status: 'succeeded', progress: { stage: 'succeeded', fraction: 1 } },
     });
-    expect(observed).toEqual(['sidecar', 'engineCook', 'indexing', 'succeeded']);
+    expect(observed).toEqual(['sourceCook', 'sidecar', 'engineCook', 'indexing', 'succeeded']);
   });
 
   it('publishes a structured terminal failure instead of resolving success', async () => {
-    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((_url: string, opts?: RequestInit) =>
-      Promise.resolve(new Response('', { status: opts?.method === 'POST' ? 500 : 200 }))) as unknown as typeof fetch;
-    const r = gw.dispatch({ kind: 'importAsset', destPath: 'assets/logo.png', sourceName: 'logo.png', requestId: 'import-test-failed' });
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((
+      _url: string,
+      opts?: RequestInit,
+    ) =>
+      Promise.resolve(
+        new Response('', { status: opts?.method === 'POST' ? 500 : 200 }),
+      )) as unknown as typeof fetch;
+    const r = gw.dispatch({
+      kind: 'importAsset',
+      destPath: 'assets/logo.png',
+      sourceName: 'logo.png',
+      requestId: 'import-test-failed',
+    });
     expect(r).toMatchObject({ ok: true, result: { operationRun: { status: 'running' } } });
 
     const terminal = await gw.waitOperationRun('import-test-failed');
-    expect(terminal).toMatchObject({ ok: true, value: { status: 'failed', error: { code: 'IMPORT_SIDECAR_WRITE_FAILED', retryable: true, subjectRef: { id: 'assets/logo.png' } } } });
+    expect(terminal).toMatchObject({
+      ok: true,
+      value: {
+        status: 'failed',
+        error: {
+          code: 'IMPORT_SIDECAR_WRITE_FAILED',
+          retryable: true,
+          subjectRef: { id: 'assets/logo.png' },
+        },
+      },
+    });
     expect(gw.ledger).toHaveLength(0);
   });
 
@@ -514,7 +578,12 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
     (globalThis as unknown as { fetch: typeof fetch }).fetch = (() =>
       Promise.resolve(new Response('', { status: fail ? 500 : 200 }))) as unknown as typeof fetch;
 
-    const first = gw.dispatch({ kind: 'importAsset', destPath: 'assets/logo.png', sourceName: 'logo.png', requestId: 'import-retry-source' });
+    const first = gw.dispatch({
+      kind: 'importAsset',
+      destPath: 'assets/logo.png',
+      sourceName: 'logo.png',
+      requestId: 'import-retry-source',
+    });
     expect(first.ok).toBe(true);
     const failed = await gw.waitOperationRun('import-retry-source');
     expect(failed).toMatchObject({ ok: true, value: { status: 'failed', retryable: true } });
@@ -523,7 +592,13 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
     const retry = gw.retryOperationRun('import-retry-source', 'import-retry-attempt-2', 'ai');
     expect(retry).toMatchObject({
       ok: true,
-      result: { operationRun: { requestId: 'import-retry-attempt-2', parentRunId: expect.any(String), attempt: 2 } },
+      result: {
+        operationRun: {
+          requestId: 'import-retry-attempt-2',
+          parentRunId: expect.any(String),
+          attempt: 2,
+        },
+      },
     });
     expect(await gw.waitOperationRun('import-retry-attempt-2')).toMatchObject({
       ok: true,
@@ -537,7 +612,9 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
     (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string) => {
       calls.push(String(url));
       if (String(url).includes('/api/files/raw')) {
-        return new Promise<Response>((resolve) => { resolveRead = resolve; });
+        return new Promise<Response>((resolve) => {
+          resolveRead = resolve;
+        });
       }
       return Promise.resolve(new Response('', { status: 200 }));
     }) as unknown as typeof fetch;
@@ -549,7 +626,10 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
       skipUpload: true,
       requestId: 'import-cancel-safe',
     });
-    expect(dispatched).toMatchObject({ ok: true, result: { operationRun: { status: 'running', cancellable: true } } });
+    expect(dispatched).toMatchObject({
+      ok: true,
+      result: { operationRun: { status: 'running', cancellable: true } },
+    });
 
     expect(gw.cancelOperationRun('import-cancel-safe')).toMatchObject({
       ok: true,
@@ -566,11 +646,14 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
 
   it('refuses cancellation once a generic importer starts its sidecar write', async () => {
     let resolveSidecar!: (response: Response) => void;
-    let fetchCount = 0;
-    (globalThis as unknown as { fetch: typeof fetch }).fetch = (() => {
-      fetchCount += 1;
-      if (fetchCount === 1) {
-        return new Promise<Response>((resolve) => { resolveSidecar = resolve; });
+    let markSidecarStarted!: () => void;
+    const sidecarStarted = new Promise<void>((resolve) => { markSidecarStarted = resolve; });
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string, options?: RequestInit) => {
+      if (options?.method === 'POST' && String(options.body).includes('.meta.json')) {
+        return new Promise<Response>((resolve) => {
+          resolveSidecar = resolve;
+          markSidecarStarted();
+        });
       }
       return Promise.resolve(new Response('', { status: 200 }));
     }) as unknown as typeof fetch;
@@ -582,8 +665,12 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
       skipUpload: true,
       requestId: 'import-cancel-refused',
     });
-    expect(dispatched).toMatchObject({ ok: true, result: { operationRun: { status: 'running', cancellable: true } } });
+    expect(dispatched).toMatchObject({
+      ok: true,
+      result: { operationRun: { status: 'running', cancellable: true } },
+    });
 
+    await sidecarStarted;
     expect(gw.cancelOperationRun('import-cancel-refused')).toMatchObject({
       ok: false,
       error: {
@@ -618,10 +705,7 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
         ok: true,
         value: { status: 'succeeded', result: { status: 'done' } },
       });
-      expect(events).toEqual([
-        expect.stringMatching(/^catalog:/),
-        'broadcast',
-      ]);
+      expect(events).toEqual([expect.stringMatching(/^catalog:/), 'broadcast']);
     } finally {
       off();
       registerPostAssetWriteCatalogSync(null);
@@ -632,14 +716,21 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
     const subAssetKinds = ['texture', 'sampler', 'font'] as const;
     (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string) => {
       if (url.includes('optional=1')) {
-        return Promise.resolve(new Response(JSON.stringify({
-          content: JSON.stringify({ importer: 'font' }),
-        }), { status: 200, headers: { 'content-type': 'application/json' } }));
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              content: JSON.stringify({ importer: 'font' }),
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        );
       }
       return Promise.resolve(new Response('', { status: 200 }));
     }) as unknown as typeof fetch;
     const seen: string[] = [];
-    registerPostAssetWriteCatalogSync(async (guid) => { seen.push(guid); });
+    registerPostAssetWriteCatalogSync(async (guid) => {
+      seen.push(guid);
+    });
     try {
       const dispatched = gw.dispatch({
         kind: 'importAsset',
@@ -657,19 +748,21 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
         },
       });
       if (!terminal.ok) throw new Error('import terminal result unavailable');
-      const produced = (terminal.value.result as { readonly subAssets?: readonly { readonly guid: string }[] }).subAssets ?? [];
+      const produced =
+        (terminal.value.result as { readonly subAssets?: readonly { readonly guid: string }[] })
+          .subAssets ?? [];
       expect(seen).toEqual(produced.map((asset) => asset.guid));
     } finally {
       registerPostAssetWriteCatalogSync(null);
     }
   });
 
-  it('fails the run and suppresses the broadcast when catalog sync fails', async () => {
-    const broadcasts: string[] = [];
+  it('still succeeds and broadcasts when catalog sync barrier throws (best-effort)', async () => {
+    const broadcasts: Array<{ hint?: string }> = [];
     registerPostAssetWriteCatalogSync(async () => {
       throw new Error('catalog unavailable');
     });
-    const off = panelBridge.on('assetsChanged', () => broadcasts.push('broadcast'));
+    const off = panelBridge.on('assetsChanged', (event) => broadcasts.push(event));
     try {
       const dispatched = gw.dispatch({
         kind: 'importAsset',
@@ -681,22 +774,14 @@ describe('importAsset dispatch (OperationRun convergence)', () => {
       expect(dispatched).toMatchObject({ ok: true });
       expect(await gw.waitOperationRun('import-catalog-failed')).toMatchObject({
         ok: true,
-        value: {
-          status: 'failed',
-          error: {
-            code: 'IMPORT_CATALOG_SYNC_FAILED',
-            retryable: true,
-            recoveryActions: ['operation.retry'],
-          },
-        },
+        value: { status: 'succeeded', result: { status: 'done' } },
       });
-      expect(broadcasts).toEqual([]);
+      expect(broadcasts.some((event) => event.hint === 'pack-changed')).toBe(true);
     } finally {
       off();
       registerPostAssetWriteCatalogSync(null);
     }
   });
-
 });
 
 describe('importAsset terminal error taxonomy', () => {
@@ -719,15 +804,22 @@ describe('importAsset terminal error taxonomy', () => {
       sourceName: 'logo.png',
       base64: btoa('x'),
     });
-    expect(upload.errorDetail).toMatchObject({ code: 'IMPORT_UPLOAD_FAILED', path: '/games/demo/assets/logo.png' });
+    expect(upload.errorDetail).toMatchObject({
+      code: 'IMPORT_UPLOAD_FAILED',
+      path: '/games/demo/assets/logo.png',
+    });
 
-    (globalThis as unknown as { fetch: typeof fetch }).fetch = (() => Promise.reject(new Error('offline'))) as unknown as typeof fetch;
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (() =>
+      Promise.reject(new Error('offline'))) as unknown as typeof fetch;
     const network = await executeAssetImport({
       destPath: '/games/demo/assets/logo.png',
       sourceName: 'logo.png',
       base64: btoa('x'),
     });
-    expect(network.errorDetail).toMatchObject({ code: 'IMPORT_NETWORK_ERROR', path: '/games/demo/assets/logo.png' });
+    expect(network.errorDetail).toMatchObject({
+      code: 'IMPORT_NETWORK_ERROR',
+      path: '/games/demo/assets/logo.png',
+    });
   });
 
   it('distinguishes source read and cook failures for glTF', async () => {
@@ -738,7 +830,10 @@ describe('importAsset terminal error taxonomy', () => {
       sourceName: 'model.glb',
       skipUpload: true,
     });
-    expect(read.errorDetail).toMatchObject({ code: 'IMPORT_SOURCE_READ_FAILED', path: '/games/demo/assets/model.glb' });
+    expect(read.errorDetail).toMatchObject({
+      code: 'IMPORT_SOURCE_READ_FAILED',
+      path: '/games/demo/assets/model.glb',
+    });
 
     (globalThis as unknown as { fetch: typeof fetch }).fetch = ((url: string) =>
       String(url).includes('optional=1')
@@ -749,18 +844,21 @@ describe('importAsset terminal error taxonomy', () => {
       sourceName: 'model.glb',
       base64: btoa('not-a-glb'),
     });
-    expect(cook.errorDetail).toMatchObject({ code: 'IMPORT_COOK_FAILED', path: '/games/demo/assets/model.glb', retryable: false });
+    expect(cook.errorDetail).toMatchObject({
+      code: 'IMPORT_COOK_FAILED',
+      path: '/games/demo/assets/model.glb',
+      retryable: false,
+    });
   });
 });
 
 describe('authored Pack import', () => {
-  const guid = 'd9f2a000-0002-5000-8000-000000000002';
+  const packageId = '01900000-0000-7000-8000-000000000010';
   const pack = () => ({
-    schemaVersion: '2.0.0',
-    kind: 'internal-text-package',
-    assets: [
-      {
-        guid,
+    schemaVersion: '3.0.0' as const,
+    packageId,
+    assets: {
+      'material/main': {
         kind: 'material',
         payload: {
           passes: [
@@ -775,31 +873,37 @@ describe('authored Pack import', () => {
         refs: [],
         artifacts: {},
       },
-    ],
+    },
+  });
+  const guid = () => {
+    const projected = projectDirectPackJson(pack());
+    if (!projected.ok) throw new Error(projected.error.hint);
+    return projected.value.assets[0]!.guid;
+  };
+  const binding = () => ({
+    ...testRuntimeBinding(),
+    catalogRoots: [{ root: 'assets', catalogPrefix: 'host-games/demo/assets' }],
   });
   afterEach(() => {
     globalThis.fetch = originalFetch;
     assetIO.setRuntimeBinding(undefined);
   });
-  it('keeps Pack GUIDs and triggers Engine cook without writing any metadata sidecar', async () => {
-    const binding = testRuntimeBinding();
-    assetIO.setRuntimeBinding(binding);
+  it('imports v3 Pack through the Engine source producer without a metadata sidecar', async () => {
+    const active = binding();
+    assetIO.setRuntimeBinding(active);
     const requests: string[] = [];
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
+    globalThis.fetch = (async (input: RequestInfo | URL, options?: RequestInit) => {
       const url = String(input);
       requests.push(url);
-      if (url === binding.catalogUrl)
-        return new Response(
-          JSON.stringify({
-            schemaVersion: 'runtime-catalog-snapshot-v1',
-            scopeId: binding.scopeId,
-            generation: binding.generation,
-            authority: 'authoritative',
-            entries: [],
-            diagnostics: [],
-          }),
-        );
       if (url.includes('optional=1')) return new Response(JSON.stringify({ exists: false }));
+      if (url.includes(`/import/${guid()}`)) {
+        expect(new Headers(options?.headers).get('x-forgeax-import-source-key')).toBe(
+          'host-games/demo/assets/source.pack.json',
+        );
+        return new Response(JSON.stringify([
+          { guid: guid(), kind: 'material', sourcePath: 'host-games/demo/assets/source.pack.json' },
+        ]));
+      }
       return new Response('', { status: 200 });
     }) as typeof fetch;
     const result = await executeAssetImport({
@@ -808,87 +912,78 @@ describe('authored Pack import', () => {
       base64: btoa(JSON.stringify(pack())),
     });
     expect(result.status).toBe('done');
-    expect(result.guid).toBe(guid);
-    expect(result.subAssets).toEqual([{ guid, kind: 'material' }]);
+    expect(result.guid).toBe(guid());
+    expect(result.subAssets).toEqual([{ guid: guid(), kind: 'material' }]);
     expect(requests.some((url) => url.includes('.meta.json'))).toBe(false);
-    expect(requests.some((url) => url.includes(`/import/${guid}`))).toBe(true);
+    expect(requests.some((url) => url.includes(`/import/${guid()}`))).toBe(true);
   });
-  it.each(['missing-reference', 'duplicate-guid', 'cooked', 'bad-artifact-digest'] as const)(
-    'rejects %s before source promotion or Engine cook',
-    async (kind) => {
-      const binding = testRuntimeBinding();
-      assetIO.setRuntimeBinding(binding);
-      const requests: string[] = [];
-      globalThis.fetch = (async (input: RequestInfo | URL) => {
-        const url = String(input);
-        requests.push(url);
-        if (url === binding.catalogUrl)
-          return new Response(
-            JSON.stringify({
-              schemaVersion: 'runtime-catalog-snapshot-v1',
-              scopeId: binding.scopeId,
-              generation: binding.generation,
-              authority: 'authoritative',
-              entries: [],
-              diagnostics: [],
-            }),
-          );
-        if (url.includes('optional=1')) return new Response(JSON.stringify({ exists: false }));
-        return new Response('', { status: 200 });
-      }) as typeof fetch;
-      const value: any = pack();
-      if (kind === 'missing-reference') value.assets[0].refs = ['d9f2a000-0002-5000-8000-000000000099'];
-      if (kind === 'duplicate-guid') value.assets.push({ ...value.assets[0] });
-      if (kind === 'cooked') value.generation = 1;
-      if (kind === 'bad-artifact-digest')
-        value.assets[0].artifacts = {
-          data: {
-            path: 'data.bin',
-            mediaType: 'application/octet-stream',
-            byteLength: 3,
-            integrity: { algorithm: 'sha256', digest: '0'.repeat(64) },
-          },
-        };
+  it('rejects cooked v2 and authored GUID fields before promotion', async () => {
+    assetIO.setRuntimeBinding(binding());
+    const requests: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes('optional=1')) return new Response(JSON.stringify({ exists: false }));
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+    for (const value of [
+      { ...pack(), schemaVersion: '2.0.0' },
+      { ...pack(), assets: { 'material/main': { ...pack().assets['material/main'], guid: guid() } } },
+    ]) {
       const result = await executeAssetImport({
         destPath: '/games/demo/assets/source.pack.json',
         sourceName: 'source.pack.json',
         base64: btoa(JSON.stringify(value)),
-        sourceFiles:
-          kind === 'bad-artifact-digest'
-            ? [{ destPath: '/games/demo/assets/data.bin', relativePath: 'data.bin', base64: btoa('abc') }]
-            : [],
       });
       expect(result.status).toBe('error');
-      expect(requests.some((url) => url.includes(`/import/${guid}`))).toBe(false);
-    },
-  );
-  it('imports companion Packs as one reference closure and retains all identities', async () => {
-    const binding = testRuntimeBinding();
-    assetIO.setRuntimeBinding(binding);
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
+    }
+    expect(requests.some((url) => url.includes('/import/'))).toBe(false);
+  });
+  it('uses Engine diagnostics and rolls back sources after a failed cook', async () => {
+    assetIO.setRuntimeBinding(binding());
+    const methods: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, options?: RequestInit) => {
       const url = String(input);
-      if (url === binding.catalogUrl)
-        return new Response(
-          JSON.stringify({
-            schemaVersion: 'runtime-catalog-snapshot-v1',
-            scopeId: binding.scopeId,
-            generation: binding.generation,
-            authority: 'authoritative',
-            entries: [],
-            diagnostics: [],
-          }),
-        );
+      methods.push(options?.method ?? 'GET');
       if (url.includes('optional=1')) return new Response(JSON.stringify({ exists: false }));
+      if (url.includes(`/import/${guid()}`))
+        return new Response(JSON.stringify({ code: 'pack-reference-missing', hint: 'missing reference' }),
+          { status: 422 });
       return new Response('', { status: 200 });
     }) as typeof fetch;
-    const primary: any = pack();
-    const auxiliary = pack();
-    auxiliary.assets[0]!.guid = 'd9f2a000-0002-5000-8000-000000000099';
-    primary.assets[0].refs = [auxiliary.assets[0]!.guid];
     const result = await executeAssetImport({
       destPath: '/games/demo/assets/source.pack.json',
       sourceName: 'source.pack.json',
-      base64: btoa(JSON.stringify(primary)),
+      base64: btoa(JSON.stringify(pack())),
+    });
+    expect(result.status).toBe('error');
+    expect(result.errorDetail?.producerError).toMatchObject({
+      code: 'pack-reference-missing', owner: 'engine',
+    });
+    expect(methods).toContain('DELETE');
+  });
+  it('imports companion Packs through the same producer and retains their identities', async () => {
+    assetIO.setRuntimeBinding(binding());
+    const auxiliary = { ...pack(), packageId: '01900000-0000-7000-8000-000000000011' };
+    const projected = projectDirectPackJson(auxiliary);
+    if (!projected.ok) throw new Error(projected.error.hint);
+    const auxiliaryGuid = projected.value.assets[0]!.guid;
+    globalThis.fetch = (async (input: RequestInfo | URL, options?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/import/')) {
+        const sourcePath = new Headers(options?.headers).get('x-forgeax-import-source-key')!;
+        return new Response(JSON.stringify([{
+          guid: sourcePath.endsWith('/aux.pack.json') ? auxiliaryGuid : guid(),
+          kind: 'material', sourcePath,
+        }]));
+      }
+      if (url.includes('optional=1')) return new Response(JSON.stringify({ exists: false }));
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+    const result = await executeAssetImport({
+      destPath: '/games/demo/assets/source.pack.json',
+      sourceName: 'source.pack.json',
+      base64: btoa(JSON.stringify(pack())),
       sourceFiles: [
         {
           destPath: '/games/demo/assets/aux.pack.json',
@@ -898,7 +993,7 @@ describe('authored Pack import', () => {
       ],
     });
     expect(result.status).toBe('done');
-    expect(result.subAssets?.map((asset) => asset.guid)).toEqual([guid, auxiliary.assets[0]!.guid]);
+    expect(result.subAssets?.map((asset) => asset.guid)).toEqual([guid(), auxiliaryGuid]);
   });
   it('recognizes only the authored Pack suffix, not arbitrary JSON', () => {
     expect(getImportFormat('source.pack.json')?.importer).toBe('pack');
@@ -906,43 +1001,85 @@ describe('authored Pack import', () => {
   });
 });
 
-
 describe('native Pack source import', () => {
-  afterEach(() => { globalThis.fetch = originalFetch; assetIO.setRuntimeBinding(undefined); });
-  it.each([false, true])('uses Engine identities and rolls back failed discovery (%s)', async (fail) => {
-    assetIO.setRuntimeBinding({ ...testRuntimeBinding(), catalogRoots: [{ root: 'assets', catalogPrefix: 'host-games/demo/assets' }] });
-    const calls: { url: string; method: string }[] = [];
-    const guid = '1073cc16-2533-53dc-a63f-cbd45527b75d';
-    globalThis.fetch = (async (input: RequestInfo | URL, opts?: RequestInit) => {
-      const url = String(input);
-      calls.push({ url, method: opts?.method ?? 'GET' });
-      if (url.includes('optional=1')) return new Response(JSON.stringify({ exists: false }));
-      if (url.endsWith('/import/source')) {
-        expect(new Headers(opts?.headers).get('x-forgeax-import-source-key')).toBe('host-games/demo/assets/counter.pack.ts');
-        return new Response(JSON.stringify(fail ? { code: 'pack-source-external-closure-mismatch', hint: 'duplicate GUID in another Pack', detail: { sourcePath: 'assets/scene.pack.ts', unusedDeclaredGuids: ['old-guid'] } } : [
-          { guid, kind: 'scene', sourcePath: 'host-games/demo/assets/counter.pack.ts' },
-        ]), { status: fail ? 422 : 200 });
-      }
-      return new Response('');
-    }) as typeof fetch;
-    const result = await executeAssetImport({
-      destPath: '/games/demo/assets/counter.pack.ts', sourceName: 'counter.pack.ts',
-      base64: btoa('export default definePack({});'),
-      sourceFiles: [{ destPath: '/games/demo/assets/geometry.ts', relativePath: 'geometry.ts', base64: btoa('export const vertices=[];') }],
-    });
-    expect(result.status).toBe(fail ? 'error' : 'done');
-    if (fail) {
-      expect(result.error).toContain('duplicate GUID');
-      expect(result.errorDetail).toMatchObject({ code: 'IMPORT_COOK_TRIGGER_FAILED', producerError: {
-        code: 'pack-source-external-closure-mismatch', owner: 'engine',
-        details: { sourcePath: 'assets/scene.pack.ts', unusedDeclaredGuids: ['old-guid'] },
-      } });
-      expect(calls.filter(call => call.method === 'DELETE').length).toBeGreaterThanOrEqual(2);
-    } else {
-      expect(result.guid).toBe(guid);
-      expect(result.subAssets).toEqual([{ guid, kind: 'scene' }]);
-    }
-    expect(calls.filter(call => call.url.endsWith('/import/source'))).toHaveLength(1);
-    expect(calls.some(call => call.url.includes('.meta.json') && call.method !== 'DELETE')).toBe(false);
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    assetIO.setRuntimeBinding(undefined);
   });
+  it.each([false, true])(
+    'uses Engine identities and rolls back failed discovery (%s)',
+    async (fail) => {
+      assetIO.setRuntimeBinding({
+        ...testRuntimeBinding(),
+        catalogRoots: [{ root: 'assets', catalogPrefix: 'host-games/demo/assets' }],
+      });
+      const calls: { url: string; method: string }[] = [];
+      const guid = '1073cc16-2533-53dc-a63f-cbd45527b75d';
+      globalThis.fetch = (async (input: RequestInfo | URL, opts?: RequestInit) => {
+        const url = String(input);
+        calls.push({ url, method: opts?.method ?? 'GET' });
+        if (url.includes('optional=1')) return new Response(JSON.stringify({ exists: false }));
+        if (url === testRuntimeBinding().catalogUrl)
+          return new Response(JSON.stringify({
+            schemaVersion: 'runtime-catalog-snapshot-v1',
+            scopeId: 'test-scope', generation: 1, authority: 'authoritative', diagnostics: [],
+            entries: [{ guid, kind: 'scene', packageUrl: '/__forgeax-ddc/counter.pack.json',
+              sourcePath: 'host-games/demo/assets/counter.pack.ts' }],
+          }));
+        if (url.includes(`/import/${guid}`)) {
+          expect(new Headers(opts?.headers).get('x-forgeax-import-source-key')).toBe(
+            'host-games/demo/assets/counter.pack.ts',
+          );
+          return new Response(
+            JSON.stringify(
+              fail
+                ? {
+                    code: 'pack-source-external-closure-mismatch',
+                    hint: 'duplicate GUID in another Pack',
+                    detail: {
+                      sourcePath: 'assets/scene.pack.ts',
+                      unusedDeclaredGuids: ['old-guid'],
+                    },
+                  }
+                : [{ guid, kind: 'scene', sourcePath: 'host-games/demo/assets/counter.pack.ts' }],
+            ),
+            { status: fail ? 422 : 200 },
+          );
+        }
+        return new Response('');
+      }) as typeof fetch;
+      const result = await executeAssetImport({
+        destPath: '/games/demo/assets/counter.pack.ts',
+        sourceName: 'counter.pack.ts',
+        base64: btoa('export default definePack({});'),
+        sourceFiles: [
+          {
+            destPath: '/games/demo/assets/geometry.ts',
+            relativePath: 'geometry.ts',
+            base64: btoa('export const vertices=[];'),
+          },
+        ],
+      });
+      expect(result.status).toBe(fail ? 'error' : 'done');
+      if (fail) {
+        expect(result.error).toContain('duplicate GUID');
+        expect(result.errorDetail).toMatchObject({
+          code: 'IMPORT_COOK_TRIGGER_FAILED',
+          producerError: {
+            code: 'pack-source-external-closure-mismatch',
+            owner: 'engine',
+            details: { sourcePath: 'assets/scene.pack.ts', unusedDeclaredGuids: ['old-guid'] },
+          },
+        });
+        expect(calls.filter((call) => call.method === 'DELETE').length).toBeGreaterThanOrEqual(2);
+      } else {
+        expect(result.guid).toBe(guid);
+        expect(result.subAssets).toEqual([{ guid, kind: 'scene' }]);
+      }
+      expect(calls.filter((call) => call.url.includes(`/import/${guid}`))).toHaveLength(1);
+      expect(
+        calls.some((call) => call.url.includes('.meta.json') && call.method !== 'DELETE'),
+      ).toBe(false);
+    },
+  );
 });

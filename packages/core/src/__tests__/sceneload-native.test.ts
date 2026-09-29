@@ -68,13 +68,12 @@ function makeRegistry(): AssetRegistry {
 function buildSceneAsset(entities: Array<{ name: string; pos: Vec3 }>) {
   return {
     kind: 'scene' as const,
-    entities: entities.map((e, i): SceneEntity => ({
-      localId: localId(i),
+    entities: Object.fromEntries(entities.map((e, i) => [`entity-${i}`, {
       components: {
         Transform: { pos: [e.pos.x, e.pos.y, e.pos.z], scale: [1, 1, 1] },
         Name: { value: e.name },
       },
-    })),
+    } satisfies SceneEntity])),
   };
 }
 
@@ -197,7 +196,7 @@ describe('M4 scene-load: loadByGuid + world.instantiateScene (RED)', () => {
     if (!sceneAssetResult.ok) { console.error('rootsToSceneAsset err:', sceneAssetResult.error); return; }
     const sceneAsset = sceneAssetResult.value;
     expect(sceneAsset.kind).toBe('scene');
-    expect(sceneAsset.entities.length).toBeGreaterThanOrEqual(2);
+    expect(Object.values(sceneAsset.entities).length).toBeGreaterThanOrEqual(2);
 
     // "Load": allocate in fresh world and instantiate.
     const worldB = createCoreTestWorld();

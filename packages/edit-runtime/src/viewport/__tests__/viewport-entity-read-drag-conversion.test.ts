@@ -77,8 +77,7 @@ describe('worldPositionToLocal — parented drag write-back', () => {
     const r0 = world.spawn({ component: Name, data: { value: 'org-node' } });
     if (!r0.ok) throw new Error('spawn failed');
     const child = spawnChild(world, r0.value);
-    const p = propagateTransforms(world);
-    if (!p.ok) throw new Error('propagateTransforms failed');
+
 
     // propagateTransforms resolveEntity: parent not in the Transform liveMap →
     // child resolves as a root (world == local), so identity IS the contract.

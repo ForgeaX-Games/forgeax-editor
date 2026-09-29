@@ -5,7 +5,7 @@ import {
   dispatchAndWaitActiveEditorOperation,
   type AuthoringToolClientTransport,
 } from '@forgeax/editor-core';
-import { readRuntimeAssetCatalog } from './runtime-asset-catalog';
+import type { RuntimeAssetCatalogRow } from './runtime-asset-catalog';
 
 export interface MeshAuthoringFailure {
   readonly code: string;
@@ -216,9 +216,14 @@ export async function saveMeshMaterialSlotDefault(input: {
   readonly slotName: string;
   readonly slotSourceKey?: string;
   readonly materialGuid?: string | null;
+  readonly catalogSnapshot: readonly RuntimeAssetCatalogRow[];
   readonly transport?: AuthoringToolClientTransport;
 }): Promise<void> {
-  const catalog = await readRuntimeAssetCatalog();
+  // The panel already used this Runtime-owned snapshot to admit the Mesh as
+  // writable and to offer the selected Material. Re-querying the replaceable
+  // Runtime here can strand the source transaction when a disk-watch refresh
+  // remounts the viewport between the click and the transport response.
+  const catalog = input.catalogSnapshot;
   const row = catalog.find((entry) => entry.guid.toLowerCase() === input.meshGuid.toLowerCase());
   if (row?.sourceKey === undefined) {
     throw new MeshAuthoringError({

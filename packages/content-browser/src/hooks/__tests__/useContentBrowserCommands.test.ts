@@ -1,6 +1,7 @@
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import { afterEach, describe, expect, it } from 'bun:test';
-import { createAppHost } from '@forgeax/interface/core/app-shell';
+import type { AppHost as ApplicationHost } from '@forgeax/app-shell/application';
+import { createTestApplicationHost } from '../../../../../scripts/test-support/application-host';
 import type { CBFile, CBFolder, CBViewItem } from '../../types';
 import { registerContentBrowserScopedCommands } from '../useContentBrowserCommands';
 
@@ -33,7 +34,7 @@ afterEach(() => {
 
 describe('Content Browser contextual commands', () => {
   it('routes identical keys to distinct focused widget targets', async () => {
-    const { host } = createAppHost();
+    const { host } = createTestApplicationHost();
     const tree = document.createElement('div');
     const grid = document.createElement('div');
     document.body.append(tree, grid);
@@ -46,7 +47,7 @@ describe('Content Browser contextual commands', () => {
     cleanups.push(
       host.keybindings.registerScope(tree, 'editor.contentBrowser.sourceTree'),
       host.keybindings.registerScope(grid, 'editor.contentBrowser.grid'),
-      ...registerContentBrowserScopedCommands(host, {
+      ...registerContentBrowserScopedCommands(host as unknown as ApplicationHost, {
         getSourceTreeItem: () => sourceTreeItem,
         getGridItem: () => gridItem,
         renameItem: (item, surface) => renamed.push({ item, surface }),

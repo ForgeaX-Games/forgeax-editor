@@ -45,7 +45,8 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { AssetError, Handle, Result, SceneAsset } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import { activeSpan, type EngineInterfaceName } from './trace';
-import { getComponentSchema as reflectEditorComponentSchema, type ComponentSchema as EditorComponentSchema } from '../scene/schema';
+import { getComponentSchema as reflectEditorComponentSchema, type ComponentSchema as EditorComponentSchema,
+} from '../scene/schema';
 
 // feat-20260708-editor-io-layer-enrich M2 (w7): the SINGLE editor-side
 // "engine interface name -> side-effect hint" table (SSOT, AC-07 / D-4). It
@@ -253,10 +254,7 @@ export class EngineFacade {
   /** Allocate a shared reference to an asset (chrome casting, not an op).
    *  Records 'world.allocSharedRef' leaf. Forwards the engine's opaque
    *  `Handle<Target, 'shared'>`. */
-  allocSharedRef<Target extends string, T>(
-    target: Target,
-    payload: T,
-  ): Handle<Target, 'shared'> {
+  allocSharedRef<Target extends string, T>(target: Target, payload: T): Handle<Target, 'shared'> {
     _recordLeaf('world.allocSharedRef');
     return this._world.allocSharedRef(target, payload);
   }
@@ -342,7 +340,10 @@ export class EngineFacade {
    *  'registry.instantiateFlat' leaf. Returns the new top-level roots. */
   instantiateSceneAssetFlat(
     asset: SceneAsset,
-  ): Result<EntityHandle[], AssetError | PackError | EcsError | { code: 'NO_REGISTRY'; hint: string }> {
+  ): Result<
+    EntityHandle[],
+    AssetError | PackError | EcsError | { code: 'NO_REGISTRY'; hint: string }
+  > {
     if (!this._registry) {
       return err({
         code: 'NO_REGISTRY' as const,
@@ -352,10 +353,7 @@ export class EngineFacade {
     _recordLeaf('world.allocSharedRef');
     const handle = this._world.allocSharedRef('SceneAsset', asset);
     _recordLeaf('registry.instantiateFlat');
-    return this._registry.instantiateFlat(
-      handle as Handle<'SceneAsset', 'shared'>,
-      this._world,
-    );
+    return this._registry.instantiateFlat(handle as Handle<'SceneAsset', 'shared'>, this._world);
   }
 
   /** Add a component to an entity. Records 'world.addComponent' leaf. */

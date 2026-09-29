@@ -11,4 +11,9 @@ describe('dynamic active-game URL prefix', () => {
     expect(configSource).not.toContain("INITIAL_GAME_DIR ? HOST_GAMES_FARM : ''");
     expect(runtimeSource).toContain('`${base}/${__FORGEAX_GAMES_URL_PREFIX__}/${id}`');
   });
+
+  test('resolves game entry via dynamic import instead of HEAD probes', () => {
+    expect(runtimeSource).toContain('import(/* @vite-ignore */ `${url}?t=${Date.now()}`)');
+    expect(runtimeSource).not.toContain("method: 'HEAD'");
+  });
 });

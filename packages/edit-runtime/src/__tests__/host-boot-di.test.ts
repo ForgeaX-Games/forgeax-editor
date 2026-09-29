@@ -137,13 +137,28 @@ function makeDeps(over?: Partial<HostSessionDeps>): {
     getSceneId: () => 'default',
     resolveGamePath: (rel: string) => `/games/g1/${rel}`,
     getActiveScenePackPath: () => '/games/g1/scene.pack.json',
-    loadDocFromDisk: async () => { log.loadDiskCalls++; return false; },
-    loadDocFromStorage: () => { log.loadStorageCalls++; return false; },
+    loadDocFromDisk: async () => {
+      log.loadDiskCalls++;
+      return false;
+    },
+    loadDocFromStorage: () => {
+      log.loadStorageCalls++;
+      return false;
+    },
     getLoadedSceneEntities: () => [],
     hasPendingDiskSave: () => false,
-    flushPendingSaveBeacon: () => { log.flushCalls++; },
-    initDiskWatch: () => { log.diskWatchStarted++; return () => { log.diskWatchStopped++; }; },
-    broadcastAssetsChanged: () => { log.broadcastCalls++; },
+    flushPendingSaveBeacon: () => {
+      log.flushCalls++;
+    },
+    initDiskWatch: () => {
+      log.diskWatchStarted++;
+      return () => {
+        log.diskWatchStopped++;
+      };
+    },
+    broadcastAssetsChanged: () => {
+      log.broadcastCalls++;
+    },
     worldEntityHandles: () => [], // empty world → scene-less game opens empty
     getSelection: () => null,
     getAssetSelection: () => null,
@@ -151,7 +166,9 @@ function makeDeps(over?: Partial<HostSessionDeps>): {
     onAssetSelectionChange: () => () => {},
     installSaveBeaconListeners: (_flush: () => void) => {
       log.beaconInstalled++;
-      return () => { log.beaconDisposed++; };
+      return () => {
+        log.beaconDisposed++;
+      };
     },
     ...over,
   };
@@ -166,15 +183,34 @@ function makeCtx(over?: Partial<HostSessionContext>): HostSessionContext {
   const ctx = {
     app: { start() {}, pause: () => ({ ok: true }), resume: () => ({ ok: true }) },
     world: {} as never,
-    renderer: { assets: { loadByGuid: async () => ({ ok: false, error: { code: 'miss' } }) }, store: {} },
+    renderer: {
+      assets: { loadByGuid: async () => ({ ok: false, error: { code: 'miss' } }) },
+      store: {},
+    },
     cameraEntity: 0,
     viewport: { resetCamera() {} },
     viewportContainer: {} as never,
-    emitBoot: (m: string) => { emitCalls.push(m); },
-    setBootStage: (s: string) => { stageCalls.push(s); },
+    emitBoot: (m: string) => {
+      emitCalls.push(m);
+    },
+    setBootStage: (s: string) => {
+      stageCalls.push(s);
+    },
     discoverGameCameraFromWorld: () => {},
     applyActiveCamera: () => {},
-    playInput: { sample: () => ({ downKeys: new Set(), upKeys: new Set(), buttons: [false, false, false], movementX: 0, movementY: 0, wheelDelta: 0, focused: true, pointerLocked: false }), detach() {} },
+    playInput: {
+      sample: () => ({
+        downKeys: new Set(),
+        upKeys: new Set(),
+        buttons: [false, false, false],
+        movementX: 0,
+        movementY: 0,
+        wheelDelta: 0,
+        focused: true,
+        pointerLocked: false,
+      }),
+      detach() {},
+    },
     createPlayDrawSource: () => () => undefined,
     physics: undefined,
     onPlayStarted: () => {},
@@ -205,9 +241,16 @@ describe('resolveEditPhysics — reads getSceneId via deps, fetch injected (AC-0
     expect(spy.calls.length).toBe(0);
   });
 
-  it('reads forge.physics through the injected fetch and maps 3d → rapier-3d', async () => {
+  it('reads the declared rapier3d plugin through the injected fetch', async () => {
     const spy = makeFetchSpy(() =>
-      Promise.resolve(forgeResponse({ id: 'g1', name: 'G1', schemaVersion: '1.0.0', physics: '3d' })),
+      Promise.resolve(
+        forgeResponse({
+          id: 'g1',
+          name: 'G1',
+          schemaVersion: '2.0.0',
+          plugins: [{ id: 'physics', name: '@forgeax/engine/physics/rapier3d', realm: 'engine' }],
+        }),
+      ),
     );
     const { deps } = makeDeps({ fetch: spy.fetch, getSceneId: () => 'shoot' });
     const host = createHostSession(deps);
@@ -216,10 +259,27 @@ describe('resolveEditPhysics — reads getSceneId via deps, fetch injected (AC-0
     expect(spy.calls[0]).toContain(encodeURIComponent('/games/g1/forge.json'));
   });
 
-  it('maps physics:true → rapier-3d and 2d → rapier-2d (OOS-1 mapping preserved)', async () => {
+  it('selects the declared physics plugin and ignores disabled entries', async () => {
     const mk = (physics: unknown) => {
       const spy = makeFetchSpy(() =>
-        Promise.resolve(forgeResponse({ id: 'g1', name: 'G1', schemaVersion: '1.0.0', physics })),
+        Promise.resolve(
+          forgeResponse({
+            id: 'g1',
+            name: 'G1',
+            schemaVersion: '2.0.0',
+            plugins: [
+              {
+                id: 'physics',
+                name:
+                  physics === '2d'
+                    ? '@forgeax/engine/physics/rapier2d'
+                    : '@forgeax/engine/physics/rapier3d',
+                realm: 'engine',
+                disabled: physics === false,
+              },
+            ],
+          }),
+        ),
       );
       const { deps } = makeDeps({ fetch: spy.fetch, getSceneId: () => 'shoot' });
       return createHostSession(deps).resolveEditPhysics();
@@ -238,6 +298,22 @@ describe('resolveEditPhysics — reads getSceneId via deps, fetch injected (AC-0
 });
 
 describe('createBootstrapResolver — one module evaluation, fresh-world bootstrap (P9a)', () => {
+  it('does not probe legacy entry files for a plugin-only project', async () => {
+    const urls: string[] = [];
+    const resolver = createBootstrapResolver({
+      readForgeForPlay: async () => ({}),
+      resolveGameFsBase: async () => '/@fs/games/template',
+      getSceneId: () => 'template',
+      importModule: async (url) => {
+        urls.push(url);
+        throw new Error('missing module');
+      },
+    });
+    expect(await resolver()).toBeNull();
+    expect(await resolver()).toBeNull();
+    expect(urls).toEqual([]);
+  });
+
   it('imports a state-registering entry once and returns its bootstrap across Play cycles', async () => {
     let imports = 0;
     const bootstrap = () => {};
@@ -257,13 +333,31 @@ describe('createBootstrapResolver — one module evaluation, fresh-world bootstr
     expect(imports).toBe(1);
   });
 
+  it('resolves a default-export Cordis plugin from the configured entry module', async () => {
+    const plugin = { name: 'game-3d', inject: ['world', 'gameHost'], apply() {} };
+    const resolveBootstrap = createBootstrapResolver({
+      readForgeForPlay: async () => ({ entry: 'src/main.ts' }),
+      resolveGameFsBase: async () => '/@fs/games/game-3d',
+      getSceneId: () => 'game-3d',
+      importModule: async (url) => {
+        expect(url).toBe('/@fs/games/game-3d/src/main.ts');
+        return { default: plugin };
+      },
+    });
+
+    expect(await resolveBootstrap()).toBe(plugin);
+  });
+
   it('caches a missing bootstrap after trying each documented entry candidate once', async () => {
     const urls: string[] = [];
     const resolveBootstrap = createBootstrapResolver({
       readForgeForPlay: async () => ({ entry: 'main.ts' }),
       resolveGameFsBase: async () => '/@fs/games/p9a',
       getSceneId: () => 'p9a',
-      importModule: async (url) => { urls.push(url); return {}; },
+      importModule: async (url) => {
+        urls.push(url);
+        return {};
+      },
     });
 
     expect(await resolveBootstrap()).toBeNull();
@@ -353,6 +447,8 @@ describe('installPreviewSkinHook (via initHostSession) — fetch injected, no ne
     await flush();
     // the preview-skin hook issued at least one forge read via the injected fetch.
     expect(spy.calls.length).toBeGreaterThan(0);
-    expect(spy.calls.some((p) => p.includes(encodeURIComponent('/games/g1/forge.json')))).toBe(true);
+    expect(spy.calls.some((p) => p.includes(encodeURIComponent('/games/g1/forge.json')))).toBe(
+      true,
+    );
   });
 });

@@ -10,6 +10,7 @@
 // The values below are policy, not engine schema. Component existence and field
 // validation remain owned by the engine-reflected component schema at apply time.
 
+import { DirectionalShadowFilterValue } from '@forgeax/engine-render';
 import type { ApplyResult, EditorOp } from '../types';
 import type { DocApplierCtx } from './document';
 
@@ -29,20 +30,20 @@ type PresetPatches = Readonly<Record<string, Readonly<Record<string, unknown>>>>
  */
 export const VISUAL_QUALITY_PATCHES: Readonly<Record<VisualQualityPreset, PresetPatches>> = {
   draft: {
-    Camera: { bloom: 0, bloomBlurRadius: 2 },
-    DirectionalLight: { mapSize: 1024, cascadeCount: 2, pcfKernelSize: 1 },
+    Camera: { bloom: 0 },
+    DirectionalLight: { mapSize: 1024, cascadeCount: 2, shadowFilter: DirectionalShadowFilterValue.pcf1 },
     PointLightShadow: { mapSize: 256, pcfKernelSize: 1 },
     SpotLight: { mapSize: 1024, pcfKernelSize: 1 },
   },
   balanced: {
-    Camera: { bloom: 1, bloomBlurRadius: 4 },
-    DirectionalLight: { mapSize: 2048, cascadeCount: 4, pcfKernelSize: 3 },
+    Camera: { bloom: 1 },
+    DirectionalLight: { mapSize: 2048, cascadeCount: 4, shadowFilter: DirectionalShadowFilterValue.pcf3 },
     PointLightShadow: { mapSize: 512, pcfKernelSize: 3 },
     SpotLight: { mapSize: 2048, pcfKernelSize: 3 },
   },
   cinematic: {
-    Camera: { bloom: 1, bloomBlurRadius: 8 },
-    DirectionalLight: { mapSize: 4096, cascadeCount: 4, pcfKernelSize: 5 },
+    Camera: { bloom: 1 },
+    DirectionalLight: { mapSize: 4096, cascadeCount: 4, shadowFilter: DirectionalShadowFilterValue.pcf5 },
     PointLightShadow: { mapSize: 1024, pcfKernelSize: 5 },
     SpotLight: { mapSize: 4096, pcfKernelSize: 5 },
   },

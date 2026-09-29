@@ -62,24 +62,32 @@ function throwIfAborted(signal: AbortSignal): void {
     : captureError('viewport capture timed out');
 }
 
+function runAbortCleanup(cleanup: () => void): void {
+  try {
+    cleanup();
+  } catch {
+    // Cleanup hooks (e.g. cancelAnimationFrame on partial Window mocks) must not block settlement.
+  }
+}
+
 function waitForAbortable<T>(operation: Promise<T>, signal: AbortSignal, cleanup: () => void = () => {}): Promise<T> {
   throwIfAborted(signal);
   return new Promise<T>((resolve, reject) => {
     const abort = () => {
       signal.removeEventListener('abort', abort);
-      cleanup();
+      runAbortCleanup(cleanup);
       reject(signal.reason instanceof Error ? signal.reason : captureError('viewport capture timed out'));
     };
     signal.addEventListener('abort', abort, { once: true });
     operation.then(
       (value) => {
         signal.removeEventListener('abort', abort);
-        cleanup();
+        runAbortCleanup(cleanup);
         if (!signal.aborted) resolve(value);
       },
       (error: unknown) => {
         signal.removeEventListener('abort', abort);
-        cleanup();
+        runAbortCleanup(cleanup);
         reject(error);
       },
     );
@@ -146,7 +154,11 @@ function waitForPresentedFrame(doc: Document, signal: AbortSignal): Promise<void
   let frame = 0;
   return waitForAbortable(new Promise<void>((resolve) => {
     frame = view.requestAnimationFrame(() => resolve());
-  }), signal, () => view.cancelAnimationFrame(frame));
+  }), signal, () => {
+    if (typeof view.cancelAnimationFrame === 'function') {
+      view.cancelAnimationFrame(frame);
+    }
+  });
 }
 
 function renderedChildren(source: Element): Iterable<Node> {

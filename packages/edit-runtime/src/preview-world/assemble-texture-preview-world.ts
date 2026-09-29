@@ -16,7 +16,7 @@ import {
   TONEMAP_NONE,
 } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
-import type { Handle, MaterialAsset, TextureAsset } from '@forgeax/engine-types';
+import type { MaterialAsset, MaterialValue, TextureAsset } from '@forgeax/engine-types';
 import type { TexturePreviewPrimitive } from '@forgeax/engine-preview';
 import type { EngineFacade } from '@forgeax/editor-core';
 import type { TexturePreviewViewState } from './texture-preview-view-state';
@@ -60,7 +60,7 @@ export interface TexturePreviewAssembly {
   readonly materialHandle: unknown;
   readonly dimensions: TexturePreviewDimensions;
   readonly enginePrimitive?: TexturePreviewPrimitive;
-  replaceTexture(texture: TextureAsset, textureHandle: Handle<'TextureAsset', 'shared'>, view: TexturePreviewViewState): void;
+  replaceTexture(texture: TextureAsset, textureHandle: unknown, view: TexturePreviewViewState): void;
   applyViewState(view: TexturePreviewViewState): void;
   applyOrthoView(ortho: TexturePreviewOrthoView): void;
   resetOrthoView(): void;
@@ -103,7 +103,7 @@ export function assembleTexturePreviewWorld(facade: EngineFacade): TexturePrevie
   let orthoView: TexturePreviewOrthoView = { ...DEFAULT_TEXTURE_ORTHO_VIEW };
   let viewState: TexturePreviewViewState | undefined;
   let enginePrimitive: TexturePreviewPrimitive | undefined;
-  let boundTextureHandle: Handle<'TextureAsset', 'shared'> | undefined;
+  let boundTextureHandle: unknown;
   let activeMaterialHandle = materialHandle;
   let activeTexture: TextureAsset | undefined;
 
@@ -135,10 +135,11 @@ export function assembleTexturePreviewWorld(facade: EngineFacade): TexturePrevie
 
   const rebuildMaterial = (texture: TextureAsset, view: TexturePreviewViewState): void => {
     const colorSpace = resolveDisplayColorSpace(texture, view.colorSpaceDisplay);
-    const payload = Materials.unlit([1, 1, 1, 1], {
-      colorSpace,
-      ...(boundTextureHandle === undefined ? {} : { baseColorTexture: boundTextureHandle }),
-    }) as MaterialAsset;
+    const base = Materials.unlit([1, 1, 1, 1], {
+      ...(boundTextureHandle === undefined ? {} : { baseColorTexture: boundTextureHandle as MaterialValue }),
+    });
+    if (base.parent !== undefined) throw new Error("Texture preview requires a root material");
+    const payload: MaterialAsset = { ...base, colorSpace };
     activeMaterialHandle = facade.allocSharedRef('MaterialAsset', payload);
     facade.set(subject, MeshRenderer, { materials: [activeMaterialHandle] }).unwrap();
   };
@@ -152,7 +153,10 @@ export function assembleTexturePreviewWorld(facade: EngineFacade): TexturePrevie
     replaceTexture(texture, textureHandle, view) {
       boundTextureHandle = textureHandle;
       activeTexture = texture;
-      dimensions = { width: texture.width, height: texture.height };
+      dimensions = {
+        width: texture.shape.extent.width,
+        height: texture.shape.extent.height,
+      };
       viewState = view;
       rebuildMaterial(texture, view);
       syncSubject();

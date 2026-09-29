@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { BUN_EXECUTABLE } from '../ci/bun-runtime.mjs';
@@ -654,5 +654,25 @@ test('baseline CLI consumes the collector top-level raw packet reference', () =>
     expect(JSON.parse(result.stdout).rawPacket).toEqual(input.rawPacket);
   } finally {
     rmSync(tempDir, {recursive: true, force: true});
+  }
+});
+
+test('update dry-run does not require the yaml npm package at CLI startup', () => {
+  const yamlPath = join(root, 'node_modules', 'yaml');
+  if (!existsSync(yamlPath)) {
+    const result = runFx(['update', '--dry-run']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('root');
+    return;
+  }
+
+  const backupPath = join(root, 'node_modules', '.yaml-hidden-for-update-test');
+  renameSync(yamlPath, backupPath);
+  try {
+    const result = runFx(['update', '--dry-run']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('root');
+  } finally {
+    renameSync(backupPath, yamlPath);
   }
 });

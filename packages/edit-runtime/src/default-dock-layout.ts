@@ -10,9 +10,26 @@
 // language switch, so what the user sees is always locale-correct and live.
 // Keeping plain English seeds here (instead of a second i18n lookup) avoids a
 // duplicate string source. The `chat` tab keeps the "ForgeaX CLI" brand string.
-import type { PanelRenderers } from '@forgeax/interface/components/DockShell/panelRenderers';
+import type { PanelRenderers } from '@forgeax/app-shell/application';
 
-type SerializedDockview = NonNullable<PanelRenderers['builtinPageLayouts']>[string];
+type SerializedDockview = NonNullable<PanelRenderers['builtinPageLayouts']>[string] & {
+  readonly edgeGroups?: {
+    readonly top?: SerializedEdgeGroup;
+    readonly bottom?: SerializedEdgeGroup;
+    readonly left?: SerializedEdgeGroup;
+    readonly right?: SerializedEdgeGroup;
+  };
+};
+type SerializedEdgeGroup = {
+  readonly size: number;
+  readonly visible: boolean;
+  readonly collapsed?: boolean;
+  readonly group?: {
+    readonly id?: string;
+    readonly views?: readonly string[];
+    readonly activeView?: string;
+  };
+};
 type Orientation = SerializedDockview['grid']['orientation'];
 
 /** The default dock arrangement for the editor's live panel manifest. */

@@ -1,17 +1,26 @@
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  assertPackRebindFailureContract,
   isTargetNativePackage,
   normalizePortableFileModes,
   PACKAGED_VITE_HELPERS,
-  playRuntimeDesktopDependencyNames,
   rewritePackagedViteConfig,
+  stageEditorDesktopEngineRuntime,
 } from '../stage-desktop-engine-runtime';
 
 describe('desktop Engine runtime producer', () => {
+  test('loads the source Play Vite config under Node without externalizing TypeScript helpers', () => {
+    const result = spawnSync('node', ['--input-type=module', '-e',
+      `import { loadConfigFromFile } from 'vite';
+       const config = await loadConfigFromFile({ command: 'serve', mode: 'development' }, 'packages/play-runtime/vite.config.ts');
+       if (!config) throw new Error('Play config was not loaded');`,
+    ], { cwd: resolve(import.meta.dir, '../..'), encoding: 'utf8', timeout: 30_000 });
+    expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: '' });
+  }, 35_000);
+
   test('separates native packages and binary-bearing packages from common files', () => {
     const root = mkdtempSync(join(tmpdir(), 'editor-engine-native-'));
     mkdirSync(join(root, 'prebuilds/darwin-arm64'), { recursive: true });
@@ -31,8 +40,6 @@ describe('desktop Engine runtime producer', () => {
 
   test('rewrites mapped helpers across static, side-effect, and dynamic imports only', () => {
     const helper = PACKAGED_VITE_HELPERS[0];
-    expect(helper).toBeDefined();
-    if (helper === undefined) return;
     const source = [
       `import { helper } from '${helper.importPath}';`,
       `import '${helper.importPath}';`,
@@ -68,46 +75,54 @@ describe('desktop Engine runtime producer', () => {
     expect(() => rewritePackagedViteConfig(source)).not.toThrow();
   });
 
-  test('packaged engine Vite helper prefers the browser export over Node import', () => {
-    const root = mkdtempSync(join(tmpdir(), 'editor-engine-browser-export-'));
-    const outfile = join(root, 'engine-vite-preset.mjs');
-    const source = resolve(import.meta.dir, '../vite/engine-vite-preset.ts');
-    const built = Bun.spawnSync({
-      cmd: [process.execPath, 'build', source, '--target=node', '--packages=external', '--outfile', outfile],
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    expect(new TextDecoder().decode(built.stderr)).toBe('');
-    expect(built.exitCode).toBe(0);
-    const bundled = readFileSync(outfile, 'utf8');
-    expect(bundled).toContain('function resolveBrowserPackageExportPath');
-    expect(bundled).toContain('entry?.browser');
-    expect(bundled.indexOf('entry?.browser')).toBeLessThan(bundled.indexOf('entry?.import'));
-    expect(bundled).toContain('resolveBrowserPackageExportPath(manifest.exports?.[exportKey])');
-    rmSync(root, { recursive: true, force: true });
-  });
+  test('generates a common artifact whose packaged Vite config resolves every bundled helper', () => {
+    const root = mkdtempSync(join(tmpdir(), 'editor-engine-common-artifact-'));
+    const output = join(root, 'common');
+    try {
+      stageEditorDesktopEngineRuntime(output, 'common');
 
-  test('desktop Play closure declares the public engine umbrella so packaged node_modules receive it', () => {
-    expect(playRuntimeDesktopDependencyNames()).toContain('@forgeax/engine');
-    const staging = readFileSync(resolve(import.meta.dir, '../stage-desktop-engine-runtime.ts'), 'utf8');
-    expect(staging).toContain('for (const name of Object.keys(play.dependencies ?? {})) visit(name, PLAY_ROOT, true)');
-    expect(PACKAGED_VITE_HELPERS.map((helper) => helper.source)).toEqual([
-      'scripts/vite/engine-vite-preset.ts',
-      'scripts/vite/ddc-root-policy.ts',
-    ]);
-  });
-
-  test('fails closed when Pack would return a restored binding as candidate success', () => {
-    expect(() => assertPackRebindFailureContract(
-      'return restoredSession?.runtimeScope() ?? binding;',
-    )).toThrow('does not propagate a failed candidate rebind');
-    expect(() => assertPackRebindFailureContract(
-      'throw failedRebindFailure;',
-    )).not.toThrow();
-  });
+      for (const file of ['DejaVuSansMono.ttf', 'DejaVuSansMono.ttf.meta.json', 'DejaVuSansMono.atlas.png', 'DejaVuSansMono.font.pack.json']) {
+        expect(existsSync(join(output, 'engine/forgeax-engine-assets/dejavu-fonts', file))).toBe(true);
+      }
+      const config = join(output, 'engine/vite.config.ts');
+      const configSource = readFileSync(config, 'utf8');
+      // Inspect the actual product config, not only the known helper list.
+      for (const { path } of new Bun.Transpiler({ loader: 'ts' }).scanImports(configSource)) {
+        if (path.startsWith('.')) expect(resolve(dirname(config), path).startsWith(`${dirname(config)}/`)).toBe(true);
+        if (!path.startsWith('node:')) expect(() => Bun.resolveSync(path, dirname(config))).not.toThrow();
+      }
+      for (const helper of PACKAGED_VITE_HELPERS) {
+        const helperImport = `./${helper.output}`;
+        expect(configSource).toContain(`from '${helperImport}'`);
+        const helperPath = resolve(dirname(config), helperImport);
+        expect(existsSync(helperPath)).toBe(true);
+        expect(realpathSync(helperPath)).toBe(realpathSync(join(output, 'engine', helper.output)));
+        // Bundled helpers must not retain source-tree imports that only resolve
+        // in the Editor checkout, especially Play's host-side route handlers.
+        const helperSource = readFileSync(helperPath, 'utf8');
+        for (const { path } of new Bun.Transpiler({ loader: 'js' }).scanImports(helperSource)) {
+          if (path.startsWith('.')) expect(() => Bun.resolveSync(path, dirname(helperPath))).not.toThrow();
+        }
+      }
+      const modules = join(output, 'engine/node_modules');
+      for (const name of ['@types/node', 'typescript', 'vitest']) {
+        expect(existsSync(join(modules, name, 'package.json'))).toBe(true);
+      }
+      expect(JSON.parse(readFileSync(join(modules, 'typescript/package.json'), 'utf8')).version).toBe('6.0.3');
+      const visit = (directory: string): void => {
+        for (const entry of readdirSync(directory, { withFileTypes: true })) {
+          const path = join(directory, entry.name);
+          if (lstatSync(path).isSymbolicLink()) throw new Error(`packaged dependency remains a symlink: ${path}`);
+          if (entry.isDirectory()) visit(path);
+        }
+      };
+      visit(modules);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 120_000);
 
   test('normalizes transported common artifact files to portable non-executable modes', () => {
-    if (process.platform === 'win32') return;
     const root = mkdtempSync(join(tmpdir(), 'editor-engine-common-modes-'));
     const files = ['node_modules/example/bin.js', 'node_modules/example/nested/module.wasm'];
     for (const file of files) {

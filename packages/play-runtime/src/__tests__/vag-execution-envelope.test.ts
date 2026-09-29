@@ -3,22 +3,34 @@ import { VagCarrierHeartbeatSchema } from '@forgeax/editor-core/protocol';
 import { toVagExecutionEnvelope } from '../vag-execution-envelope';
 
 const fatReport = {
-  schemaVersion: 1 as const,
-  requestedTier: 'auto' as const,
-  actualTier: 'main-serial' as const,
-  selectionReason: 'auto-main-serial' as const,
+  schemaVersion: 2 as const,
+  workers: {
+    engine: { requested: 'auto' as const, enabled: false, reason: 'capability-unavailable' as const, missingCapabilities: ['worker' as const] },
+    render: { requested: false as const, enabled: false, reason: 'disabled' as const, missingCapabilities: [] },
+    kernels: { requested: false as const, enabled: false, reason: 'disabled' as const, missingCapabilities: [] },
+  },
   sharedEvidencePassed: false,
   capabilities: { worker: { available: false, reason: 'test' } },
   engine: { realm: 'host' as const, health: 'running' as const },
   world: { identity: 'world-a', health: 'healthy', partialWrite: false, retryable: false },
   kernelDispatch: {
-    eligible: false, usedShared: false, reason: 'forced-inline' as const, dispatched: 0, completed: 0,
+    eligible: false,
+    usedShared: false,
+    reason: 'forced-inline' as const,
+    dispatched: 0,
+    completed: 0,
   },
   performance: {
-    hostFrameMs: null, engineUpdateMs: null, kernelWaitMs: null, hostAudioMs: null,
+    hostFrameMs: null,
+    engineUpdateMs: null,
+    kernelWaitMs: null,
+    hostAudioMs: null,
   },
   audio: {
-    owner: 'host' as const, contextState: 'running' as const, activeSourceCount: 0, lastError: null,
+    owner: 'host' as const,
+    contextState: 'running' as const,
+    activeSourceCount: 0,
+    lastError: null,
   },
   fault: {
     source: 'runtime' as const,
@@ -53,10 +65,8 @@ const heartbeatBase = {
 describe('VAG execution envelope', () => {
   test('projects a fat engine ExecutionReport onto the carrier wire subset', () => {
     expect(toVagExecutionEnvelope(fatReport)).toEqual({
-      schemaVersion: 1,
-      requestedTier: 'auto',
-      actualTier: 'main-serial',
-      selectionReason: 'auto-main-serial',
+      schemaVersion: 2,
+      workers: fatReport.workers,
       engine: { realm: 'host', health: 'running' },
       fault: { code: 'renderer-error', hint: 'inspect the renderer' },
     });
@@ -64,13 +74,23 @@ describe('VAG execution envelope', () => {
 
   test('heartbeat schema accepts the projected envelope and not the fat report extras as required fields', () => {
     const projected = toVagExecutionEnvelope(fatReport);
-    expect(VagCarrierHeartbeatSchema.safeParse({
-      type: 'VAG_CARRIER_HEARTBEAT',
-      payload: { ...heartbeatBase, execution: projected },
-    }).success).toBe(true);
-    expect(VagCarrierHeartbeatSchema.safeParse({
-      type: 'VAG_CARRIER_HEARTBEAT',
-      payload: { ...heartbeatBase, execution: fatReport },
-    }).success).toBe(true);
+    expect(
+      VagCarrierHeartbeatSchema.safeParse({
+        type: 'VAG_CARRIER_HEARTBEAT',
+        payload: { ...heartbeatBase, execution: projected },
+      }).success,
+    ).toBe(true);
+    expect(
+      VagCarrierHeartbeatSchema.safeParse({
+        type: 'VAG_CARRIER_HEARTBEAT',
+        payload: { ...heartbeatBase, execution: fatReport },
+      }).success,
+    ).toBe(true);
   });
+});
+
+test('rejects obsolete or malformed execution reports instead of advertising them', () => {
+  expect(toVagExecutionEnvelope({ ...fatReport, schemaVersion: 1 })).toBeNull();
+  expect(toVagExecutionEnvelope({ ...fatReport, workers: {} })).toBeNull();
+  expect(toVagExecutionEnvelope(undefined)).toBeNull();
 });

@@ -18,6 +18,7 @@ import { ENGINE_EXECUTION_ISOLATION_HEADERS, engineVitePreset } from '../../scri
 import { readWorktreePorts, resolveWorktreePorts } from '../../scripts/lib/worktree-ports';
 import { runtimeScopePath, type RuntimeAssetBinding } from '@forgeax/engine-types';
 import { resolveDdcRootPolicy } from '../../scripts/vite/ddc-root-policy';
+import { resolveViteFsAllowRoots } from '../../scripts/vite/vite-fs-allow';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const worktreeRoot = resolve(here, '../..');
@@ -85,6 +86,9 @@ const enginePreset = engineVitePreset({
   preserveSymlinks: false,
   ...(STANDALONE_RUNTIME_BINDING === undefined ? {} : { runtimeBinding: STANDALONE_RUNTIME_BINDING }),
 });
+const CLIENT_RUNTIME_BINDING = STANDALONE_RUNTIME_BINDING === undefined
+  ? undefined
+  : { ...STANDALONE_RUNTIME_BINDING, catalogRoots: enginePreset.catalogRoots };
 export default defineConfig({
   root: here,
   base: BASE,
@@ -98,7 +102,7 @@ export default defineConfig({
   define: {
     __FORGEAX_GAME_DIR_ABS__: JSON.stringify(GAME_DIR_ABS),
     __FORGEAX_GAME_SLUG__: JSON.stringify(GAME_SLUG),
-    __FORGEAX_RUNTIME_BINDING__: JSON.stringify(STANDALONE_RUNTIME_BINDING ?? null),
+    __FORGEAX_RUNTIME_BINDING__: JSON.stringify(CLIENT_RUNTIME_BINDING ?? null),
     __FORGEAX_CATALOG_ASSET_ROOTS__: JSON.stringify(enginePreset.catalogRoots),
   },
   plugins: [
@@ -114,12 +118,12 @@ export default defineConfig({
     open: false,
     headers: ENGINE_EXECUTION_ISOLATION_HEADERS,
     watch: { usePolling: true, interval: 300, ignored: ['**/node_modules/**'] },
-    // fs.allow: editor tree (here + repo root) PLUS the standalone `--game DIR`
-    // when it lives OUTSIDE the editor tree (e.g. a sibling forgeax-engine
-    // template). Without this the Play `@fs<gameDir>/main.ts` transform is
-    // refused by vite's fs guard. GAME_DIR_ABS null (embedded studio) -> unchanged.
     fs: {
-      allow: [here, resolve(here, '../../..'), ...(GAME_DIR_ABS ? [GAME_DIR_ABS] : [])],
+      allow: resolveViteFsAllowRoots({
+        packageDir: resolve(here, '../../..'),
+        gameDir: GAME_DIR_ABS,
+        extra: [here],
+      }),
       strict: false,
     },
     // HMR clientPort: when vite runs behind a reverse proxy the browser must

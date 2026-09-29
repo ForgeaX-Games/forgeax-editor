@@ -11,7 +11,11 @@ import {
   setMaterialPreviewParam,
   subscribeMaterialPreviewParams,
 } from '../assets/material-preview-staging';
-import { openMaterialStaging, patchMaterialStagingParam } from '../assets/material-staging';
+import {
+  openMaterialStaging,
+  patchMaterialStagingParam,
+  resetMaterialStagingParam,
+} from '../assets/material-staging';
 
 const GUID = 'aaaaaaaa-0000-4000-8000-000000000001';
 
@@ -109,6 +113,29 @@ describe('material-preview-staging', () => {
     setMaterialPreviewParam(guid, 'baseColor', [1, 0, 0, 1]);
     clearMaterialPreviewParams(guid, ['baseColor']);
     expect(resolveMaterialPreviewDisplayValues(guid, lookup).baseColor).toEqual([0.2, 0.3, 0.4, 1]);
+    clearMaterialPreviewParams(guid);
+  });
+
+  it('first-edit reset keeps color after overlay clear (pre-save dirty path)', () => {
+    const guid = 'ffffffff-0000-4000-8000-000000000006';
+    openMaterialStaging({
+      guid,
+      packPath: 'materials/test.mat.json',
+      name: 'Test',
+      payload: { values: {} },
+      catalogFlatValues: { baseColor: [0.5, 0.5, 0.5, 1] },
+    });
+    const lookup = () => ({
+      guid,
+      kind: 'material',
+      payload: { values: { baseColor: [0.5, 0.5, 0.5, 1] } },
+    });
+    patchMaterialStagingParam(guid, { baseColor: [0.1, 0.2, 0.3, 1] });
+    setMaterialPreviewParam(guid, 'baseColor', [0.1, 0.2, 0.3, 1]);
+    resetMaterialStagingParam(guid, 'baseColor', [1, 1, 1, 1]);
+    clearMaterialPreviewParams(guid, ['baseColor']);
+    const resolved = resolveMaterialPreviewDisplayValues(guid, lookup);
+    expect(resolved.baseColor).toEqual([0.5, 0.5, 0.5, 1]);
     clearMaterialPreviewParams(guid);
   });
 

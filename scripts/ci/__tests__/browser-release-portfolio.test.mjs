@@ -45,7 +45,6 @@ const admissionFixture = createAdmissionEnvelope({
   submodulePins: [
     {path: 'forgeax-editor-assets', sha: 'e'.repeat(40)},
     {path: 'packages/engine', sha: 'b'.repeat(40)},
-    {path: 'packages/interface', sha: 'c'.repeat(40)},
     {path: 'packages/platform-io', sha: 'd'.repeat(40)},
   ],
   contractDigest: indexFixture.provenance.contractDigest,
@@ -87,7 +86,6 @@ function healthyMeasurementIndex() {
     admitted: {
       editorSha: indexFixture.provenance.sourceSha,
       engineSha: 'b'.repeat(40),
-      interfaceSha: 'c'.repeat(40),
       platformIoSha: 'd'.repeat(40),
       assetsSha: 'e'.repeat(40),
     },
@@ -303,14 +301,12 @@ function writeIntegrationRawSet(directory, attestor, terminalStatus = 'pass') {
       admitted: {
         editorSha: indexFixture.provenance.sourceSha,
         engineSha: 'b'.repeat(40),
-        interfaceSha: 'c'.repeat(40),
         platformIoSha: 'd'.repeat(40),
         assetsSha: 'e'.repeat(40),
       },
       admittedPins: {
         'forgeax-editor-assets': 'e'.repeat(40),
         'packages/engine': 'b'.repeat(40),
-        'packages/interface': 'c'.repeat(40),
         'packages/platform-io': 'd'.repeat(40),
       },
       sample: {id: 'sample-1', generation: indexFixture.provenance.admissionGeneration},

@@ -317,7 +317,6 @@ function admittedFromEnvelope(admission) {
   const admitted = {
     editorSha: admission.sourceSha,
     engineSha: pins.get('packages/engine'),
-    interfaceSha: pins.get('packages/interface'),
     platformIoSha: pins.get('packages/platform-io'),
     assetsSha: pins.get('forgeax-editor-assets'),
   };
@@ -327,7 +326,7 @@ function admittedFromEnvelope(admission) {
   if (invalidPins.length > 0) return admissionFailure('measurement-admission-submodule-pins-invalid', 'every admitted submodule path has a 40-hex SHA', {invalidPins, submodulePins}, 'Record the complete recursive admission pin set before measuring; do not infer a dependency pin from the current checkout.');
   return missing.length === 0
     ? {ok: true, value: {admitted, admittedPins}}
-    : admissionFailure('measurement-admission-submodule-pins-invalid', 'editorSha plus engine/interface/platform-io/assets 40-hex SHAs', {missing, submodulePins: admission.submodulePins}, 'Record the complete recursive admission pin set before measuring; do not infer a dependency pin from the current checkout.');
+    : admissionFailure('measurement-admission-submodule-pins-invalid', 'editorSha plus engine/platform-io/assets 40-hex SHAs', {missing, submodulePins: admission.submodulePins}, 'Record the complete recursive admission pin set before measuring; do not infer a dependency pin from the current checkout.');
 }
 
 export function admissionExpected(admissionPath, _contract) {

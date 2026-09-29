@@ -24,7 +24,7 @@ import { normalizePlayFailure } from './play-failure-notice';
 // `renderer.draw(world)` per-call (no cross-frame world binding), so the same
 // renderer legitimately draws the edit world and the play world on two mutually
 // exclusive frame loops. The renderer is passed into the assemble form by
-// reference; its AssetRegistry (renderer.assets) is shared, so GPU assets / pack
+// reference; the App-owned AssetRegistry is shared, so GPU assets / pack
 // caches are loaded once, not duplicated.
 //
 // AC-12 note: the `newWorld()` default below constructs `new World()` in editor
@@ -44,30 +44,36 @@ import { normalizePlayFailure } from './play-failure-notice';
 //     Finding 2 (GUID path is pure read, sidesteps fidelity hazards)
 //   AGENTS.md anti-pattern #1 (no parallel re-implementation — engine parts all exist)
 
-import { createApp, ensureFallbackCamera, inputPlugin } from '@forgeax/engine-app';
+import { createApp, ensureFallbackCamera, gameHostPlugin, inputPlugin, type App, type GameHost,
+} from '@forgeax/engine-app';
 import type { Plugin } from '@forgeax/engine-app';
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type {
+  BootstrapContext,
+  BootstrapEntry,
   GamePluginInstallResult,
   GameProjectionRegistrar,
+  PlayGameEntry,
 } from '@forgeax/editor-game-plugins';
+import { activatesBeforeScene, isNativeCordisPlugin } from '@forgeax/editor-game-plugins';
 import {
   World,
   Time,
   FixedUpdate,
   Update,
-  type EntityHandle,
-} from '@forgeax/engine-ecs';
-import { scenePlugin as transformPlugin, Transform, PROPAGATE_TRANSFORMS_SYSTEM } from '@forgeax/engine-scene';
+  type EntityHandle } from '@forgeax/engine-ecs';
+import { scenePlugin as transformPlugin, Transform, PROPAGATE_TRANSFORMS_SYSTEM,
+} from '@forgeax/engine-scene';
 import { animationPlugin } from '@forgeax/engine-animation';
 import { skinningPlugin } from '@forgeax/engine-skinning';
-import { Camera, CAMERA_PROJECTION_PERSPECTIVE, renderComponentsPlugin } from '@forgeax/engine-render';
+import { Camera, CAMERA_PROJECTION_PERSPECTIVE, renderComponentsPlugin,
+} from '@forgeax/engine-render';
 import { statePlugin } from '@forgeax/engine-state';
 import { physicsPlugin, Collider, CollidingEntities } from '@forgeax/engine-physics';
 import {
   AudioListener,
   audioBackendPlugin,
-  audioPlugin,
-} from '@forgeax/engine-audio';
+  audioPlugin } from '@forgeax/engine-audio';
 import {
   createWebAudioBackend,
   WebAudioEngine,
@@ -90,13 +96,8 @@ import { editorComponentVocabularyPlugin } from '@forgeax/editor-game-plugins';
  *  AssetRegistry — its `instantiate` spine is what resolves a scene payload's
  *  GUID-string handles → fresh per-world numeric handles before spawn. */
 export interface PlayRenderer {
-  readonly assets: unknown;
-  readonly device?: {
-    readonly caps?: {
-      readonly compute?: boolean;
-      readonly indirectDrawing?: boolean;
-    };
-  };
+  /** Legacy test seam; production passes the explicit App-owned registry below. */
+  readonly assets?: unknown;
   [k: string]: unknown;
 }
 
@@ -159,9 +160,11 @@ type PhysicsBackend = 'rapier-3d' | 'rapier-2d';
 export interface AssemblePlayWorldDeps {
   /** The single host-owned renderer (shared across edit + play worlds, D-1). */
   readonly renderer: PlayRenderer;
+  /** The App-owned Engine AssetRegistry paired with this renderer lease. */
+  readonly assetRegistry?: AssetRegistry;
   /**
    * Load the SceneAsset payload for the game's forge.json `defaultScene` GUID.
-   * Production: forge.json read → AssetGuid.parse → renderer.assets.loadByGuid.
+   * Production: forge.json read → AssetGuid.parse → assetRegistry.loadByGuid.
    * Returns null when the game has no defaultScene (graceful — play runs with an
    * empty scene, same as play-runtime's absent-defaultScene path).
    */
@@ -171,7 +174,7 @@ export interface AssemblePlayWorldDeps {
    * when the game has no runnable module (graceful — play renders the scene with
    * no game logic).
    */
-  readonly resolveBootstrap: () => Promise<((world: unknown, ctx?: unknown) => void | Promise<void>) | null>;
+  readonly resolveBootstrap: () => Promise<PlayGameEntry | null>;
   /**
    * Attach the play-side input backend to the shared canvas + pre-inject the
    * INPUT_BACKEND_KEY resource BEFORE createApp runs plugins (engine D-3 pattern).
@@ -294,6 +297,7 @@ export async function assemblePlayWorld(
   let playAppForCleanup: PlayApp | undefined;
   let detachVfx: () => void = () => {};
   let detached = false;
+  // The host still attaches the VFX simulation/runtime on every RHI, but the
   // GPU render feature is optional. The Edit renderer makes this capability
   // decision once and passes the result into the fresh Play App.
   const vfxFeatureEnabled = deps.vfxRuntimeHost !== undefined
@@ -358,12 +362,13 @@ export async function assemblePlayWorld(
   // resources do not, and setNextState returns state-not-registered in Play.
   // This resolves only the module/export; bootstrap still runs after defaultScene
   // instantiation below, so the asset-first game contract remains unchanged.
-  let entry: ((world: unknown, ctx?: unknown) => void | Promise<void>) | null;
+  let entry: PlayGameEntry | null;
   try {
     entry = await deps.resolveBootstrap();
   } catch (error) {
     detachHostResources();
-    return { ok: false, error: startupError('play-bootstrap-resolve-failed', error) };
+    return { ok: false, error: startupError('play-bootstrap-resolve-failed', error),
+    };
   }
 
   // Audio backend (round-17, P8): the assemble form does NOT auto-create the
@@ -401,7 +406,6 @@ export async function assemblePlayWorld(
     audioBackendPlugin(audioBackend),
     audioPlugin(),
     ...(deps.physics ? [physicsPlugin(deps.physics)] : []),
-    ...(deps.gamePlugins ?? []),
   ];
 
   let appRes: Awaited<ReturnType<typeof createApp>>;
@@ -409,6 +413,7 @@ export async function assemblePlayWorld(
     appRes = await createApp({
       renderer: deps.renderer as never,
       world: playWorld as never,
+      ...(deps.assetRegistry === undefined ? {} : { assets: deps.assetRegistry }),
       plugins: plugins as never,
       ...(vfxFeatureEnabled ? { features: [deps.vfxRuntimeHost!.feature] } : {}),
       ...(deps.createDrawSource ? { drawSource: deps.createDrawSource(playWorld) as never } : {}),
@@ -420,7 +425,8 @@ export async function assemblePlayWorld(
   }
   if (!appRes.ok) {
     detachHostResources();
-    return { ok: false, error: startupError('play-renderer-failed', appRes.error) };
+    return { ok: false, error: startupError('play-renderer-failed', appRes.error),
+    };
   }
   const playApp = appRes.value as unknown as PlayApp & {
     readonly renderer: unknown;
@@ -431,6 +437,17 @@ export async function assemblePlayWorld(
     readonly input?: { setPointerLockAllowed?: (allowed: boolean) => void };
   };
   playAppForCleanup = playApp;
+  const appWithPlugins = playApp as unknown as App;
+  const projectPlugins = deps.gamePlugins ?? [];
+  try {
+    for (const plugin of projectPlugins) {
+      if (activatesBeforeScene(plugin)) await appWithPlugins.pluginContext.plugin(plugin);
+    }
+  } catch (error) {
+    cleanupFailedAssembly();
+    return { ok: false, error: startupError('game-plugin-registration-failed', error),
+    };
+  }
 
   if (deps.vfxRuntimeHost !== undefined) {
     let detachedVfx = false;
@@ -451,7 +468,7 @@ export async function assemblePlayWorld(
     try {
       const attached = await deps.vfxRuntimeHost.attachWorld({
         world: playWorld as never,
-        assets: deps.renderer.assets as never,
+        assets: (deps.assetRegistry ?? deps.renderer.assets) as never,
       });
       if (!attached.ok) {
         cleanupFailedAssembly();
@@ -459,7 +476,8 @@ export async function assemblePlayWorld(
       }
     } catch (error) {
       cleanupFailedAssembly();
-      return { ok: false, error: startupError('play-vfx-host-attach-failed', error) };
+      return { ok: false, error: startupError('play-vfx-host-attach-failed', error),
+      };
     }
   }
 
@@ -481,7 +499,8 @@ export async function assemblePlayWorld(
       fn: () => {
         const query = (playWorld as World).query({ with: [AudioListener] }).unwrap();
         for (const row of query) {
-          const tf = (playWorld as { get(e: EntityHandle, c: unknown): { ok: boolean; value: { world: Float32Array } } }).get(row.entity, Transform);
+          const tf = (playWorld as { get(e: EntityHandle, c: unknown): { ok: boolean; value: { world: Float32Array } };
+              }).get(row.entity, Transform);
           if (!tf.ok) continue;
           const listener = backend.listener;
           if (listener === undefined) break;
@@ -536,7 +555,8 @@ export async function assemblePlayWorld(
           // Gate A (lint-unique-mutator) owns EDIT-world writes through the
           // EngineFacade; the play world is the game runtime's world (north
           // star §0 GameRuntimePort / D-8), outside that facade by design.
-          (playWorld as { set(e: EntityHandle, c: unknown, patch: unknown): { ok: boolean } })
+          (playWorld as { set(e: EntityHandle, c: unknown, patch: unknown): { ok: boolean };
+              })
             .set(entity, Camera, { aspect });
         }
       },
@@ -589,7 +609,8 @@ export async function assemblePlayWorld(
           targets.push(entity);
         }
         for (const e of targets) {
-          w.addComponent(e, { component: CollidingEntities, data: { entities: [] } });
+          w.addComponent(e, { component: CollidingEntities, data: { entities: [] },
+            });
         }
       },
     }).unwrap();
@@ -651,7 +672,7 @@ export async function assemblePlayWorld(
   // loadByGuid returned the SceneAsset payload — its handle-typed fields (e.g.
   // MeshFilter.assetHandle) hold GUID STRINGS (parseScenePayload resolves the
   // on-disk refs[] indices to GUIDs). Mint a scene handle on the play world, then
-  // instantiate THROUGH the AssetRegistry spine (deps.renderer.assets.instantiate)
+  // instantiate THROUGH the App-owned AssetRegistry spine
   // so _resolveSceneGuids mints those GUID strings → fresh per-world numeric
   // handles BEFORE world.instantiateScene spawns. Calling the raw
   // world.instantiateScene here (bypassing the registry) fed GUID strings into
@@ -665,14 +686,26 @@ export async function assemblePlayWorld(
     sceneAsset = await deps.loadDefaultScene();
   } catch (error) {
     cleanupFailedAssembly();
-    return { ok: false, error: startupError('play-default-scene-load-failed', error) };
+    return { ok: false, error: startupError('play-default-scene-load-failed', error),
+    };
   }
   if (sceneAsset !== null && sceneAsset !== undefined) {
     const normalizedSceneAsset = normalizeAnimationPlayerSceneAsset(sceneAsset as SceneAsset);
     defaultScene = normalizedSceneAsset;
-    const w = playWorld as { allocSharedRef(kind: string, payload: unknown): unknown };
+    const w = playWorld as { allocSharedRef(kind: string, payload: unknown): unknown;
+    };
     const handle = w.allocSharedRef('SceneAsset', normalizedSceneAsset);
-    const reg = deps.renderer.assets as SceneInstantiator;
+    const reg = (deps.assetRegistry ?? deps.renderer.assets) as SceneInstantiator | undefined;
+    if (reg === undefined) {
+      cleanupFailedAssembly();
+      return {
+        ok: false,
+        error: startupError('play-default-scene-instantiate-failed', {
+          code: 'asset-registry-unavailable',
+          hint: 'Play requires the App-owned AssetRegistry to instantiate the default scene.',
+        }),
+      };
+    }
     // reg.instantiate's Result value is the root EntityHandle directly (not { root }).
     const instRes = reg.instantiate(handle, playWorld);
     if (instRes.ok) {
@@ -680,16 +713,19 @@ export async function assemblePlayWorld(
     } else {
       console.warn('[editor] ▶ Play defaultScene instantiate failed:', instRes.error);
       cleanupFailedAssembly();
-      return { ok: false, error: startupError('play-default-scene-instantiate-failed', instRes.error) };
+      return { ok: false, error: startupError('play-default-scene-instantiate-failed', instRes.error),
+      };
     }
     const binding = bindSceneInstanceAnimationTargets(playWorld as World, defaultSceneRoot as never, {
       ensurePlayerForSkin: true,
       mutation: createEngineFacade(playWorld as World),
-    });
+    },
+    );
     if (binding.failures.length > 0) {
       console.warn('[editor] ▶ Play animation target binding failed:', binding.failures);
       cleanupFailedAssembly();
-      return { ok: false, error: startupError('play-animation-target-binding-failed', binding.failures) };
+      return { ok: false, error: startupError('play-animation-target-binding-failed', binding.failures),
+      };
     }
   }
 
@@ -705,7 +741,8 @@ export async function assemblePlayWorld(
       });
     } catch (error) {
       cleanupFailedAssembly();
-      return { ok: false, error: startupError('game-plugin-registration-failed', error) };
+      return { ok: false, error: startupError('game-plugin-registration-failed', error),
+      };
     }
     if (!installed.ok) {
       cleanupFailedAssembly();
@@ -714,36 +751,74 @@ export async function assemblePlayWorld(
     cleanups.push(() => installed.value.dispose());
   }
 
-  // ── bootstrap: run the game entry on the fresh world (same contract as
-  // play-runtime — host instantiates defaultScene BEFORE entry runs). The module
-  // was resolved before statePlugin() so module-level state tokens are registered;
-  // invoke its bootstrap only now, after the default SceneAsset is instantiated. ──
-  if (entry) {
-    const rendererAssets = (deps.renderer as { assets?: unknown }).assets;
-    const ctx = {
-      world: playWorld,
-      renderer: deps.renderer,
-      assets: rendererAssets,
-      app: playApp,
-      setPointerLockAllowed: (allowed: boolean) => playApp.input?.setPointerLockAllowed?.(allowed),
-      ...(uiRoot !== undefined ? { uiRoot } : {}),
-      registerCleanup: (fn: () => void) => { cleanups.push(fn); },
-      ...(gameProjection !== undefined ? { gameProjection: gameProjection.registrar } : {}),
-      ...(defaultSceneRoot !== undefined ? { defaultSceneRoot } : {}),
-      ...(defaultScene !== undefined ? { defaultScene } : {}),
-    };
-    try {
-      await entry(playWorld, ctx as never);
-    } catch (error) {
-      cleanupFailedAssembly();
-      return { ok: false, error: startupError('play-bootstrap-failed', error) };
+  // ── bootstrap: run forge.json plugins / legacy entry after defaultScene (same as play-runtime).
+  const rendererAssets = deps.assetRegistry ?? (deps.renderer as { assets?: unknown }).assets;
+  const ctx: BootstrapContext = {
+    renderer: deps.renderer as never,
+    assets: rendererAssets as never,
+    app: playApp as never,
+    setPointerLockAllowed: (allowed: boolean) => playApp.input?.setPointerLockAllowed?.(allowed),
+    ...(uiRoot !== undefined ? { uiRoot } : {}),
+    registerCleanup: (fn: () => void) => { cleanups.push(fn); },
+    ...(gameProjection !== undefined ? { gameProjection: gameProjection.registrar } : {}),
+    ...(defaultSceneRoot !== undefined ? { defaultSceneRoot: defaultSceneRoot as never } : {}),
+    ...(defaultScene !== undefined ? { defaultScene: defaultScene as never } : {}),
+  };
+  const buildGameHost = (): GameHost => {
+    let canvas = deps.canvas;
+    if (!canvas) {
+      const doc = deps.viewportContainer?.ownerDocument ?? (typeof document !== 'undefined' ? document : undefined);
+      if (doc) {
+        canvas = doc.createElement('canvas');
+      } else {
+        throw new Error('Editor ▶ Play requires the viewport canvas to mount native game plugins');
+      }
     }
-  } else {
-    console.warn('[editor] ▶ Play: no bootstrap entry resolved — game logic will not run');
-    // Preserve the documented empty-world fallback without masking a real
-    // game's missing authored Camera: this branch is reached only when no game
-    // bootstrap exists.
-    ensureFallbackCamera(playWorld as World);
+    return {
+      canvas,
+      renderer: deps.renderer as never,
+      assets: rendererAssets as never,
+      app: playApp as never,
+      uiRoot,
+      setPointerLockAllowed: ctx.setPointerLockAllowed,
+      ...(gameProjection !== undefined ? { gameProjection: gameProjection.registrar } : {}),
+      ...(defaultSceneRoot !== undefined ? { defaultSceneRoot: defaultSceneRoot as never } : {}),
+      ...(defaultScene !== undefined ? { defaultScene: defaultScene as never } : {}),
+    };
+  };
+  if (projectPlugins.length > 0) {
+    try {
+      await appWithPlugins.pluginContext.plugin(gameHostPlugin(buildGameHost()));
+      for (const plugin of projectPlugins) {
+        if (!activatesBeforeScene(plugin)) await appWithPlugins.pluginContext.plugin(plugin);
+      }
+    } catch (error) {
+      console.warn('[editor] ▶ Play: forge game plugins failed (scene still runs):', error);
+    }
+  }
+  try {
+    if (entry) {
+      if (isNativeCordisPlugin(entry)) {
+        if (projectPlugins.length === 0) {
+          await appWithPlugins.pluginContext.plugin(gameHostPlugin(buildGameHost()));
+        }
+        await appWithPlugins.pluginContext.plugin(entry);
+      } else if (typeof entry === 'function') {
+        await (entry as BootstrapEntry)(playWorld as World, ctx);
+      } else if (typeof entry.apply === 'function') {
+        await entry.apply(ctx);
+      } else {
+        throw new Error('play-bootstrap-entry-unrecognized');
+      }
+    } else {
+      if (projectPlugins.length === 0) {
+        console.warn('[editor] ▶ Play: no bootstrap entry resolved — game logic will not run');
+      }
+      ensureFallbackCamera(playWorld as World);
+    }
+  } catch (error) {
+    cleanupFailedAssembly();
+    return { ok: false, error: startupError('play-bootstrap-failed', error) };
   }
 
   // Generic structural world read for the Host `query_world` tool. Register it
@@ -769,7 +844,8 @@ export async function assemblePlayWorld(
             })),
             activeComponents: [...inspection.activeComponents],
             systemCount: inspection.systemCount,
-            systems: inspection.systems.map((system) => ({ name: system.name, sets: [...system.sets] })),
+            systems: inspection.systems.map((system) => ({ name: system.name, sets: [...system.sets],
+            })),
             resourceKeys: [...inspection.resourceKeys],
           };
         },
@@ -791,7 +867,8 @@ export async function assemblePlayWorld(
       playWorld,
       ...(deps.vfxRuntimeHost ? { detachBeforeStop: detachVfx } : {}),
       ...(gameProjection !== undefined
-        ? { installGameProjection: gameProjection.install, clearGameProjection: gameProjection.clear }
+        ? { installGameProjection: gameProjection.install, clearGameProjection: gameProjection.clear,
+          }
         : {}),
       detach,
     },

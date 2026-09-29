@@ -7,8 +7,7 @@ import { createAssetObserverAdapter } from '../product/asset-producer-adapter';
 import {
   ctx,
   scenePath,
-  type LastSelfSave,
-} from './scene-persistence';
+  type LastSelfSave } from './scene-persistence';
 
 // A disk change that lands within this window after a self-save, on the same
 // path and with no edit made since, is treated as our own echo even if the
@@ -18,7 +17,10 @@ export const SELF_SAVE_ECHO_WINDOW_MS = 3000;
 const normPath = (p: string): string => p.replace(/\\/g, '/');
 
 /** Ordinary source/sidecar writes refresh the catalog, not the live scene realm. */
-export function diskChangeHint(eventPath: string | undefined, activeScenePath: string | null): 'pack-changed' | 'scene-document-changed' {
+export function diskChangeHint(
+  eventPath: string | undefined,
+  activeScenePath: string | null,
+): 'pack-changed' | 'scene-document-changed' {
   return eventPath && activeScenePath && normPath(eventPath) === normPath(activeScenePath)
     ? 'scene-document-changed'
     : 'pack-changed';
@@ -122,8 +124,9 @@ export function initDiskWatch(): () => void {
   const connect = (): void => {
     if (stopped) return;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    try { ws = new WebSocket(`${proto}//${location.host}/ws`); }
-    catch { return; }
+    try {
+      ws = new WebSocket(`${proto}//${location.host}/ws`);
+    } catch { return; }
     ws.addEventListener('open', () => { backoff = 1000; });
     ws.addEventListener('message', (ev) => {
       let msg: { type?: string };

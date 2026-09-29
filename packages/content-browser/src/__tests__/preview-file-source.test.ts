@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'bun:test';
-import { fileSupportsDualPreview } from '../preview-file-source';
+import {
+  fileSupportsDualPreview,
+  isSourceViewableFileName,
+  resolveBackingFile,
+  resolveDualPreviewFile,
+} from '../preview-file-source';
 import type { CBAsset, CBFile } from '../types';
 
 const meshAsset: CBAsset = {
@@ -40,5 +45,42 @@ describe('fileSupportsDualPreview', () => {
 
   it('does not offer a toggle when there are no extracted assets', () => {
     expect(fileSupportsDualPreview(file({ family: 'code', assets: [] }))).toBe(false);
+  });
+
+  it('treats standalone .pack.json files as source-viewable', () => {
+    expect(fileSupportsDualPreview(file({
+      family: 'other',
+      name: 'IM_5.pack.json',
+      assets: [meshAsset],
+    }))).toBe(true);
+  });
+});
+
+describe('isSourceViewableFileName', () => {
+  it('recognizes pack, json, and code extensions', () => {
+    expect(isSourceViewableFileName('foo.pack.json')).toBe(true);
+    expect(isSourceViewableFileName('main.pack.ts')).toBe(true);
+    expect(isSourceViewableFileName('config.json')).toBe(true);
+    expect(isSourceViewableFileName('logic.ts')).toBe(true);
+    expect(isSourceViewableFileName('model.glb')).toBe(false);
+  });
+});
+
+describe('resolveDualPreviewFile', () => {
+  const packFile = file({
+    path: 'assets/IM_5.pack.json',
+    name: 'IM_5.pack.json',
+    family: 'pack',
+    assets: [meshAsset],
+  });
+
+  it('returns the file row for a file selection', () => {
+    expect(resolveDualPreviewFile(packFile, [packFile])).toBe(packFile);
+  });
+
+  it('returns the owning file for a promoted single-asset selection', () => {
+    const asset: CBAsset = { ...meshAsset, packPath: 'assets/IM_5.pack.json' };
+    expect(resolveBackingFile(asset, [packFile])).toBe(packFile);
+    expect(resolveDualPreviewFile(asset, [packFile])).toBe(packFile);
   });
 });

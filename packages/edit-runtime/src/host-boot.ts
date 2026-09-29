@@ -80,6 +80,7 @@ import {
 } from './viewport/host-session';
 import type { VersionControlRuntimeTransition } from './version-control/provider';
 import type { RuntimeAssetBinding } from '@forgeax/engine-types';
+import { studioBootTrace } from './viewport/studio-boot-trace';
 
 export type { HostSessionContext, HostSession, PhysicsBackend };
 
@@ -191,6 +192,12 @@ export interface HostGameSession {
  * Idempotent-safe to await once per document; call before ViewportComponent mounts.
  */
 export async function configureHostSession(session: HostGameSession = { slug: null }): Promise<void> {
+  studioBootTrace('host-session.configure.begin', {
+    slug: session.slug,
+    gameRoot: session.gameRoot ?? null,
+    hasRuntimeBinding: session.runtimeBinding !== undefined,
+    bindingGeneration: session.runtimeBinding?.generation ?? null,
+  });
   bindProjectValidation(session.runtimeBinding);
   const slug = (session.slug ?? '').trim();
   // M3 (AC-03): setSceneId is a session op — dispatch through the one gateway door.
@@ -235,6 +242,7 @@ export async function configureHostSession(session: HostGameSession = { slug: nu
   // The pack plugin's runtime contract is a sidecar-change notification.
   // Asset refresh and cache invalidation stay in the editor PanelBridge path.
   installAssetHmrBridge();
+  studioBootTrace('host-session.configure.done', { slug: slug || 'default' });
 }
 
 /**

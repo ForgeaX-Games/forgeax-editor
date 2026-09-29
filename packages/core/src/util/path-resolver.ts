@@ -67,6 +67,12 @@ export function resolveGamePath(rel: string): string {
   return resolver(rel);
 }
 
+/** Join a parent directory and child name into a game-relative path. Empty parent = game root. */
+export function joinGameRelativePath(parentPath: string, name: string): string {
+  const parent = parentPath.replace(/^\/+|\/+$/g, '');
+  return parent ? `${parent}/${name}` : name;
+}
+
 /**
  * Accept a path from a public asset descriptor/op and return the host-resolved
  * game path exactly once. Catalog rows expose host-resolved paths, while human

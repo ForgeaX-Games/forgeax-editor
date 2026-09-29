@@ -149,6 +149,7 @@ export interface RuntimeUiGraph {
   readonly publish: (options?: { readonly world?: unknown; readonly worldGeneration?: number }) => string;
   readonly stats: () => RuntimeUiStats;
   readonly mount: <T>(selector: MountedSelector<T>) => SelectorSubscription<T>;
+  readonly dispose: () => void;
 }
 
 let activeRuntimeUiGraph: RuntimeUiGraph | null = null;
@@ -161,7 +162,13 @@ export function createRuntimeUiGraph(): RuntimeUiGraph {
 
 /** Return the graph owned by the active Editor host session. */
 export function getActiveRuntimeUiGraph(): RuntimeUiGraph | null {
-  return activeRuntimeUiGraph;
+  const graph = activeRuntimeUiGraph;
+  if (graph === null) return null;
+  if (graph.stats().status === 'disposed') {
+    activeRuntimeUiGraph = null;
+    return null;
+  }
+  return graph;
 }
 
 export function createRuntimeUiOperations(graph: { stats(): RuntimeUiStats }, source = 'editor-core'): RuntimeUiOperations {

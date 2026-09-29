@@ -35,8 +35,12 @@ describe('import-run-progress-transport-poll', () => {
   });
 
   it('isBenignViewportRuntimeTransportError recognizes transient viewport transport faults', () => {
-    expect(isBenignViewportRuntimeTransportError(new Error('viewport-runtime-disconnected'))).toBe(true);
-    expect(isBenignViewportRuntimeTransportError(new Error('viewport-runtime-stale-generation'))).toBe(true);
+    expect(isBenignViewportRuntimeTransportError(new Error('viewport-runtime-disconnected'))).toBe(
+      true,
+    );
+    expect(
+      isBenignViewportRuntimeTransportError(new Error('viewport-runtime-stale-generation')),
+    ).toBe(true);
     expect(isBenignViewportRuntimeTransportError(new Error('import-failed'))).toBe(false);
   });
 });
