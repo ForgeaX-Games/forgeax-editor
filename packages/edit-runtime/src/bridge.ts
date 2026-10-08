@@ -3,6 +3,7 @@
 // Host-facing editor bridge surface. Re-exported here so hosts consume the
 // facade (`@forgeax/editor/*`) instead of reaching into editor-core.
 import {
+  disposeEditRealm as disposeRuntimeRealm,
   resetEditRealm as resetRuntimeRealm,
   ViewportComponent,
   type ResetEditRealmOptions,
@@ -52,6 +53,10 @@ export {
   EDITOR_VIEWPORT_PANEL_ID,
 } from './page-extension';
 export { resetEditRealm } from './viewport/ViewportComponent';
+export type {
+  EditorViewportHostConfig,
+  ViewportComponentProps,
+} from './viewport/ViewportComponent';
 
 // Hosts consume the editor carrier through this public bridge. The core
 // implementation remains behind the editor package boundary.
@@ -94,8 +99,10 @@ export interface EditorRuntimeEntry {
   readonly runtimeKind: 'world-backed';
   readonly owner: 'editor-edit-runtime';
   readonly capabilities: typeof EDITOR_RUNTIME_ENTRY_CAPABILITIES;
-  /** Return the real ViewportComponent; the host owns the React root. */
+  /** Return the real ViewportComponent; the host owns a React root inside AppKit HostProvider. */
   readonly mount: (props?: ViewportComponentProps) => ReturnType<typeof ViewportComponent>;
+  /** Call after unmounting the host React root to release the World, GPU renderer and connections. */
+  readonly dispose: (options?: ResetEditRealmOptions) => Promise<void>;
   /** The Editor-owned realm teardown; hosts must not dispose the World directly. */
   readonly reset: (options?: ResetEditRealmOptions) => void;
   /** Execute a schema-typed request through the bridge published by the mounted viewport. */
@@ -116,6 +123,7 @@ export function createEditorRuntimeEntry(): EditorRuntimeEntry {
     owner: 'editor-edit-runtime' as const,
     capabilities: EDITOR_RUNTIME_ENTRY_CAPABILITIES,
     mount: (props?: ViewportComponentProps) => createElement(viewport, props ?? null),
+    dispose: disposeRuntimeRealm,
     reset: resetRuntimeRealm,
     executeGameplay: executeLiveGameplay,
   });

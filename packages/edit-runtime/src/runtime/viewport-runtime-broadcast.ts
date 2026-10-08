@@ -12,14 +12,14 @@ export type { MessagePortTransportClient, ViewportRuntimeIdentity } from '@forge
 export const VIEWPORT_RUNTIME_BROADCAST_CHANNEL = 'forgeax.viewport-runtime/v1' as const;
 const BROADCAST_PROTOCOL = 'forgeax.viewport-runtime-broadcast/v1' as const;
 
-interface BroadcastChannelLike {
+export interface ViewportRuntimeChannel {
   postMessage(message: unknown): void;
   addEventListener(type: 'message', listener: (event: MessageEvent<unknown>) => void): void;
   removeEventListener(type: 'message', listener: (event: MessageEvent<unknown>) => void): void;
   close(): void;
 }
 
-type ChannelFactory = (name: string) => BroadcastChannelLike;
+export type ViewportRuntimeChannelFactory = (name: string) => ViewportRuntimeChannel;
 
 type ReadyMessage = {
   readonly protocol: typeof BROADCAST_PROTOCOL;
@@ -44,7 +44,7 @@ type ResponseMessage = {
 
 export type ViewportRuntimeBroadcastMessage = ReadyMessage | RequestMessage | ResponseMessage;
 
-function defaultFactory(name: string): BroadcastChannelLike {
+function defaultFactory(name: string): ViewportRuntimeChannel {
   return new BroadcastChannel(name);
 }
 
@@ -88,7 +88,7 @@ export function installBroadcastViewportRuntimeHost(options: {
   readonly runtime: ViewportRuntimeIdentity;
   readonly service: TransportService;
   readonly channelName?: string;
-  readonly createChannel?: ChannelFactory;
+  readonly createChannel?: ViewportRuntimeChannelFactory;
 }): () => void {
   const channel = (options.createChannel ?? defaultFactory)(
     options.channelName ?? VIEWPORT_RUNTIME_BROADCAST_CHANNEL,
@@ -129,7 +129,7 @@ export function createBroadcastViewportRuntimeClient(options: {
   readonly runtime: ViewportRuntimeIdentity;
   readonly channelName?: string;
   readonly timeoutMs?: number;
-  readonly createChannel?: ChannelFactory;
+  readonly createChannel?: ViewportRuntimeChannelFactory;
 }): MessagePortTransportClient {
   const channel = (options.createChannel ?? defaultFactory)(
     options.channelName ?? VIEWPORT_RUNTIME_BROADCAST_CHANNEL,
@@ -184,7 +184,7 @@ export function createBroadcastViewportRuntimeClient(options: {
 /** Observe Tauri Runtime generations without creating a second authority. */
 export function subscribeBroadcastViewportRuntimeReady(
   listener: (runtime: ViewportRuntimeIdentity) => void,
-  options: { readonly channelName?: string; readonly createChannel?: ChannelFactory } = {},
+  options: { readonly channelName?: string; readonly createChannel?: ViewportRuntimeChannelFactory } = {},
 ): () => void {
   const channel = (options.createChannel ?? defaultFactory)(
     options.channelName ?? VIEWPORT_RUNTIME_BROADCAST_CHANNEL,

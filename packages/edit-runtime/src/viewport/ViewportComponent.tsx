@@ -27,8 +27,8 @@ import type { PlayDispatchResult } from './play-operation';
 // SINGLE-BOOT LATCH (AC-04)
 //   React StrictMode double-invokes effects in dev; a naive effect would boot the
 //   engine TWICE (two WebGPU devices, two worlds). A module-level latch enforces
-//   "engine boots exactly once" — the literal AC-04 invariant. The standalone
-//   host mounts this once; edit-runtime's main.tsx also mounts it once.
+//   one engine per active realm. A host explicitly disposes that realm before
+//   mounting a replacement; StrictMode effect cleanup does not dispose it.
 //
 // WHY IT OWNS ONLY THE RENDER SURFACE
 //   In-process there is no index.html #app scaffold, so the component provides
@@ -116,6 +116,7 @@ import type {
   RendererOwnerAdmissionIdentity,
   RendererOwnerAdmissionRequest,
   TransportService,
+  ViewportRuntimeIdentity,
 } from '@forgeax/editor-product';
 import { createSourceAuthoringRuntime, installCatalogReconcileProvider,
 } from '../runtime/source-authoring-runtime';
@@ -124,7 +125,6 @@ import { createSourceAuthoringTransport } from '../runtime/source-authoring-tran
 import { createCatalogSource } from '@forgeax/engine-assets-runtime';
 import { createCatalogClient } from '@forgeax/engine-vite-plugin-pack/catalog-client';
 import type { RuntimeAssetBinding } from '@forgeax/engine-types';
-import { isViewportCarrierKind } from '@forgeax/editor-product';
 import {
   sendVagMessage,
   VagCarrierHandshakeSchema,
@@ -151,7 +151,10 @@ import {
   type ViewportRuntimeMessageSource,
   type ViewportRuntimeMessageTarget,
 } from '../runtime/viewport-runtime-transport';
-import { installBroadcastViewportRuntimeHost } from '../runtime/viewport-runtime-broadcast';
+import {
+  installBroadcastViewportRuntimeHost,
+  type ViewportRuntimeChannelFactory,
+} from '../runtime/viewport-runtime-broadcast';
 import { installInProcessPreviewExecutorLeaseHost } from '../runtime/preview-executor-lease';
 import { bindVfxPreviewExecutorLease } from './vfx-preview-operations';
 import { installColliderDebugOverlay } from './collider-debug-overlay';
@@ -283,6 +286,15 @@ const bootLease = createBootLease();
 let currentResetOptions: ResetEditRealmOptions = {};
 let activeRealmTeardown: (() => void) | undefined;
 let runtimeGenerationOverride: number | null = null;
+let pendingAppDisposal: Promise<void> = Promise.resolve();
+const inFlightBoots = new Set<Promise<Viewport | null>>();
+let pendingBootRetirement: Promise<void> = Promise.resolve();
+function trackAppDisposal(disposal: Promise<void>): void {
+  pendingAppDisposal = Promise.all([pendingAppDisposal, disposal]).then(() => undefined);
+  // Legacy reset callers are synchronous. Keep asynchronous failures visible
+  // even when the host does not await the new dispose entry point.
+  void pendingAppDisposal.catch((error) => console.error('[editor] app disposal failed:', error));
+}
 function registerRealmTeardown(fn: () => void): void {
   teardownFns.push(fn);
 }
@@ -398,37 +410,39 @@ async function installManagedCarrierHealth(
   renderer: Renderer,
   gameId: string | null,
   rendererProvenance: RendererRealmProvenance | null,
-): Promise<ManagedCarrierHealth> {
+  host: EditorViewportHostConfig,
+  runtimeIdentity: ViewportRuntimeIdentity,
+  isCurrentBoot: () => boolean,
+): Promise<ManagedCarrierHealth | null> {
   if (rendererProvenance === null) {
     throw new Error(
       'renderer provenance unavailable: the Edit renderer realm could not mint identity',
     );
   }
   const params = new URLSearchParams(window.location.search);
-  const managedRuntimeId = params.get('runtimeId')?.trim() || null;
+  const managedRuntimeId = host.runtimeIdentity?.runtimeId ?? params.get('runtimeId')?.trim() ?? null;
   const challengeResponse = params.get('ownershipChallenge')?.trim() || null;
-  const requestedCarrierKind = params.get('carrierKind');
-  const carrierKind = isViewportCarrierKind(requestedCarrierKind) ? requestedCarrierKind : 'local';
-  const requestedRuntimeGeneration = Number(params.get('runtimeGeneration') ?? 1);
-  const runtimeGeneration =
-    Number.isSafeInteger(requestedRuntimeGeneration) && requestedRuntimeGeneration > 0
-      ? requestedRuntimeGeneration
-      : 1;
+  const { runtimeId, runtimeGeneration, carrierId, carrierKind } = runtimeIdentity;
   const managed = managedRuntimeId !== null && challengeResponse !== null;
 
-  const healthResponse = await fetch('/api/health', { cache: 'no-store' });
-  if (!healthResponse.ok)
-    throw new Error(`carrier health unavailable: HTTP ${healthResponse.status}`);
-  const health = (await healthResponse.json()) as { instanceRootAbs?: unknown };
-  if (typeof health.instanceRootAbs !== 'string' || health.instanceRootAbs.length === 0) {
-    throw new Error('carrier health response did not identify the instance root');
-  }
-  const instanceRootAbs = health.instanceRootAbs;
+  const instanceRootAbs = host.workspaceRoot ?? await (async () => {
+    const healthResponse = await fetch(host.healthUrl ?? '/api/health', { cache: 'no-store' });
+    if (!healthResponse.ok)
+      throw new Error(`carrier health unavailable: HTTP ${healthResponse.status}`);
+    const health = (await healthResponse.json()) as { instanceRootAbs?: unknown };
+    if (typeof health.instanceRootAbs !== 'string' || health.instanceRootAbs.length === 0) {
+      throw new Error('carrier health response did not identify the instance root');
+    }
+    return health.instanceRootAbs;
+  })();
+  // The health request can outlive a closed view. Do not let an old boot
+  // publish identity or send a managed handshake after a successor has begun.
+  if (!isCurrentBoot()) return null;
+  if (instanceRootAbs.trim().length === 0)
+    throw new Error('viewport host workspace root is empty');
 
   const pageNonce = crypto.randomUUID();
-  const runtimeId = managedRuntimeId ?? `visible-${pageNonce}`;
-  const carrierId = params.get('carrierId')?.trim() || `${carrierKind}-${pageNonce}`;
-  const pageIdentity = `${window.location.origin}${window.location.pathname}`;
+  const pageIdentity = host.pageIdentity ?? `${window.location.origin}${window.location.pathname}`;
   const canvasIdentity = canvas.dataset.forgeaxCarrierCanvas ?? `canvas-${pageNonce}`;
   const rendererIdentity = rendererProvenance.identity;
   const rendererGeneration = rendererProvenance.generation;
@@ -597,10 +611,10 @@ export function createGenerationFence(initialGeneration: number) {
 /**
  * Tear down the current in-process editor realm for a deliberate cross-game
  * switch (studio single-realm host). Runs every per-boot teardown handle (window
- * listeners, quadrant subscriptions, host-session disk-watch/beacons), disposes
- * the engine app (app.stop() → renderer.dispose() releases the WebGPU device),
- * and resets the single-boot latch so the next <ViewportComponent> mount boots a
- * fresh engine for the new game.
+ * listeners, quadrant subscriptions, host-session disk-watch/beacons), starts
+ * app.dispose() (which releases the WebGPU renderer after frame drain), and
+ * resets the single-boot latch. A new boot waits for disposal to finish; hosts
+ * can await disposeEditRealm() before mounting a replacement.
  *
  * MUST be called deliberately (on game switch) — NEVER on a StrictMode unmount,
  * or dev double-mount would tear down the live realm. The single-game standalone
@@ -608,6 +622,17 @@ export function createGenerationFence(initialGeneration: number) {
  */
 export function resetEditRealm(options: ResetEditRealmOptions = {}): void {
   bootLease.invalidate();
+  // A boot can still be inside createApp when this reset runs. Its stale-app
+  // disposal is registered only after createApp returns, so capture the boot
+  // first and wait for both its completion and that subsequent disposal.
+  const retiringBoots = [...inFlightBoots];
+  pendingBootRetirement = Promise.all([
+    pendingBootRetirement,
+    Promise.allSettled(retiringBoots),
+  ]).then(async () => {
+    await pendingAppDisposal;
+  });
+  void pendingBootRetirement.catch((error) => console.error('[editor] realm retirement failed:', error));
   const previousResetOptions = currentResetOptions;
   currentResetOptions = options;
   if (
@@ -666,16 +691,45 @@ export function resetEditRealm(options: ResetEditRealmOptions = {}): void {
   activeBootContainer = null;
 }
 
+/** Explicit host close barrier: release the realm before mounting its successor. */
+export function disposeEditRealm(options: ResetEditRealmOptions = {}): Promise<void> {
+  resetEditRealm(options);
+  return pendingBootRetirement;
+}
+
+function runTrackedViewportBoot(
+  container: HTMLDivElement,
+  actionsRef: React.MutableRefObject<BootFns>,
+  gameSession: HostGameSession,
+  isCurrentBoot: () => boolean,
+  playPreparation: PlayPreparation | undefined,
+  host: EditorViewportHostConfig,
+): Promise<Viewport | null> {
+  const retirement = pendingBootRetirement;
+  const boot = (async () => {
+    await retirement;
+    if (!isCurrentBoot()) return null;
+    return bootViewport(container, actionsRef, gameSession, isCurrentBoot, playPreparation, host);
+  })();
+  inFlightBoots.add(boot);
+  void boot.then(
+    () => inFlightBoots.delete(boot),
+    () => inFlightBoots.delete(boot),
+  );
+  return boot;
+}
+
 function launchViewportBoot(
   container: HTMLDivElement,
   actionsRef: React.MutableRefObject<BootFns>,
   gameSession: HostGameSession,
+  host: EditorViewportHostConfig,
 ): void {
   bootStarted = true;
   activeBootContainer = container;
   const bootId = bootLease.begin();
   const isCurrentBoot = () => bootLease.isCurrent(bootId);
-  void bootViewport(container, actionsRef, gameSession, isCurrentBoot).catch((error: unknown) => {
+  void runTrackedViewportBoot(container, actionsRef, gameSession, isCurrentBoot, undefined, host).catch((error: unknown) => {
     if (!isCurrentBoot()) return;
     console.error('[editor] viewport boot failed:', error);
     resetEditRealm();
@@ -750,6 +804,25 @@ function unavailablePlayActions(): BootFns {
  * to address, so hosts inject the game directly. Omitted / { slug: null } = no
  * game (opens on an empty scene).
  */
+/** Host values that cannot be inferred from a sandboxed or cross-origin Webview URL. */
+export interface EditorViewportHostConfig {
+  /** Runtime identity minted by the host; defaults to the current page query. */
+  readonly runtimeIdentity?: ViewportRuntimeIdentity;
+  /** Absolute or host-resolved asset base URL; defaults to Vite BASE_URL. */
+  readonly assetBaseUrl?: string;
+  /** Authoritative workspace root; when supplied, no health fetch is needed. */
+  readonly workspaceRoot?: string;
+  /** Health endpoint to use when workspaceRoot is omitted. */
+  readonly healthUrl?: string;
+  /** Stable renderer page identity, independent of the Webview document URL. */
+  readonly pageIdentity?: string;
+  /** Origin of an iframe owner receiving runtime messages. */
+  readonly ownerOrigin?: string;
+  /** Host-provided channel transport for cross-origin renderer communication. */
+  readonly createChannel?: ViewportRuntimeChannelFactory;
+  readonly channelName?: string;
+}
+
 export interface ViewportComponentProps {
   /** Scene/game pointer. null or 'default' = no on-disk game (empty scene). */
   readonly gameSlug?: string | null;
@@ -763,6 +836,8 @@ export interface ViewportComponentProps {
   readonly playPreparation?: PlayPreparation;
   /** Host carrier transition seam; Runtime owns the barrier/handoff protocol. */
   readonly versionControlTransition?: VersionControlRuntimeTransition;
+  /** Browser, Tauri, or VS Code host configuration for this renderer realm. */
+  readonly host?: EditorViewportHostConfig;
 }
 
 /**
@@ -779,6 +854,7 @@ export function ViewportComponent({
   selectedSceneGuid,
   versionControlTransition,
   playPreparation,
+  host = {},
 }: ViewportComponentProps = {}): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   useKeybindingScope(containerRef, 'editor.viewport');
@@ -814,7 +890,7 @@ export function ViewportComponent({
       runtimeBinding,
       selectedSceneGuid,
       versionControlTransition,
-    });
+    }, host);
     // No cleanup returned: the viewport lifecycle is NOT managed by React.
     // Standalone teardown = page navigation. Multi-game host teardown =
     // resetEditRealm() which runs registerTeardown() handles (viewport.dispose
@@ -845,7 +921,9 @@ async function bootViewport(
   gameSession: HostGameSession,
   isCurrentBoot: () => boolean,
   playPreparation?: PlayPreparation,
+  host: EditorViewportHostConfig = {},
 ): Promise<Viewport | null> {
+  await pendingAppDisposal;
   if (!isCurrentBoot()) return null;
   installStudioBootTraceProbe();
   studioBootTraceSession({
@@ -888,8 +966,8 @@ async function bootViewport(
       console.warn('[editor] stale viewport boot cleanup failed:', error);
     }
   };
-  const BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
-  const requestedRuntimeIdentity = readViewportRuntimeIdentity(window.location.search);
+  const BASE = (host.assetBaseUrl ?? import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
+  const requestedRuntimeIdentity = host.runtimeIdentity ?? readViewportRuntimeIdentity(window.location.search);
   const runtimeIdentity =
     runtimeGenerationOverride === null
       ? requestedRuntimeIdentity
@@ -949,11 +1027,13 @@ async function bootViewport(
           activeBootContainer = container;
           bootStarted = true;
           const bootId = bootLease.begin();
-          const successor = await bootViewport(
+          const successor = await runTrackedViewportBoot(
             container,
             actionsRef,
             { ...gameSession, versionControlTransition: undefined },
             () => bootLease.isCurrent(bootId),
+            undefined,
+            host,
           );
           if (successor === null) throw new Error('successor Runtime did not boot');
           return {
@@ -1103,8 +1183,8 @@ async function bootViewport(
   // Task 1 (render-system-no-camera timing race): clear gateway.doc.world
   // on teardown so a new boot's WorldManager.getSceneWorld() returns undefined
   // during the transition gap (preventing stale world references). Registered
-  // FIRST so it runs LAST (LIFO) — after editorApp.stop() releases the GPU
-  // device and all other teardown handles unwind.
+  // FIRST so it runs LAST (LIFO) — after app disposal starts and all other
+  // synchronous teardown handles unwind. The next boot awaits GPU disposal.
   registerTeardown(() => {
     gateway.doc.world = undefined as any;
   });
@@ -1291,11 +1371,9 @@ async function bootViewport(
   );
   if (!isCurrentBoot()) {
     if (createAppResult.ok) {
-      try {
-        createAppResult.value.stop();
-      } catch {
-        /* stale app is already unwinding */
-      }
+      trackAppDisposal(createAppResult.value.dispose().then((result) => {
+        if (!result.ok) throw new Error(errorMessage(result.error, 'stale app disposal failed'));
+      }));
     }
     return null;
   }
@@ -1331,11 +1409,9 @@ async function bootViewport(
   }
   if (!isCurrentBoot()) {
     if (app.ok) {
-      try {
-        app.value.stop();
-      } catch {
-        /* stale app is already unwinding */
-      }
+      trackAppDisposal(app.value.dispose().then((result) => {
+        if (!result.ok) throw new Error(errorMessage(result.error, 'stale app disposal failed'));
+      }));
     }
     return null;
   }
@@ -1374,7 +1450,7 @@ async function bootViewport(
     canvas.dataset.forgeaxCarrierCanvas = canvasIdentity;
     const ownerIdentity: RendererOwnerAdmissionIdentity = {
       carrierId: runtimeIdentity.carrierId,
-      pageIdentity: `${window.location.origin}${window.location.pathname}`,
+      pageIdentity: host.pageIdentity ?? `${window.location.origin}${window.location.pathname}`,
       browserRealmId: rendererProvenance.identity,
       runtimeId: runtimeIdentity.runtimeId,
       canvasIdentity,
@@ -1451,11 +1527,9 @@ async function bootViewport(
         flushPendingSave: currentResetOptions.flushPendingSave,
       }),
     stopApp: () => {
-      try {
-        editorApp.stop();
-      } catch (e) {
-        console.warn('[editor] editorApp.stop() failed:', e);
-      }
+      trackAppDisposal(editorApp.dispose().then((result) => {
+        if (!result.ok) throw new Error(errorMessage(result.error, 'editor app disposal failed'));
+      }));
     },
     removeCanvas: () => {
       try {
@@ -2529,6 +2603,8 @@ async function bootViewport(
       installBroadcastViewportRuntimeHost({
         runtime: runtimeIdentity,
         service,
+        channelName: host.channelName,
+        createChannel: host.createChannel,
       }),
     );
     // Detached popup/Tauri windows still host PanelShell in THIS window.
@@ -2554,7 +2630,7 @@ async function bootViewport(
     runtimeUiGraph !== null &&
     runtimeIdentity.carrierKind === 'iframe'
   ) {
-    const runtimeHostOrigin = readViewportRuntimeHostOrigin(
+    const runtimeHostOrigin = host.ownerOrigin ?? readViewportRuntimeHostOrigin(
       window.location.search,
       window.location.origin,
     );
@@ -2731,8 +2807,13 @@ async function bootViewport(
   // heartbeat owned by this realm; ordinary Studio pages stay silent.
   // The typed gameplay bridge is installed from the same live Gateway + canvas
   // seam; it is the only gameplay transport exposed by the viewport.
-  void installManagedCarrierHealth(canvas, renderer, gameSession.slug, rendererProvenance)
+  void installManagedCarrierHealth(canvas, renderer, gameSession.slug, rendererProvenance, host, runtimeIdentity, isCurrentBoot)
     .then((health) => {
+      if (health === null) return;
+      if (!isCurrentBoot()) {
+        health.dispose();
+        return;
+      }
       registerTeardown(health.dispose);
       const captureLifetime = new AbortController();
       registerTeardown(() => captureLifetime.abort());

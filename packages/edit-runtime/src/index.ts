@@ -24,6 +24,7 @@ export {
 export type { EditorRuntimeEntry } from './bridge';
 export { ViewportComponent } from './viewport/ViewportComponent';
 export type {
+  EditorViewportHostConfig,
   ResetEditRealmOptions,
   ViewportComponentProps,
 } from './viewport/ViewportComponent';
@@ -53,6 +54,10 @@ export {
   createBroadcastViewportRuntimeClient,
   installBroadcastViewportRuntimeHost,
   subscribeBroadcastViewportRuntimeReady,
+} from './runtime/viewport-runtime-broadcast';
+export type {
+  ViewportRuntimeChannel,
+  ViewportRuntimeChannelFactory,
 } from './runtime/viewport-runtime-broadcast';
 export type {
   ViewportRuntimeConnectMessage,
